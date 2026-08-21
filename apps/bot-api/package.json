@@ -1,0 +1,32 @@
+{
+  "name": "@neo-bot/bot-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --exclude 'dist/**'",
+    "start": "node dist/main.js",
+    "dev": "tsx watch src/main.ts",
+    "pilot": "tsx src/pilot.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.9",
+    "@nestjs/core": "^11.1.9",
+    "@nestjs/platform-fastify": "^11.1.9",
+    "@neo-bot/application": "workspace:*",
+    "@neo-bot/database": "workspace:*",
+    "@neo-bot/domain": "workspace:*",
+    "@neo-bot/pasarguard": "workspace:*",
+    "pg": "^8.23.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^11.1.9",
+    "@types/pg": "^8.15.6",
+    "tsx": "^4.20.6"
+  }
+}

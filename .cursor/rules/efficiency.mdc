@@ -1,0 +1,12 @@
+---
+description: Keep agent work cheap, secret-safe, and Persian-first
+alwaysApply: true
+---
+
+# Agent efficiency
+
+- User-facing replies: RTL Persian in `<div dir="rtl" lang="fa">`. Isolate paths and English identifiers.
+- Explore with `graphify` before Grep/Read/Glob. Spawn at most two subagents, only for independent parallel work. Prefer `.cursor/agents/graphify-explore.md`.
+- Never print tokens, webhook secrets, subscription URLs, UUIDs, raw `.env` values, or receipt file IDs.
+- After material code/schema/behavior changes, update `PROJECT_CONTEXT.md`, stamp, then `pnpm check`.
+- Do not commit, push, deploy, or enable pilot provisioning unless the owner explicitly asked.

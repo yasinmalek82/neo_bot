@@ -1,0 +1,26 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "workspaces": {
+    "apps/admin-web": {
+      "entry": ["tests/**/*.{ts,tsx}", "worker/index.js"],
+      "project": [
+        "src/**/*.{ts,tsx}",
+        "tests/**/*.{ts,tsx}",
+        "scripts/*.mjs",
+        "worker/*.js",
+        "*.ts"
+      ],
+      "ignore": ["src/mobile/**"],
+      "ignoreDependencies": ["@fontsource-variable/vazirmatn"]
+    },
+    "apps/catalog-admin": {},
+    "apps/*": {
+      "entry": ["src/**/*.spec.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/*": {
+      "entry": ["src/**/*.spec.ts"],
+      "project": ["src/**/*.ts"]
+    }
+  }
+}

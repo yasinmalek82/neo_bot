@@ -1,0 +1,37 @@
+{
+  "name": "neo-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A clean-room, modular Telegram VPN sales bot foundation.",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "context:check": "node tools/project-context.mjs",
+    "context:stamp": "node tools/project-context.mjs --stamp",
+    "build": "pnpm -r --if-present run build",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test": "pnpm -r --if-present run test",
+    "test:integration": "pnpm -r --if-present run test:integration",
+    "lint": "eslint .",
+    "format:check": "prettier --check .",
+    "format": "prettier --write .",
+    "architecture": "depcruise --config .dependency-cruiser.cjs apps packages",
+    "deadcode": "knip",
+    "check": "pnpm context:check && pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm architecture && pnpm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.10.1",
+    "dependency-cruiser": "^17.3.6",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.5.0",
+    "knip": "^5.78.0",
+    "prettier": "^3.7.4",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.48.1",
+    "vitest": "^4.1.11"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "@neo-bot/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests --exclude 'dist/**' --exclude '**/*.integration.spec.ts'",
+    "test:integration": "vitest run src/repository.integration.spec.ts --exclude 'dist/**'",
+    "migrate": "tsx src/migrate-cli.ts",
+    "seed:catalog": "tsx src/seed-catalog.ts"
+  },
+  "dependencies": {
+    "@neo-bot/application": "workspace:*",
+    "@neo-bot/domain": "workspace:*",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^11.10.0",
+    "@types/pg": "^8.15.6",
+    "tsx": "^4.21.0"
+  }
+}

@@ -1,0 +1,51 @@
+# Graphify corpus for neo_bot.
+# Syntax matches .gitignore. Graphify also honors .gitignore; this file only
+# excludes additional noise. Keep product code, SQL, ADRs and handoff docs.
+
+node_modules/
+dist/
+coverage/
+graphify-out/
+.git/
+.cursor/
+var/
+tmp/
+
+# Lockfiles and assistant-generated artifacts
+pnpm-lock.yaml
+*.lock.json
+hosting.json
+
+# JSON manifests become false god-nodes (compilerOptions, dependencies)
+**/package.json
+**/tsconfig.json
+**/tsconfig.*.json
+tsconfig.base.json
+.prettierrc.json
+knip.json
+
+# Protected Mini App device runtime, assets and prototype-only docs
+apps/admin-web/src/mobile/
+apps/admin-web/src/App.tsx
+apps/admin-web/src/main.tsx
+apps/admin-web/src/styles.css
+apps/admin-web/public/
+apps/admin-web/worker/
+apps/admin-web/scripts/
+apps/admin-web/.openai/
+apps/admin-web/playwright.config.ts
+apps/admin-web/vite.config.ts
+apps/admin-web/AGENTS.md
+apps/admin-web/design-qa.md
+apps/admin-web/tests/
+apps/catalog-admin/vite.config.ts
+
+# Binary and stylesheet assets
+*.woff
+*.woff2
+*.svg
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif

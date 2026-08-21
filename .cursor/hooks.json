@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "node .cursor/hooks/session-start.mjs",
+        "timeout": 8
+      }
+    ],
+    "stop": [
+      {
+        "command": "node .cursor/hooks/stop-context.mjs",
+        "timeout": 15,
+        "loop_limit": 1
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "node .cursor/hooks/before-shell.mjs",
+        "timeout": 5
+      }
+    ]
+  }
+}
