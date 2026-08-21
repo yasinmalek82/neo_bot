@@ -23,7 +23,7 @@ const requiredHeadings = [
   '## Handoff log',
 ];
 
-const sourceRoots = ['apps/', 'packages/', 'tools/', 'docs/adr/'];
+const sourceRoots = ['apps/', 'packages/', 'tools/', 'docs/adr/', 'docs/runbooks/', 'deploy/'];
 const sourceFiles = new Set([
   '.dependency-cruiser.cjs',
   '.env.example',
@@ -33,6 +33,7 @@ const sourceFiles = new Set([
   'SECURITY.md',
   'Dockerfile',
   'docker-compose.yml',
+  'docker-compose.production.yml',
   'eslint.config.mjs',
   'knip.json',
   '.graphifyignore',

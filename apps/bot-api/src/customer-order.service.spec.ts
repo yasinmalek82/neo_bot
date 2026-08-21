@@ -71,7 +71,15 @@ describe('CustomerOrderService', () => {
     const catalogUseCase = {
       getPublicCatalog: vi.fn().mockResolvedValue(catalog),
     } as unknown as CatalogAdminUseCase;
-    const service = new CustomerOrderService(commerce, catalogUseCase, botToken);
+    const messenger = {
+      sendMessage: vi.fn().mockResolvedValue({ messageId: '9' }),
+    };
+    const service = new CustomerOrderService(
+      commerce,
+      catalogUseCase,
+      botToken,
+      messenger as never,
+    );
 
     await expect(
       service.createOrder(signInitData(10001, 'خریدار'), '2', undefined),
@@ -88,6 +96,13 @@ describe('CustomerOrderService', () => {
       productVariantId: '2',
       idempotencyKey: 'telegram:miniapp:10001:2',
     });
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('فقط عکس رسید'),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
+    expect(vi.mocked(messenger.sendMessage).mock.calls[0]?.[1]).not.toMatch(/https?:\/\//u);
 
     const current = await service.currentOrder(signInitData(10001, 'خریدار'));
     expect(current.payment).toEqual({
@@ -134,5 +149,27 @@ describe('CustomerOrderService', () => {
       service.createOrder(signInitData(10001, 'خریدار'), '2', undefined),
     ).rejects.toThrow('PAYMENT_DETAILS_MISSING');
     expect(commerce.beginCheckout).not.toHaveBeenCalled();
+  });
+
+  it('still returns the Mini App order if the private-chat notice fails', async () => {
+    const commerce = {
+      beginCheckout: vi.fn().mockResolvedValue(order),
+    } as unknown as CommerceUseCase;
+    const messenger = {
+      sendMessage: vi.fn().mockRejectedValue(new Error('TELEGRAM_HTTP_500')),
+    };
+    const service = new CustomerOrderService(
+      commerce,
+      { getPublicCatalog: vi.fn().mockResolvedValue(catalog) } as unknown as CatalogAdminUseCase,
+      botToken,
+      messenger as never,
+    );
+    await expect(
+      service.createOrder(signInitData(10001, 'خریدار'), '2', undefined),
+    ).resolves.toEqual({
+      order,
+      payment: { cardNumber: '0000000000000000', cardHolder: 'صاحب کارت' },
+    });
+    expect(messenger.sendMessage).toHaveBeenCalled();
   });
 });

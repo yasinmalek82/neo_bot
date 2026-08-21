@@ -111,10 +111,16 @@ export interface ReportingRepository {
     purpose: ReportTopicPurpose,
     messageThreadId: string,
   ): Promise<void>;
+  clearTopicBinding(destinationId: string, purpose: ReportTopicPurpose): Promise<void>;
   claimDueDeliveries(limit: number, now: Date): Promise<readonly ClaimedReportingDelivery[]>;
   markDelivered(deliveryId: string, telegramMessageId: string, deliveredAt: Date): Promise<void>;
   retryLater(deliveryId: string, errorCode: string, nextAttemptAt: Date): Promise<void>;
   markFailed(deliveryId: string, errorCode: string, failedAt: Date): Promise<void>;
+  countDeliveries(): Promise<{
+    readonly pending: number;
+    readonly failed: number;
+    readonly delivered: number;
+  }>;
 }
 
 export interface ReportTransport {

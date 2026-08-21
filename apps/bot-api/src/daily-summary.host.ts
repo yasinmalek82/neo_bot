@@ -25,10 +25,9 @@ export class DailySummaryHost implements OnModuleInit, OnModuleDestroy {
     if (!config.enabled) {
       return;
     }
-    this.scheduler = new ReportingOutboxScheduler(
-      () => bot.publishDailySummary(),
-      DAILY_SUMMARY_INTERVAL_MS,
-    );
+    this.scheduler = new ReportingOutboxScheduler(async () => {
+      await bot.publishDailySummary();
+    }, DAILY_SUMMARY_INTERVAL_MS);
     this.scheduler.start();
   }
 

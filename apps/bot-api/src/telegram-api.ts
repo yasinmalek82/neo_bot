@@ -1,7 +1,14 @@
-export interface TelegramInlineButton {
+export interface TelegramCallbackButton {
   readonly text: string;
   readonly callback_data: string;
 }
+
+export interface TelegramWebAppButton {
+  readonly text: string;
+  readonly web_app: { readonly url: string };
+}
+
+export type TelegramInlineButton = TelegramCallbackButton | TelegramWebAppButton;
 
 export interface TelegramInlineKeyboardMarkup {
   readonly inline_keyboard: readonly (readonly TelegramInlineButton[])[];
@@ -264,6 +271,23 @@ export class TelegramApiClient implements TelegramMessenger {
     });
   }
 
+  public async getWebhookInfo(): Promise<{
+    readonly url: string;
+    readonly lastErrorDate: number | null;
+  }> {
+    const body = await this.request('getWebhookInfo', {});
+    const result = objectResult(body.result);
+    const url = result?.['url'];
+    const lastErrorDate = result?.['last_error_date'];
+    return {
+      url: typeof url === 'string' ? url : '',
+      lastErrorDate:
+        typeof lastErrorDate === 'number' && Number.isInteger(lastErrorDate) && lastErrorDate > 0
+          ? lastErrorDate
+          : null,
+    };
+  }
+
   private async requestMessage(
     method: string,
     payload: Record<string, unknown>,
@@ -361,10 +385,14 @@ function mappedTelegramError(description: unknown): string | null {
   if (normalized.includes('message is not modified')) {
     return 'TELEGRAM_MESSAGE_UNCHANGED';
   }
+  if (normalized.includes('terminated by other getupdates')) {
+    return 'TELEGRAM_POLLING_CONFLICT';
+  }
   if (
     normalized.includes('thread not found') ||
     normalized.includes('topic not found') ||
-    normalized.includes('topic_closed')
+    normalized.includes('topic_closed') ||
+    normalized.includes('topic_deleted')
   ) {
     return 'TELEGRAM_TOPIC_MISSING';
   }

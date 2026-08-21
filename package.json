@@ -19,7 +19,10 @@
     "format": "prettier --write .",
     "architecture": "depcruise --config .dependency-cruiser.cjs apps packages",
     "deadcode": "knip",
-    "check": "pnpm context:check && pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm architecture && pnpm test"
+    "check": "pnpm context:check && pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm architecture && pnpm test",
+    "db:backup": "bash tools/postgres-backup.sh",
+    "db:restore": "bash tools/postgres-restore.sh",
+    "db:restore-drill": "bash tools/postgres-restore-drill.sh"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

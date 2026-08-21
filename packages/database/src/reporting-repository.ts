@@ -198,6 +198,20 @@ export class PostgresReportingRepository implements ReportingRepository {
     }
   }
 
+  public async clearTopicBinding(
+    destinationId: string,
+    purpose: ReportTopicPurpose,
+  ): Promise<void> {
+    if (!isReportTopicPurpose(purpose)) {
+      throw new DomainConflictError('INVALID_REPORT_PURPOSE');
+    }
+    await this.pool.query(
+      `delete from report_topic_bindings
+       where destination_id = $1 and purpose = $2`,
+      [destinationId, purpose],
+    );
+  }
+
   public async claimDueDeliveries(
     limit: number,
     now: Date,
@@ -322,6 +336,36 @@ export class PostgresReportingRepository implements ReportingRepository {
        where id = $1`,
       [deliveryId, errorCode.slice(0, 120), failedAt],
     );
+  }
+
+  public async countDeliveries(): Promise<{
+    readonly pending: number;
+    readonly failed: number;
+    readonly delivered: number;
+  }> {
+    const result = await this.pool.query<{ status: string; n: number }>(
+      `select status, count(*)::int as n
+       from reporting_deliveries
+       group by status`,
+    );
+    let pending = 0;
+    let failed = 0;
+    let delivered = 0;
+    for (const row of result.rows) {
+      if (!Number.isInteger(row.n) || row.n < 0) {
+        continue;
+      }
+      if (row.status === 'pending') {
+        pending = row.n;
+      }
+      if (row.status === 'failed') {
+        failed = row.n;
+      }
+      if (row.status === 'delivered') {
+        delivered = row.n;
+      }
+    }
+    return { pending, failed, delivered };
   }
 
   private async withTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {

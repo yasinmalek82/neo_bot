@@ -11,6 +11,7 @@ graphify-out/
 .vscode/
 tmp/
 var/
+backups/
 *.sql.gz
 *.dump
 *.sqlite

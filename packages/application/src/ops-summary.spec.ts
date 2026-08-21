@@ -19,7 +19,7 @@ describe('OpsDailySummaryUseCase', () => {
       () => new Date('2026-08-21T18:00:00.000Z'),
     );
 
-    await useCase.publishForUtcDay();
+    await expect(useCase.publishForUtcDay()).resolves.toEqual({ created: true });
     expect(reporting.record).toHaveBeenCalledWith({
       type: 'ops.daily_summary',
       occurrenceKey: 'ops:daily-summary:2026-08-21',

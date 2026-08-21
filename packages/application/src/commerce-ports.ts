@@ -10,6 +10,7 @@ import type {
 
 export interface CommerceRepository {
   listCategories(parentId: string | null): Promise<readonly CatalogCategory[]>;
+  getCategory(id: string): Promise<CatalogCategory | null>;
   listSellableVariants(categoryId: string): Promise<readonly SellableProductVariant[]>;
   getSellableVariant(id: string): Promise<SellableProductVariant | null>;
   upsertTelegramCustomer(input: TelegramCustomerInput): Promise<{
@@ -35,6 +36,7 @@ export interface CommerceRepository {
     readonly failedCount: string;
   }>;
   listReviewQueue(limit: number): Promise<readonly SalesOrder[]>;
+  listFailedProvisioning(limit: number): Promise<readonly SalesOrder[]>;
   submitTelegramProof(
     customerId: string,
     telegramFileId: string,

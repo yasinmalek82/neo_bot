@@ -12,6 +12,7 @@ import { catalogAdminUseCaseToken } from './catalog.provider.js';
 import { loadPilotConfig, loadTelegramConfig } from './config.js';
 import { CustomerOrderService } from './customer-order.service.js';
 import { databasePoolToken } from './database.provider.js';
+import { TelegramApiClient } from './telegram-api.js';
 
 export const customerOrderServiceToken = Symbol('customerOrderService');
 
@@ -35,6 +36,11 @@ export const customerOrderServiceProvider = {
       pasarGuard,
     );
     const commerce = new CommerceUseCase(commerceRepository, directService, reporting);
-    return new CustomerOrderService(commerce, catalog, telegramConfig.botToken);
+    return new CustomerOrderService(
+      commerce,
+      catalog,
+      telegramConfig.botToken,
+      new TelegramApiClient(telegramConfig.botToken),
+    );
   },
 };

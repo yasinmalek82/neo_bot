@@ -19,13 +19,13 @@ export class OpsDailySummaryUseCase {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  public async publishForUtcDay(): Promise<void> {
+  public async publishForUtcDay(): Promise<{ readonly created: boolean }> {
     const now = this.now();
     const day = utcDateStamp(now);
     const from = new Date(`${day}T00:00:00.000Z`);
     const to = new Date(from.getTime() + 86_400_000);
     const snapshot = await this.reader.summarizeUtcDay(from, to);
-    await this.reporting.record({
+    const recorded = await this.reporting.record({
       type: 'ops.daily_summary',
       occurrenceKey: `ops:daily-summary:${day}`,
       payload: {
@@ -36,5 +36,6 @@ export class OpsDailySummaryUseCase {
         failedCount: snapshot.failedCount,
       },
     });
+    return { created: recorded.created };
   }
 }

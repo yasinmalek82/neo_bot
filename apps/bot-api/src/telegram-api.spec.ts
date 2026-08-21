@@ -21,15 +21,28 @@ describe('TelegramApiClient', () => {
     });
   });
 
-  it('maps a missing forum topic to TELEGRAM_TOPIC_MISSING', async () => {
+  it('maps a deleted forum topic to TELEGRAM_TOPIC_MISSING', async () => {
     const fetchImplementation = vi.fn().mockResolvedValue({
       ok: true,
       headers: new Headers({ 'content-length': '80' }),
-      text: async () =>
-        JSON.stringify({ ok: false, description: 'Bad Request: message thread not found' }),
+      text: async () => JSON.stringify({ ok: false, description: 'Bad Request: TOPIC_DELETED' }),
     });
     const client = new TelegramApiClient('12345:abcdefghijklmnopqrstuvwxyz', fetchImplementation);
     await expect(client.sendMessage('10001', 'سلام')).rejects.toThrow('TELEGRAM_TOPIC_MISSING');
+  });
+
+  it('maps a competing getUpdates session to TELEGRAM_POLLING_CONFLICT', async () => {
+    const fetchImplementation = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-length': '120' }),
+      text: async () =>
+        JSON.stringify({
+          ok: false,
+          description: 'Conflict: terminated by other getUpdates request',
+        }),
+    });
+    const client = new TelegramApiClient('12345:abcdefghijklmnopqrstuvwxyz', fetchImplementation);
+    await expect(client.getUpdates(0, 0)).rejects.toThrow('TELEGRAM_POLLING_CONFLICT');
   });
 
   it('creates a forum topic and reads is_forum from getChat', async () => {
@@ -140,6 +153,27 @@ describe('TelegramApiClient', () => {
     expect(JSON.parse(setWebhookOptions.body)).toMatchObject({
       url: 'https://bot.example.com/telegram/webhook',
       secret_token: 'safe_webhook_secret_123',
+    });
+  });
+
+  it('reads getWebhookInfo url and last_error_date without keeping Telegram descriptions', async () => {
+    const fetchImplementation = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-length': '120' }),
+      text: async () =>
+        JSON.stringify({
+          ok: true,
+          result: {
+            url: 'https://bot.example.com/telegram/webhook',
+            last_error_date: 1_700_000_000,
+            last_error_message: 'should-not-be-returned',
+          },
+        }),
+    });
+    const client = new TelegramApiClient('12345:abcdefghijklmnopqrstuvwxyz', fetchImplementation);
+    await expect(client.getWebhookInfo()).resolves.toEqual({
+      url: 'https://bot.example.com/telegram/webhook',
+      lastErrorDate: 1_700_000_000,
     });
   });
 

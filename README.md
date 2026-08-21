@@ -35,6 +35,21 @@ cutover are still out of scope.
 
 Copy `.env.example` to `.env`, change only local values, then start PostgreSQL and run migrations.
 
+## First VPS (TLS, Mini App, webhook)
+
+Do not invent a hostname. Point DNS A at the server, then on the VPS:
+
+```bash
+git clone https://github.com/yasinmalek82/neo_bot.git
+cd neo_bot
+bash deploy/install.sh
+```
+
+Type the public hostname, BotFather token, numeric admin IDs, and optional report group on the
+server. The script writes a gitignored `.env`, keeps `PILOT_ENABLED=false`, builds the Mini App and
+catalog console, and starts Caddy with automatic HTTPS. Details: `docs/runbooks/first-host.md`.
+Never commit `.env` or paste tokens into chat.
+
 ## Local verification
 
 ```bash
@@ -98,11 +113,14 @@ local `.env`. Card numbers are published from the catalog console, not from Tele
 Leave `TELEGRAM_WEBHOOK_URL` unset for local use: the process deletes any webhook and long-polls
 `getUpdates`. Set an `https` URL only when Telegram can POST to this process. Optionally set
 `TELEGRAM_MINI_APP_URL` to an `https` Mini App origin so the chat menu button opens the storefront.
+A Mini App order also sends the same checkout copy to the private bot chat; the receipt photo still
+goes there, not into the Mini App.
 
 The first purchase journey is:
 
-1. `/start` opens a mixed inline menu (full-width and paired rows) and pins the same buttons at
-   the bottom of the chat. Administrators see operator actions on that menu.
+1. `/start` opens a mixed inline menu (full-width buy row, then paired order/renew) and pins the
+   same buttons at the bottom of the chat. Administrators get the same customer home plus an
+   extra admin-hub row; operator status, reports and the review queue live inside that hub.
 2. choose a category and plan from the buttons; the same message is updated as a menu
 3. receive the exact amount and card details
 4. send a receipt photo
@@ -119,8 +137,39 @@ webhook-only flushing.
 Operator reports go to a private Telegram forum. Create the group, enable Topics, add the bot as
 administrator with Manage Topics, then set `TELEGRAM_REPORT_GROUP_CHAT_ID`. On startup the bot
 creates the purpose topics (new users, orders, receipts, sales, renewals, resellers, errors, daily
-summaries) and stores their thread IDs. It does not rename or delete topics. Do not paste the group
-ID, bot token or topic IDs into chat.
+summaries) and stores their thread IDs. It does not rename or delete topics. If Telegram later
+reports a topic missing, the bot clears that mapping, recreates the purpose topic, retries the same
+notice, and posts a redacted error to the errors topic. Do not paste the group ID, bot token or
+topic IDs into chat.
+
+`GET /health` reports whether the database is reachable, whether Telegram intake is disabled,
+polling, or webhook, whether intake is ready (`telegramReady`: polling has a recent successful
+`getUpdates`, webhook has no allowlisted error and a matching `getWebhookInfo`), an allowlisted
+`telegramError` code, how many schema migrations are applied, and how many report deliveries are
+pending or failed. It does not include order identifiers or Telegram descriptions.
+
+## Database backup and restore
+
+Dump the configured Postgres database without committing the file:
+
+```bash
+pnpm db:backup
+```
+
+Prove restore without touching the live database:
+
+```bash
+pnpm db:restore-drill
+```
+
+Restore onto a chosen disposable target still requires `RESTORE_CONFIRM=yes`:
+
+```bash
+RESTORE_CONFIRM=yes pnpm db:restore -- backups/neo_bot-20260821T120000Z.dump
+```
+
+Keep dump files off the git tree. Copy production dumps off the host. See
+`docs/runbooks/production.md` for TLS, webhook registration, and rollback.
 
 ## Isolated PasarGuard pilot
 

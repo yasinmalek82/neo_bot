@@ -20,4 +20,3 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm audit --audit-level=high
-        continue-on-error: true

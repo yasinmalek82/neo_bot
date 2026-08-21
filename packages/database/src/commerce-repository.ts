@@ -75,6 +75,17 @@ export class PostgresCommerceRepository implements CommerceRepository {
     return result.rows.map(mapCategory);
   }
 
+  public async getCategory(id: string): Promise<CatalogCategory | null> {
+    const result = await this.pool.query<CategoryRow>(
+      `select id::text, code, name, description, parent_id::text, position
+       from product_categories
+       where id = $1::bigint and active = true`,
+      [id],
+    );
+    const row = result.rows[0];
+    return row === undefined ? null : mapCategory(row);
+  }
+
   public async listSellableVariants(
     categoryId: string,
   ): Promise<readonly SellableProductVariant[]> {
@@ -273,8 +284,21 @@ export class PostgresCommerceRepository implements CommerceRepository {
       throw new DomainConflictError('INVALID_REVIEW_QUEUE_LIMIT');
     }
     const result = await this.pool.query<OrderRow>(
-      `${orderQuery(`orders.status in ('receipt_submitted', 'provisioning_failed')`)}
+      `${orderQuery(`orders.status = 'receipt_submitted'`)}
        order by orders.created_at asc, orders.id asc
+       limit $1`,
+      [limit],
+    );
+    return result.rows.map((row) => mapOrder(row));
+  }
+
+  public async listFailedProvisioning(limit: number): Promise<readonly SalesOrder[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
+      throw new DomainConflictError('INVALID_REVIEW_QUEUE_LIMIT');
+    }
+    const result = await this.pool.query<OrderRow>(
+      `${orderQuery(`orders.status = 'provisioning_failed'`)}
+       order by orders.updated_at desc, orders.id asc
        limit $1`,
       [limit],
     );

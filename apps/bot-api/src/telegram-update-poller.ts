@@ -16,6 +16,7 @@ export class TelegramUpdatePoller {
     private readonly timeoutSeconds = 0,
     private readonly retryDelayMs = 1_000,
     private readonly stopOnEmpty = false,
+    private readonly onIntake?: (ok: boolean, error?: unknown) => void,
   ) {}
 
   public start(): void {
@@ -38,6 +39,7 @@ export class TelegramUpdatePoller {
       while (!this.isStopped()) {
         try {
           const updates = await this.getUpdates(this.offset, this.timeoutSeconds);
+          this.onIntake?.(true);
           if (this.isStopped()) {
             return;
           }
@@ -65,7 +67,8 @@ export class TelegramUpdatePoller {
               break;
             }
           }
-        } catch {
+        } catch (error: unknown) {
+          this.onIntake?.(false, error);
           if (this.isStopped()) {
             return;
           }

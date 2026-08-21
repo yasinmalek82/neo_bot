@@ -1,0 +1,85 @@
+# Production overlay for the first single-owner host.
+#
+# Local development keeps docker-compose.yml (Postgres published on 127.0.0.1:55432,
+# bot-api behind profile `app`).
+#
+# This file does not deploy anything by itself. On the production host, prefer:
+#   bash deploy/install.sh
+# or, after host `.env` and Mini App dist exist:
+#   docker compose -f docker-compose.production.yml up -d --build
+#
+# Caddy in this file terminates TLS on 80/443 and reverse-proxies to `bot-api`.
+# Do not publish Postgres. Keep PILOT_ENABLED=false until an isolated PasarGuard group
+# is configured.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: neo_bot
+      POSTGRES_USER: neo_bot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U neo_bot -d neo_bot']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - neo_bot_postgres:/var/lib/postgresql/data
+
+  bot-api:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:3100:3100'
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3100
+      DATABASE_URL: postgres://neo_bot:${POSTGRES_PASSWORD}@postgres:5432/neo_bot
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3100/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      bot-api:
+        condition: service_healthy
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      TELEGRAM_PUBLIC_HOST: ${TELEGRAM_PUBLIC_HOST:?set TELEGRAM_PUBLIC_HOST}
+      BOT_API_UPSTREAM: bot-api:3100
+      MINI_APP_DIST: /srv/mini-app
+      CATALOG_ADMIN_DIST: /srv/catalog-admin
+    volumes:
+      - ./deploy/Caddyfile.example:/etc/caddy/Caddyfile:ro
+      - ./apps/admin-web/dist/client:/srv/mini-app:ro
+      - ./apps/catalog-admin/dist:/srv/catalog-admin:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  neo_bot_postgres:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,21 @@
+{$TELEGRAM_PUBLIC_HOST} {
+	encode gzip
+
+	@api path /telegram/* /health /catalog /customer/* /admin/*
+	handle @api {
+		reverse_proxy {$BOT_API_UPSTREAM:127.0.0.1:3100}
+	}
+
+	redir /console /console/ 308
+	handle_path /console/* {
+		root * {$CATALOG_ADMIN_DIST:./apps/catalog-admin/dist}
+		try_files {path} /index.html
+		file_server
+	}
+
+	handle {
+		root * {$MINI_APP_DIST:./apps/admin-web/dist/client}
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -23,3 +23,9 @@ checkout also needed a verified Telegram identity without copying Bot API secret
 - Telegram env no longer requires card fields.
 - Forged `initData` cannot read another customer's open order.
 - Production catalog-admin must be opened from an administrator Telegram account.
+- Customer Mini App static files may be served on the same public host as `bot-api` (Caddy reverse
+  proxies `/catalog`, `/customer`, `/telegram`, `/health`, `/admin` and serves `admin-web`
+  `dist/client` for other paths). `/admin` remains the catalog API, not the catalog-admin SPA.
+- Catalog-admin static files may be served at `/console/` on that same host. The SPA calls
+  `/admin/catalog` same-origin when it is not on loopback. Production still requires verified
+  administrator `initData` (open `/console/` as a Telegram Mini App). `/admin` stays the API.

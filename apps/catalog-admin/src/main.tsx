@@ -79,7 +79,11 @@ const viteEnvironment = import.meta.env as unknown as {
   readonly VITE_API_BASE_URL?: string;
   readonly DEV: boolean;
 };
-const apiBaseUrl = viteEnvironment.VITE_API_BASE_URL ?? 'http://127.0.0.1:3100';
+const apiBaseUrl =
+  viteEnvironment.VITE_API_BASE_URL ??
+  (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost'
+    ? 'http://127.0.0.1:3100'
+    : '');
 const localDevelopmentToken = viteEnvironment.DEV ? 'neo-local-catalog-admin-2026-test-only' : '';
 
 function catalogAdminHeaders(token: string): Record<string, string> {

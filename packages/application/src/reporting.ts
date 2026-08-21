@@ -90,6 +90,7 @@ export class ReportingUseCase implements ReportingPublisher {
     private readonly repository: ReportingRepository,
     private readonly transport: ReportTransport | null = null,
     private readonly now: () => Date = () => new Date(),
+    private readonly provisioner: ForumTopicProvisioner | null = null,
   ) {}
 
   public async record(input: ReportableEventInput): Promise<RecordedReportingEvent> {
@@ -158,10 +159,18 @@ export class ReportingUseCase implements ReportingPublisher {
     }
   }
 
+  public async countDeliveries(): Promise<{
+    readonly pending: number;
+    readonly failed: number;
+    readonly delivered: number;
+  }> {
+    return this.repository.countDeliveries();
+  }
+
   private async dispatchOne(delivery: ClaimedReportingDelivery): Promise<void> {
     const now = this.now();
     if (delivery.messageThreadId === null) {
-      await this.repository.markFailed(delivery.id, 'REPORT_TOPIC_NOT_CONFIGURED', now);
+      await this.recoverTopic(delivery, now, 'REPORT_TOPIC_NOT_CONFIGURED');
       return;
     }
     if (this.transport === null) {
@@ -181,8 +190,12 @@ export class ReportingUseCase implements ReportingPublisher {
       await this.repository.markDelivered(delivery.id, sent.messageId, now);
     } catch (error: unknown) {
       const code = transportErrorCode(error);
+      if (code === 'TELEGRAM_TOPIC_MISSING') {
+        await this.recoverTopic(delivery, now, code);
+        return;
+      }
       if (!isRetryableTransportError(code) || delivery.attemptCount >= MAX_DELIVERY_ATTEMPTS) {
-        await this.repository.markFailed(delivery.id, code, now);
+        await this.failDelivery(delivery, code, now);
         return;
       }
       await this.repository.retryLater(
@@ -191,6 +204,52 @@ export class ReportingUseCase implements ReportingPublisher {
         nextAttemptAt(delivery.attemptCount, now),
       );
     }
+  }
+
+  private async recoverTopic(
+    delivery: ClaimedReportingDelivery,
+    now: Date,
+    errorCode: string,
+  ): Promise<void> {
+    if (errorCode === 'TELEGRAM_TOPIC_MISSING') {
+      await this.repository.clearTopicBinding(delivery.destinationId, delivery.purpose);
+    }
+    await this.recordOperatorFailure(delivery, errorCode, now);
+    if (this.provisioner === null) {
+      await this.repository.markFailed(delivery.id, errorCode, now);
+      return;
+    }
+    try {
+      await this.ensureForumTopics(delivery.chatId, this.provisioner);
+    } catch {
+      await this.repository.markFailed(delivery.id, errorCode, now);
+      return;
+    }
+    await this.repository.retryLater(delivery.id, errorCode, now);
+  }
+
+  private async failDelivery(
+    delivery: ClaimedReportingDelivery,
+    errorCode: string,
+    now: Date,
+  ): Promise<void> {
+    await this.repository.markFailed(delivery.id, errorCode, now);
+    await this.recordOperatorFailure(delivery, errorCode, now);
+  }
+
+  private async recordOperatorFailure(
+    delivery: ClaimedReportingDelivery,
+    errorCode: string,
+    now: Date,
+  ): Promise<void> {
+    if (delivery.eventType === 'system.failure') {
+      return;
+    }
+    await this.record({
+      type: 'system.failure',
+      occurrenceKey: `ops:delivery-failed:${delivery.purpose}:${errorCode}:${utcDateStamp(now)}`,
+      payload: { errorCode, purpose: delivery.purpose },
+    });
   }
 }
 
@@ -262,7 +321,11 @@ export function formatReportText(type: ReportingEventType, payload: ReportingPay
     case 'renewal.failed':
       return `خطای تمدید\nکد: ${payload['errorCode'] ?? 'نامشخص'}`;
     case 'system.failure':
-      return `خطای عملیاتی\nکد: ${payload['errorCode'] ?? 'نامشخص'}`;
+      return [
+        'خطای عملیاتی',
+        `کد: ${payload['errorCode'] ?? 'نامشخص'}`,
+        `موضوع: ${payload['purpose'] ?? 'نامشخص'}`,
+      ].join('\n');
     case 'ops.daily_summary':
       return [
         'خلاصه روزانه',

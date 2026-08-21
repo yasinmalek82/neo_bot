@@ -112,6 +112,33 @@ describe('CommerceUseCase', () => {
     expect(repository.listReviewQueue).toHaveBeenCalledWith(10);
   });
 
+  it('lists failed provisioning separately from the receipt review queue', async () => {
+    const failed = { ...order, status: 'provisioning_failed' } as const;
+    const repository = createRepository();
+    vi.mocked(repository.listFailedProvisioning).mockResolvedValue([failed]);
+    const useCase = new CommerceUseCase(repository, { create: vi.fn(), renew: vi.fn() });
+
+    await expect(useCase.listFailedProvisioning()).resolves.toEqual([failed]);
+    expect(repository.listFailedProvisioning).toHaveBeenCalledWith(10);
+  });
+
+  it('reads an active category by id for nested shop navigation', async () => {
+    const category = {
+      id: '10',
+      code: 'economic',
+      name: 'اقتصادی',
+      description: 'سرویس مستقیم',
+      parentId: null,
+      position: 0,
+    };
+    const repository = createRepository();
+    vi.mocked(repository.getCategory).mockResolvedValue(category);
+    const useCase = new CommerceUseCase(repository, { create: vi.fn(), renew: vi.fn() });
+
+    await expect(useCase.getCategory('10')).resolves.toEqual(category);
+    expect(repository.getCategory).toHaveBeenCalledWith('10');
+  });
+
   it('retries provisioning without recording a second payment approval', async () => {
     const failed = { ...order, status: 'provisioning_failed' } as const;
     const fulfilled = { ...order, status: 'fulfilled', serviceId: service.id } as const;
@@ -179,6 +206,7 @@ function createRepository(): CommerceRepository {
   };
   return {
     listCategories: vi.fn().mockResolvedValue([]),
+    getCategory: vi.fn().mockResolvedValue(null),
     listSellableVariants: vi.fn().mockResolvedValue([]),
     getSellableVariant: vi.fn().mockResolvedValue(null),
     upsertTelegramCustomer: vi.fn().mockResolvedValue({ customer, created: false }),
@@ -194,6 +222,7 @@ function createRepository(): CommerceRepository {
       failedCount: '0',
     }),
     listReviewQueue: vi.fn().mockResolvedValue([]),
+    listFailedProvisioning: vi.fn().mockResolvedValue([]),
     submitTelegramProof: vi.fn().mockResolvedValue({ order, proof }),
     reserveProvisioning: vi.fn().mockResolvedValue(order),
     completeOrder: vi.fn().mockResolvedValue(order),

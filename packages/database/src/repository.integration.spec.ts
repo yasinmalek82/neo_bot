@@ -129,6 +129,12 @@ describe('PostgresProvisioningRepository', () => {
     expect(await commerceRepository.listCategories(null)).toMatchObject([
       { id: categoryId, code: 'economic' },
     ]);
+    expect(await commerceRepository.getCategory(categoryId)).toMatchObject({
+      id: categoryId,
+      code: 'economic',
+      parentId: null,
+    });
+    expect(await commerceRepository.listFailedProvisioning(10)).toEqual([]);
     expect(await commerceRepository.listSellableVariants(categoryId)).toMatchObject([
       { id: variantId, priceIrr: 1_500_000n },
     ]);

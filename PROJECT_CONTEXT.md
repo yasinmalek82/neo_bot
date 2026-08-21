@@ -1,9 +1,9 @@
 <!--
 context-schema: 1
-last-updated: 2026-08-21T18:55:28.386Z
-source-fingerprint: 2e00c6cdb7c806c9a1e0657877d4526d0916a02805f0af82428ddb37777330ed
+last-updated: 2026-08-21T21:18:59.155Z
+source-fingerprint: f342469c6bd7bd12512a30c6547075845f0d0b032fdb8767042595046a345266
 current-phase: production-foundation-and-real-customer-journey
-next-task: live-receipt-forum-notices
+next-task: vps-install-waiting-terminal-ssh
 -->
 
 # neo_bot Project Context
@@ -85,30 +85,42 @@ Authoritative decisions are recorded in:
 - `docs/adr/0006-bot-provisioned-reporting-forum-topics.md`
 - `docs/adr/0007-telegram-update-intake.md`
 - `docs/adr/0008-catalog-card-and-miniapp-identity.md`
+- `docs/adr/0009-ops-health-backup-topic-recovery.md`
+- `docs/adr/0010-redacted-runtime-logs.md`
 
 Create a new ADR before materially changing one of these decisions.
 
 ## Current verified snapshot
 
-Last evidence refresh: `2026-08-21`, local development environment only.
+Last evidence refresh: `2026-08-22`, local development environment only.
 
-- Production-MVP readiness estimate: approximately `78-83%` of in-repo work; live Telegram and
-  operations gates remain owner-side.
+- Production-MVP readiness estimate: approximately `86-90%` of in-repo work; live Telegram, TLS host
+  and seven-day pilot gates remain owner-side.
 - Full envisioned product readiness estimate: approximately `45-50%`.
-- `pnpm check` is the in-repo gate after this slice. Unit tests: `8` domain, `20` application, `4`
-  PasarGuard, `43` bot API.
-- Local Postgres is running. Public `GET /catalog` omits card numbers. Mini App checkout uses
-  verified `initData` and `CommerceUseCase`. Receipt photos (and image documents) remain in the
-  private bot chat. Health reports Telegram intake as `disabled`, `polling`, or `webhook`.
-- Live test forum: eight purpose topics exist. Receipt, approval and provisioning notices are not
-  confirmed yet. Daily-summary outbox events are implemented in code and not live-confirmed.
+- `pnpm check` is the in-repo gate after this slice. Unit tests: `8` domain, `25` application, `4`
+  PasarGuard, `65` bot API.
+- Local `GET /health` on loopback is `ok` with Telegram `polling`, `telegramReady` `true`,
+  `telegramError` `none`, `migrations` `6`, and zero pending or failed report deliveries. Webhook
+  mode records `telegramReady` false on allowlisted errors and probes `getWebhookInfo` in the
+  background. Public `GET /catalog` omits card numbers. Mini App checkout uses verified `initData`
+  and `CommerceUseCase`. Receipt photos (and image documents) remain in the private bot chat.
+- `pnpm db:restore-drill` restored a fresh dump onto a disposable Postgres on loopback
+  (`schema_migrations=6`), then destroyed the instance and dump. The live local database was not
+  overwritten. Restore onto a chosen target still requires `RESTORE_CONFIRM=yes`.
+- CI `pnpm audit --audit-level=high` is required. One moderate `uuid` advisory remains in
+  Testcontainers only.
+- Live test forum: eight purpose topics exist. The local outbox delivered first-contact, returning
+  activity, one `order.created`, and one `ops.daily_summary` (four deliveries, none failed). One
+  sales order is `awaiting_receipt` with zero payment proofs. Receipt, approval and provisioning
+  notices are still unconfirmed. Owner visual check of the daily-summaries topic is still required.
 - Authorized Git baseline exists: `6c9bbe4` on `main`, remote `https://github.com/yasinmalek82/neo_bot`.
-  `.env` was not committed.
+  `.env` was not committed. Shop, admin-hub, and first-host install changes are in this work unit.
 - No live-user migration, production deployment, public HTTPS webhook or live forum-group delivery of
-  the new Mini App/renewal/daily-summary paths has been validated.
+  the new Mini App/renewal/daily-summary paths has been validated. `deploy/install.sh` is in-repo only
+  until the owner opens a terminal with VPS access.
 
 Passing local checks proves the local code boundary only. It does not prove a real Telegram purchase,
-production recovery, backup restoration or public security.
+off-host backup restoration or public security.
 
 ## Architecture map
 
@@ -138,35 +150,43 @@ production recovery, backup restoration or public security.
 ### Runtime boundaries
 
 - `docker-compose.yml` provisions local PostgreSQL by default. Profile `app` builds `bot-api` from
-  `Dockerfile` without embedding secrets.
-- In-repo CI is `.github/workflows/check.yml` (`pnpm check`, optional `pnpm audit`). No production
-  reverse proxy, TLS, or release pipeline is deployed.
+  `Dockerfile` without embedding secrets. `docker-compose.production.yml` is the host shape (Postgres
+  unpublished, API on loopback, `bot-api` `DATABASE_URL` injected with host `postgres` so a loopback
+  `.env` value cannot strand the container, Caddy on 80/443 for Mini App `/` and catalog-admin
+  `/console/`, TLS via `deploy/Caddyfile.example`); it is not deployed until `deploy/install.sh`
+  runs on a host.
+- In-repo CI is `.github/workflows/check.yml` (`pnpm check` and required high-severity `pnpm audit`).
+  `pnpm db:backup`, `pnpm db:restore`, and `pnpm db:restore-drill` cover dump/restore. Compose-network
+  URLs dump via `docker compose exec` (production file when the host is `postgres`). Dumps are
+  gitignored. Secret rotation steps are in `docs/runbooks/secret-rotation.md`. `deploy/install.sh`
+  plus compose Caddy are the in-repo first-host path; no production TLS certificate is installed
+  until the owner runs that script on a VPS.
 - `SECURITY.md` records the current threat model. `.env.example` contains placeholders only. Real
   `.env` values are local secrets and must never be committed or printed.
 - Agent session skills, a Graphify explore subagent, and start/stop hooks live under `.cursor/`.
 
 ## Capability status
 
-| Capability                           | Status      | Verified boundary or gap                                                                                         |
-| ------------------------------------ | ----------- | ---------------------------------------------------------------------------------------------------------------- |
-| Modular pnpm/TypeScript foundation   | Implemented | Strict builds and architecture gate pass locally.                                                                |
-| PostgreSQL schema and migrations     | Implemented | Fresh Testcontainers lifecycle passes.                                                                           |
-| PasarGuard health and group sync     | Implemented | Valid/invalid connectivity and group snapshots covered.                                                          |
-| Direct service create/read/renew     | Implemented | Numeric IDs, idempotency and read-after-write covered.                                                           |
-| Durable card-to-card order lifecycle | Implemented | Checkout, proof, approval/rejection, retry provisioning and catalog card source.                                 |
-| Telegram chat purchase flow          | Partial     | Mixed menus, image-document receipts, card-before-order, provisioning delay notice; public webhook unregistered. |
-| Receipt review                       | Partial     | Admin private-chat review; image documents accepted; receipts topic gets a redacted text summary.                |
-| Admin reporting group and topics     | Partial     | Start, returning-activity and order notices delivered; daily summary coded, not live.                            |
-| New-user `/start` reporting          | Partial     | First-contact and same-day activity notices were delivered to the new-users topic.                               |
-| Renewal customer journey             | Partial     | Bot menu renewal uses the latest fulfilled service; live PasarGuard renew not confirmed.                         |
-| Data-driven catalog                  | Implemented | Products and supported selector values are database-driven and atomically published.                             |
-| Catalog administration console       | Partial     | Dev bearer locally; production requires verified admin `initData` from the Mini App.                             |
-| Customer Mini App catalog UX         | Implemented | Loading/error/empty states and data-driven selection were browser-checked.                                       |
-| Customer Mini App checkout           | Partial     | Real orders, Persian status, error copy, polling, retry; live Telegram checkout unconfirmed.                     |
-| Telegram Mini App authentication     | Implemented | HMAC `initData` verification, expiry, and numeric `user.id` covered by unit tests.                               |
-| Production deployment and operations | Partial     | SECURITY.md, rate/body limits, Dockerfile healthcheck, compose restart+`app` profile, CI; no deploy.             |
-| Resellers, wallet and debt           | Not started | Explicitly deferred until after the first trustworthy release.                                                   |
-| Legacy import and cutover            | Not started | Must begin read-only with backup, preflight, rollback and controlled cutover.                                    |
+| Capability                           | Status      | Verified boundary or gap                                                                                            |
+| ------------------------------------ | ----------- | ------------------------------------------------------------------------------------------------------------------- |
+| Modular pnpm/TypeScript foundation   | Implemented | Strict builds and architecture gate pass locally.                                                                   |
+| PostgreSQL schema and migrations     | Implemented | Fresh Testcontainers lifecycle passes.                                                                              |
+| PasarGuard health and group sync     | Implemented | Valid/invalid connectivity and group snapshots covered.                                                             |
+| Direct service create/read/renew     | Implemented | Numeric IDs, idempotency and read-after-write covered.                                                              |
+| Durable card-to-card order lifecycle | Implemented | Checkout, proof, approval/rejection, retry provisioning and catalog card source.                                    |
+| Telegram chat purchase flow          | Partial     | Category HTML, nested back, empty-shop owner hint; one live order still awaiting a receipt photo.                   |
+| Receipt review                       | Partial     | Admin private-chat review; image documents accepted; receipts topic gets a redacted text summary.                   |
+| Admin reporting group and topics     | Partial     | Local outbox delivered first-contact, activity, order.created, and one daily summary; receipt/approval unconfirmed. |
+| New-user `/start` reporting          | Partial     | First-contact and same-day activity notices were delivered to the new-users topic.                                  |
+| Renewal customer journey             | Partial     | Failed renewals complete the Telegram update and keep the previous service; live PasarGuard renew unconfirmed.      |
+| Data-driven catalog                  | Implemented | Products and supported selector values are database-driven and atomically published.                                |
+| Catalog administration console       | Partial     | Dev bearer locally; production `/console/` same-origin API with admin `initData`; no Telegram catalog editor.       |
+| Customer Mini App catalog UX         | Implemented | Loading/error/empty states and data-driven selection were browser-checked.                                          |
+| Customer Mini App checkout           | Partial     | Same-origin Caddy Mini App + `/console/`; private-chat checkout copy; live receipt photo still outstanding.         |
+| Telegram Mini App authentication     | Implemented | HMAC `initData` verification, expiry, and numeric `user.id` covered by unit tests.                                  |
+| Production deployment and operations | Partial     | `deploy/install.sh` + compose Caddy TLS in-repo; no live host until owner SSH in a terminal.                        |
+| Resellers, wallet and debt           | Not started | Explicitly deferred until after the first trustworthy release.                                                      |
+| Legacy import and cutover            | Not started | Must begin read-only with backup, preflight, rollback and controlled cutover.                                       |
 
 ## Confirmed admin reporting requirement
 
@@ -217,20 +237,24 @@ Remaining gate items:
 
 ### Phase 2 - Admin reporting event backbone
 
-Status: first-contact, returning-activity and order notices delivered on the live test forum;
-receipt, provisioning, renewal and daily-summary notices remain outstanding. Receipt intake now
-accepts photos and image documents and records first-contact on that path.
+Status: first-contact, returning-activity, order.created and one `ops.daily_summary` were delivered
+on the live test forum outbox (counts only; no identifiers). Receipt, approval and provisioning
+notices remain outstanding. Administrators can read pending/failed report counts and intake ready
+state from Telegram status, and can enqueue today’s daily summary from the reports menu without
+duplicating the occurrence key.
 
 Gate remaining:
 
 - confirm redacted receipt, approval and failure notices on the created topics;
-- confirm live `ops.daily_summary` delivery to `daily_summaries`.
+- owner visual confirmation of the `daily_summaries` topic text.
 
 ### Phase 3 - Real Mini App transaction
 
 Status: `initData` verification, customer order API, Persian status/error copy, checkout retry and
-idempotent Mini App keys are in-repo. File upload is intentionally deferred; receipts stay in the
-bot chat. Catalog-without-card now fails before creating an order.
+idempotent Mini App keys are in-repo. A Mini App order also sends the same checkout copy to the
+customer private bot chat so the receipt photo can be submitted there. Caddy can serve
+`admin-web` `dist/client` on the same public host as the API. File upload is intentionally
+deferred. Catalog-without-card now fails before creating an order.
 
 Gate remaining:
 
@@ -239,14 +263,20 @@ Gate remaining:
 
 ### Phase 4 - Production security and operations
 
-Status: in-repo hardening landed (health Telegram intake, graceful pool shutdown, webhook rate-limit
-exclusion, compose restart/healthcheck, optional Mini App menu URL). Production host, TLS, backups
-and secret rotation are not done.
+Status: in-repo hardening landed (health Telegram intake mode plus ready/error, report-queue and
+migration counts, graceful pool shutdown, webhook rate-limit exclusion, compose restart/healthcheck,
+optional Mini App menu URL, dump/restore plus a disposable restore drill, production compose overlay
+that injects `bot-api` `DATABASE_URL` with host `postgres`, compose-aware dump/restore, webhook
+`getWebhookInfo` intake honesty, Caddy Mini App plus `/console/` catalog-admin, first-host
+`deploy/install.sh`, runbook, secret-rotation checklist, redacted stdout and HTTP error codes).
+Production host, TLS certificates, off-host backup storage and a live secret rotation are not done
+until the owner provides VPS access in a terminal.
 
 Gate remaining:
 
-- HTTPS webhook, monitoring, backup/restore drill, and dependency-scan cleanup without unresolved
-  high-severity findings. The authorized Git baseline is done.
+- HTTPS webhook on a reachable host, off-host dump storage, and TLS certificates. High-severity
+  dependency audit is required in CI. The authorized Git baseline is done. In-repo secret-rotation
+  steps exist; they are not a completed live rotation. `bash deploy/install.sh` waits for owner SSH.
 
 ### Phase 5 - Controlled pilot and release
 
@@ -273,22 +303,25 @@ Status: intentionally deferred.
 
 ## Current priority and next task
 
-Current phase: **Phase 2 - Admin reporting event backbone**.
+Current phase: **Phase 4 - Production security and operations** (in-repo install ready; live host
+blocked on owner SSH). Phase 2 live receipt confirmation is still outstanding.
 
-Next implementation slice: confirm redacted receipt, approval and provisioning notices on the test
-forum. Local `getUpdates` intake is running, so the owner can send a receipt photo in the private
-bot chat without a public webhook. In-repo production gaps for that path (image documents, card
-validation, customer delay notice, webhook poison-update handling) are closed.
+Next implementation slice: owner opens a terminal with temporary VPS access (not chat) so
+`bash deploy/install.sh` can run. Until then, local `getUpdates` still lets the owner send a
+receipt photo in the private bot chat. In-repo shop HTML, admin failed-provisioning/catalog-health,
+and first-host TLS/Mini App/`/console/` wiring are closed. One live order is waiting for a receipt
+photo. Restart `bot-api` to pin the new shop and admin-hub keyboards.
 
 Expected sequence:
 
-1. Send a card-to-card receipt image to the bot (do not paste file IDs or secrets in chat).
-2. Confirm the receipts topic gets a redacted text summary, then approve or reject from the admin
+1. Owner: DNS A record, then a terminal with SSH (not this chat).
+2. On the host: `bash deploy/install.sh`, confirm HTTPS `/health` (status only), restart `bot-api`.
+3. Send a card-to-card receipt image to the bot (do not paste file IDs or secrets in chat).
+4. Confirm the receipts topic gets a redacted text summary, then approve or reject from the admin
    private-chat buttons.
-3. Confirm sales or errors topic notices after the decision, without subscription URLs.
 
 Owner-only remaining gates: public HTTPS webhook URL, live isolated PasarGuard group, TLS host,
-backup/restore drill, seven-day pilot.
+off-host backup storage, seven-day pilot.
 
 Do not request group tokens or secrets in chat.
 
@@ -335,6 +368,164 @@ handoff entry.
 ## Handoff log
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
+
+### 2026-08-22 - First-host install script, Caddy TLS, Mini App, `/console/`
+
+- Outcome: `deploy/install.sh` asks for hostname and bot secrets on stdin, writes gitignored `.env`,
+  keeps `PILOT_ENABLED=false`, builds Mini App `dist/client` and catalog-admin with Vite base
+  `/console/`, and starts production compose including Caddy automatic HTTPS. Catalog-admin uses
+  same-origin `/admin/catalog` off loopback. ADR 0008 amended. No public hostname was invented. No
+  SSH and no live TLS host in this session.
+- Validation: installer syntax-checked. `pnpm check` is the in-repo gate. VPS install waits for
+  owner terminal SSH.
+- Next: owner DNS A record, then SSH in a terminal (not chat).
+
+### 2026-08-22 - Admin hub failed provisioning and catalog health
+
+- Outcome: numeric-admin hub lists failed provisioning for retry, separate from the receipt queue.
+  Catalog health shows published root-category count and whether the card is published, with no
+  card digits. Catalog editing stays in catalog-admin.
+- Validation: application tests `25`, bot-api tests `65`.
+- Next: first-host install on the VPS after owner SSH.
+
+### 2026-08-22 - Telegram shop category detail and nested back
+
+- Outcome: category screens show escaped published description and parent name. Back goes to the
+  parent category, not always shop root. Empty shop tells the owner to publish from the catalog
+  console; customers see a later-return line.
+- Validation: bot-api tests cover HTML description, nested `cat:` back, and admin vs customer empty
+  copy. Original Persian. No AGPL copy.
+- Next: admin hub failed-provisioning and catalog health (landed in the same work unit).
+
+### 2026-08-22 - Customer-first chat menu and journey copy
+
+- Outcome: `/start` is a store home (buy, order, renew, help). Operator status, reports and the
+  review queue live inside the admin hub, not on the customer keyboard. Welcome, shop, checkout,
+  receipt and help copy name the next tap. Old button labels still match. No Mini App button,
+  wallet, or colored ReplyKeyboard (Telegram cannot color those keys).
+- Validation: bot-api tests `60`. Owner must restart `bot-api` to refresh the persistent keyboard.
+  No receipt photo, public webhook, or TLS host.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics.
+
+### 2026-08-21 - Caddy same-origin Mini App example
+
+- Outcome: `deploy/Caddyfile.example` reverse-proxies API paths and serves `admin-web` `dist/client`.
+  Catalog-admin is not mounted on `/admin` (that path is the catalog API). Mini App is not copied
+  into the `bot-api` image. ADR 0008 amended. No public hostname was invented.
+- Validation: inspection of `admin-web` Vite `dist/client` vs Sites worker `build`. No TLS host.
+- Next: owner sends a receipt photo; later set `TELEGRAM_MINI_APP_URL` to the real `https` origin.
+
+### 2026-08-21 - Honest webhook telegramReady and getWebhookInfo
+
+- Outcome: quiet webhook stays ready; allowlisted webhook errors set `telegramReady` false. HTTP
+  `/health` stays `200` when the database is up. A background `getWebhookInfo` maps unset URL and
+  newer delivery errors to allowlisted codes. ADR 0009 amended. Unauthorized POSTs still do not
+  mark intake down.
+- Validation: bot-api tests `60`. No public webhook.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics.
+
+### 2026-08-21 - Production compose injects DATABASE_URL; dump uses compose exec
+
+- Outcome: `docker-compose.production.yml` overrides `bot-api` `DATABASE_URL` to host `postgres`.
+  `pnpm db:backup` / `pnpm db:restore` use `docker compose exec` for compose-network URLs and
+  `-f docker-compose.production.yml` when the host is `postgres`. ADR 0009 amended. No live restore,
+  off-host copy, or deploy.
+- Validation: scripts syntax-checked. No receipt photo, public webhook, or TLS host.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics. In-repo next: honest webhook `telegramReady`.
+
+### 2026-08-21 - Mini App checkout also notifies the private bot chat
+
+- Outcome: creating an order from the Mini App sends the card-to-card checkout copy to the customer
+  private chat so the receipt photo can be sent there. HTTP checkout still succeeds if that notice
+  fails. One live order remains `awaiting_receipt` with zero proofs.
+- Validation: bot-api tests `57`. No receipt photo, public webhook, or TLS host.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics.
+
+### 2026-08-21 - Redacted runtime logs and HTTP error codes
+
+- Outcome: `bot-api` logs through `SafeLogger` and returns allowlisted HTTP error codes. PasarGuard
+  failures no longer attach provider JSON as `Error.cause`. One live order is `awaiting_receipt`
+  with zero proofs.
+- Validation: bot-api tests `56`. No receipt photo, public webhook, or TLS host.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics.
+
+### 2026-08-21 - Admin status shows report queue; daily summary is operator-triggered
+
+- Outcome: Telegram admin status shows intake ready/error and pending/failed report counts without
+  identifiers. Reports menu can enqueue today’s `ops.daily_summary` (idempotent). Local live outbox
+  already delivered four events including one daily summary.
+- Validation: application tests `23`, bot-api tests `54`. Aggregate DB counts only. No receipt
+  photo yet. Owner visual check of the daily-summaries topic still required.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics.
+
+### 2026-08-21 - Intake health ready flag and secret-rotation runbook
+
+- Outcome: `GET /health` now reports `telegramReady` and an allowlisted `telegramError` so a stuck
+  `getUpdates` session is visible without leaking Telegram descriptions. HTTP stays `200` when the
+  database is up. `docs/runbooks/secret-rotation.md` is the in-repo rotation checklist.
+- Validation: bot-api tests `52`. No live secret rotation, public webhook, or TLS host.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics.
+
+### 2026-08-21 - Renewal failure completes the Telegram update
+
+- Outcome: if customer renewal against the provider fails, the chat shows a delay message, the
+  previous service stays in place, and the Telegram update is completed so the renew button is not
+  retried in a loop. `NO_ACTIVE_SERVICE` has its own copy.
+- Validation: bot-api tests `48`. No deploy, public webhook, or live PasarGuard renew.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics.
+
+### 2026-08-21 - Approval completes after provisioning miss
+
+- Outcome: if PasarGuard create fails after receipt approval, the customer gets the delay notice,
+  the admin is told to retry from the queue, and the Telegram update is completed so the button is
+  not retried in a loop. Competing `getUpdates` sessions map to `TELEGRAM_POLLING_CONFLICT`. Live
+  loopback health is `ok` with polling intake.
+- Validation: bot-api tests `47`. `GET /health` reports polling, six migrations, and empty report
+  queues. No deploy or public webhook.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics.
+
+### 2026-08-21 - Receipt conflict copy and unmapped topic retry
+
+- Outcome: a second receipt while an order is under review tells the customer the order is already
+  being reviewed instead of claiming there is no open order. Unmapped report purposes now create the
+  missing topic and retry the same notice when a provisioner is present. Permanent delivery failures
+  record one redacted `system.failure` per purpose and error code per UTC day. Fastify request
+  logging stays off so webhook bodies are not written to logs.
+- Validation: application tests `23`, bot-api tests `45`. No deploy, public webhook, or live receipt
+  confirmation.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics.
+
+### 2026-08-21 - Disposable restore drill and production host runbook
+
+- Outcome: `pnpm db:restore-drill` restores a fresh dump onto loopback Postgres, checks
+  `schema_migrations`, then destroys the instance and dump. Health reports a migration count.
+  `docker-compose.production.yml`, `deploy/Caddyfile.example`, and `docs/runbooks/production.md`
+  document the first host. CI high-severity audit is required. No deploy or public webhook.
+- Validation: restore drill printed `schema_migrations=6`. `pnpm audit --audit-level=high` passed.
+  One moderate `uuid` advisory remains in Testcontainers.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics.
+
+### 2026-08-21 - Ops health, backup scripts, stale topic recovery
+
+- Outcome: missing/closed forum topics clear their binding, recreate the purpose topic, retry the
+  same notice, and record a redacted `system.failure`. `GET /health` adds pending/failed report
+  counts. `pnpm db:backup` / `pnpm db:restore` landed; restore requires `RESTORE_CONFIRM=yes`.
+  ADR 0009. No deploy, public webhook, or `PILOT_ENABLED`.
+- Validation: application tests `21`, bot-api tests `44`. Local compose dump wrote a non-empty custom
+  file then was discarded. Restore guard refused without confirmation.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics.
 
 ### 2026-08-21 - Authorized Git baseline pushed
 

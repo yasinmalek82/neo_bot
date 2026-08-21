@@ -48,7 +48,12 @@ export const telegramCommerceBotProvider = {
     } catch {
       // Menu commands are optional; the inline keyboard still works if Telegram rejects this call.
     }
-    const reporting = new ReportingUseCase(reportingRepository, telegramApi);
+    const reporting = new ReportingUseCase(
+      reportingRepository,
+      telegramApi,
+      () => new Date(),
+      telegramApi,
+    );
     if (telegramConfig.reporting !== null) {
       await reporting.ensureForumTopics(
         telegramConfig.reporting.groupChatId,

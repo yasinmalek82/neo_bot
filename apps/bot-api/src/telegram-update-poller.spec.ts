@@ -41,13 +41,16 @@ describe('TelegramUpdatePoller', () => {
       .mockRejectedValueOnce(new Error('TELEGRAM_HTTP_500'))
       .mockResolvedValueOnce([]);
     const handleUpdate = vi.fn();
-    const poller = new TelegramUpdatePoller(getUpdates, handleUpdate, 0, 0, true);
+    const onIntake = vi.fn();
+    const poller = new TelegramUpdatePoller(getUpdates, handleUpdate, 0, 0, true, onIntake);
 
     poller.start();
     await vi.waitFor(() => expect(getUpdates).toHaveBeenCalledTimes(2));
     await poller.stop();
 
     expect(handleUpdate).not.toHaveBeenCalled();
+    expect(onIntake).toHaveBeenNthCalledWith(1, false, expect.any(Error));
+    expect(onIntake).toHaveBeenNthCalledWith(2, true);
   });
 
   it('reads a numeric update_id', () => {

@@ -9,6 +9,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 
+import { recordTelegramIntakeFailure, recordTelegramIntakeSuccess } from './telegram-intake.js';
 import { telegramCommerceBotToken } from './telegram.provider.js';
 import type { TelegramCommerceBot } from './telegram-commerce-bot.js';
 
@@ -31,7 +32,13 @@ export class TelegramController {
     if (!this.bot.isWebhookSecretValid(secret)) {
       throw new UnauthorizedException('INVALID_TELEGRAM_WEBHOOK_SECRET');
     }
-    await this.bot.handleUpdate(body);
-    return { ok: true };
+    try {
+      await this.bot.handleUpdate(body);
+      recordTelegramIntakeSuccess();
+      return { ok: true };
+    } catch (error: unknown) {
+      recordTelegramIntakeFailure(error);
+      throw error;
+    }
   }
 }

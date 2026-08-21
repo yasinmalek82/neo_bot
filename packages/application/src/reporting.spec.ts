@@ -86,6 +86,11 @@ describe('ReportingUseCase', () => {
     expect(transport.send).toHaveBeenCalledTimes(2);
     expect(repository.deliveries[0]?.status).toBe('delivered');
     expect(repository.deliveries[0]?.telegramMessageId).toBe('88');
+    await expect(reporting.countDeliveries()).resolves.toEqual({
+      pending: 0,
+      failed: 0,
+      delivered: 1,
+    });
     expect(vi.mocked(transport.send).mock.calls[1]?.[0]).toMatchObject({
       chatId: '-100123',
       messageThreadId: '21',
@@ -114,6 +119,137 @@ describe('ReportingUseCase', () => {
     expect(transport.send).not.toHaveBeenCalled();
     expect(repository.deliveries[0]?.status).toBe('failed');
     expect(repository.deliveries[0]?.lastErrorCode).toBe('REPORT_TOPIC_NOT_CONFIGURED');
+  });
+
+  it('creates an unmapped purpose topic and retries the same notice', async () => {
+    const repository = new MemoryReportingRepository();
+    const transport: ReportTransport = {
+      send: vi.fn().mockResolvedValue({ messageId: '44' }),
+    };
+    const provisioner = {
+      inspectForum: vi.fn().mockResolvedValue({ isForum: true }),
+      listTopicIcons: vi.fn().mockResolvedValue([]),
+      createTopic: vi.fn().mockImplementation(async (_chatId: string, name: string) => ({
+        messageThreadId: String(80 + Object.values(REPORT_TOPIC_TITLES).indexOf(name)),
+      })),
+      editTopicIcon: vi.fn(),
+    };
+    const reporting = new ReportingUseCase(
+      repository,
+      transport,
+      () => new Date('2026-08-21T12:00:00.000Z'),
+      provisioner,
+    );
+    await repository.replaceForumDestination({
+      chatId: '-100123',
+      topics: { orders: '9' },
+    });
+    await reporting.record({
+      type: 'payment.proof_submitted',
+      occurrenceKey: 'order:11:proof:abc',
+      payload: { orderId: '11', telegramUserId: '10001' },
+    });
+
+    await reporting.dispatchDue();
+    expect(provisioner.createTopic).toHaveBeenCalledWith(
+      '-100123',
+      REPORT_TOPIC_TITLES.receipts,
+      expect.anything(),
+    );
+    expect(transport.send).not.toHaveBeenCalled();
+    expect(repository.deliveries[0]?.status).toBe('pending');
+
+    await reporting.dispatchDue();
+    expect(transport.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: '-100123',
+        messageThreadId: String(
+          80 + Object.values(REPORT_TOPIC_TITLES).indexOf(REPORT_TOPIC_TITLES.receipts),
+        ),
+      }),
+    );
+    expect(repository.deliveries[0]?.status).toBe('delivered');
+  });
+
+  it('records a redacted operator failure when delivery is not retryable', async () => {
+    const repository = new MemoryReportingRepository();
+    const transport: ReportTransport = {
+      send: vi.fn().mockRejectedValue(new Error('TELEGRAM_HTTP_400')),
+    };
+    const reporting = new ReportingUseCase(
+      repository,
+      transport,
+      () => new Date('2026-08-21T12:00:00.000Z'),
+    );
+    await repository.replaceForumDestination({
+      chatId: '-100123',
+      topics: { receipts: '21' },
+    });
+    await reporting.record({
+      type: 'payment.proof_submitted',
+      occurrenceKey: 'order:12:proof:abc',
+      payload: { orderId: '12', telegramUserId: '10001' },
+    });
+    await reporting.dispatchDue();
+    expect(repository.deliveries[0]?.status).toBe('failed');
+    const failure = repository.events.find((event) => event.type === 'system.failure');
+    expect(failure?.payload).toEqual({
+      errorCode: 'TELEGRAM_HTTP_400',
+      purpose: 'receipts',
+    });
+  });
+
+  it('clears a deleted topic, recreates it, and retries the same notice', async () => {
+    const repository = new MemoryReportingRepository();
+    const transport: ReportTransport = {
+      send: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('TELEGRAM_TOPIC_MISSING'))
+        .mockResolvedValue({ messageId: '91' }),
+    };
+    const provisioner = {
+      inspectForum: vi.fn().mockResolvedValue({ isForum: true }),
+      listTopicIcons: vi.fn().mockResolvedValue([]),
+      createTopic: vi.fn().mockImplementation(async (_chatId: string, name: string) => ({
+        messageThreadId: String(70 + Object.values(REPORT_TOPIC_TITLES).indexOf(name)),
+      })),
+      editTopicIcon: vi.fn(),
+    };
+    const reporting = new ReportingUseCase(
+      repository,
+      transport,
+      () => new Date('2026-08-21T12:00:00.000Z'),
+      provisioner,
+    );
+    await repository.replaceForumDestination({
+      chatId: '-100123',
+      topics: { receipts: '21' },
+    });
+    await reporting.record({
+      type: 'payment.proof_submitted',
+      occurrenceKey: 'order:9:proof:abc',
+      payload: { orderId: '9', telegramUserId: '10001' },
+    });
+
+    await reporting.dispatchDue();
+    expect(provisioner.createTopic).toHaveBeenCalledWith(
+      '-100123',
+      REPORT_TOPIC_TITLES.receipts,
+      expect.anything(),
+    );
+    expect(repository.deliveries[0]?.status).toBe('pending');
+    expect(repository.deliveries[0]?.lastErrorCode).toBe('TELEGRAM_TOPIC_MISSING');
+    expect(repository.events.some((event) => event.type === 'system.failure')).toBe(true);
+
+    await reporting.dispatchDue();
+    expect(transport.send).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(transport.send).mock.calls[1]?.[0]).toMatchObject({
+      chatId: '-100123',
+      messageThreadId: String(
+        70 + Object.values(REPORT_TOPIC_TITLES).indexOf(REPORT_TOPIC_TITLES.receipts),
+      ),
+    });
+    expect(repository.deliveries[0]?.status).toBe('delivered');
   });
 
   it('stamps returning-user activity by UTC day', () => {
@@ -296,6 +432,16 @@ class MemoryReportingRepository implements ReportingRepository {
     this.destination.topics[purpose] = messageThreadId;
   }
 
+  public async clearTopicBinding(
+    destinationId: string,
+    purpose: ReportTopicPurpose,
+  ): Promise<void> {
+    if (this.destination?.id !== destinationId) {
+      return;
+    }
+    Reflect.deleteProperty(this.destination.topics, purpose);
+  }
+
   public async claimDueDeliveries(
     limit: number,
     now: Date,
@@ -367,5 +513,27 @@ class MemoryReportingRepository implements ReportingRepository {
     }
     delivery.status = 'failed';
     delivery.lastErrorCode = errorCode;
+  }
+
+  public async countDeliveries(): Promise<{
+    readonly pending: number;
+    readonly failed: number;
+    readonly delivered: number;
+  }> {
+    let pending = 0;
+    let failed = 0;
+    let delivered = 0;
+    for (const delivery of this.deliveries) {
+      if (delivery.status === 'pending') {
+        pending += 1;
+      }
+      if (delivery.status === 'failed') {
+        failed += 1;
+      }
+      if (delivery.status === 'delivered') {
+        delivered += 1;
+      }
+    }
+    return { pending, failed, delivered };
   }
 }

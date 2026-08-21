@@ -25,6 +25,10 @@ export class CommerceUseCase {
     return this.repository.listCategories(parentId);
   }
 
+  public getCategory(id: string): Promise<CatalogCategory | null> {
+    return this.repository.getCategory(id);
+  }
+
   public listVariants(categoryId: string): Promise<readonly SellableProductVariant[]> {
     return this.repository.listSellableVariants(categoryId);
   }
@@ -43,6 +47,10 @@ export class CommerceUseCase {
 
   public listReviewQueue(): Promise<readonly SalesOrder[]> {
     return this.repository.listReviewQueue(10);
+  }
+
+  public listFailedProvisioning(): Promise<readonly SalesOrder[]> {
+    return this.repository.listFailedProvisioning(10);
   }
 
   public getOpenOrderForCustomer(customerId: string): Promise<SalesOrder | null> {

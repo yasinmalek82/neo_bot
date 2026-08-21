@@ -13,3 +13,4 @@ apps/admin-web/src/App.tsx
 apps/admin-web/src/main.tsx
 apps/admin-web/src/styles.css
 apps/admin-web/src/mobile
+deploy/Caddyfile.example

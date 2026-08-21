@@ -237,16 +237,12 @@ export class PasarGuardClient implements ProvisioningProvider {
       return error;
     }
     if (error instanceof ZodError) {
-      return new PasarGuardError('PASARGUARD_INVALID_RESPONSE', false, mayHaveApplied, {
-        cause: error,
-      });
+      return new PasarGuardError('PASARGUARD_INVALID_RESPONSE', false, mayHaveApplied);
     }
     if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
-      return new PasarGuardError('PASARGUARD_TIMEOUT', true, mayHaveApplied, { cause: error });
+      return new PasarGuardError('PASARGUARD_TIMEOUT', true, mayHaveApplied);
     }
-    return new PasarGuardError('PASARGUARD_NETWORK_ERROR', true, mayHaveApplied, {
-      cause: error instanceof Error ? error : undefined,
-    });
+    return new PasarGuardError('PASARGUARD_NETWORK_ERROR', true, mayHaveApplied);
   }
 }
 
@@ -254,10 +250,8 @@ function validateBaseUrl(value: string, allowInsecureLocalhost: boolean): URL {
   let parsed: URL;
   try {
     parsed = new URL(value);
-  } catch (error: unknown) {
-    throw new PasarGuardError('INVALID_BASE_URL', false, false, {
-      cause: error instanceof Error ? error : undefined,
-    });
+  } catch {
+    throw new PasarGuardError('INVALID_BASE_URL', false, false);
   }
   const insecureTestUrl =
     allowInsecureLocalhost &&
@@ -329,10 +323,8 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   }
   try {
     return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-  } catch (error: unknown) {
-    throw new PasarGuardError('PASARGUARD_INVALID_JSON', false, false, {
-      cause: error instanceof Error ? error : undefined,
-    });
+  } catch {
+    throw new PasarGuardError('PASARGUARD_INVALID_JSON', false, false);
   }
 }
 
