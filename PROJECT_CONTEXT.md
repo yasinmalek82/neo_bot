@@ -1,6 +1,6 @@
 <!--
 context-schema: 1
-last-updated: 2026-08-21T18:52:39.235Z
+last-updated: 2026-08-21T18:55:28.386Z
 source-fingerprint: 2e00c6cdb7c806c9a1e0657877d4526d0916a02805f0af82428ddb37777330ed
 current-phase: production-foundation-and-real-customer-journey
 next-task: live-receipt-forum-notices
@@ -102,8 +102,8 @@ Last evidence refresh: `2026-08-21`, local development environment only.
   private bot chat. Health reports Telegram intake as `disabled`, `polling`, or `webhook`.
 - Live test forum: eight purpose topics exist. Receipt, approval and provisioning notices are not
   confirmed yet. Daily-summary outbox events are implemented in code and not live-confirmed.
-- The Git repository has no first commit yet; an authorized baseline is the next release action in
-  this session. Creating that commit still happens only with owner authorization (now granted).
+- Authorized Git baseline exists: `6c9bbe4` on `main`, remote `https://github.com/yasinmalek82/neo_bot`.
+  `.env` was not committed.
 - No live-user migration, production deployment, public HTTPS webhook or live forum-group delivery of
   the new Mini App/renewal/daily-summary paths has been validated.
 
@@ -245,8 +245,8 @@ and secret rotation are not done.
 
 Gate remaining:
 
-- HTTPS webhook, monitoring, backup/restore drill, authorized Git baseline and dependency-scan
-  cleanup without unresolved high-severity findings.
+- HTTPS webhook, monitoring, backup/restore drill, and dependency-scan cleanup without unresolved
+  high-severity findings. The authorized Git baseline is done.
 
 ### Phase 5 - Controlled pilot and release
 
@@ -287,8 +287,8 @@ Expected sequence:
    private-chat buttons.
 3. Confirm sales or errors topic notices after the decision, without subscription URLs.
 
-Owner-only remaining gates: public HTTPS webhook URL, first Git baseline (authorized this session),
-live isolated PasarGuard group, TLS host, backup/restore drill, seven-day pilot.
+Owner-only remaining gates: public HTTPS webhook URL, live isolated PasarGuard group, TLS host,
+backup/restore drill, seven-day pilot.
 
 Do not request group tokens or secrets in chat.
 
@@ -335,6 +335,14 @@ handoff entry.
 ## Handoff log
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
+
+### 2026-08-21 - Authorized Git baseline pushed
+
+- Outcome: first commit `6c9bbe4` on `main` pushed to `https://github.com/yasinmalek82/neo_bot`.
+  `.env` stayed untracked. No force-push.
+- Validation: `pnpm check` passed before the baseline commit. Push created a new private remote.
+- Next: owner sends a receipt photo in the private bot chat to confirm receipts and sales/errors
+  topics.
 
 ### 2026-08-21 - In-repo production-MVP hardening
 
