@@ -11,9 +11,10 @@ import {
   type RenewProviderUser,
   type ServiceBinding,
 } from '@neo-bot/domain';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { DirectServiceUseCase } from './direct-service.js';
+import * as serviceUsername from './service-username.js';
 import type { ProvisioningRepository, ReservedOperation } from './ports.js';
 
 const fixedNow = new Date('2026-08-20T00:00:00.000Z');
@@ -101,6 +102,26 @@ describe('DirectServiceUseCase', () => {
     ).rejects.toMatchObject({ code: 'PASARGUARD_HTTP_400', mayHaveApplied: false });
     expect(provider.createCalls).toBe(1);
   });
+
+  it('retries suffix generation when the username base collides downstream', async () => {
+    const repository = new MemoryRepository();
+    const provider = new MemoryProvider();
+    provider.seedConflictingUsername('buyer_aaaa');
+    vi.spyOn(serviceUsername, 'generateServiceUsernameSuffix')
+      .mockReturnValueOnce('aaaa')
+      .mockReturnValueOnce('bbbb');
+    const useCase = new DirectServiceUseCase(repository, provider, () => fixedNow);
+
+    const service = await useCase.create({
+      productVariantId: variant.id,
+      idempotencyKey: 'username-collision',
+      serviceUsernameBase: 'buyer',
+    });
+
+    expect(service.targetUsername).toBe('buyer_bbbb');
+    expect(provider.createCalls).toBe(1);
+    vi.restoreAllMocks();
+  });
 });
 
 class MemoryProvider implements ProvisioningProvider {
@@ -110,6 +131,19 @@ class MemoryProvider implements ProvisioningProvider {
   public failCreateAfterApplying = false;
   public definitiveCreateFailure = false;
   private readonly users = new Map<number, ProviderUser>();
+
+  public seedConflictingUsername(username: string): void {
+    this.users.set(999, {
+      id: 999,
+      username,
+      status: 'active',
+      expiresAt: fixedNow,
+      dataLimitBytes: 0n,
+      usedTrafficBytes: 0n,
+      groupIds: [99],
+      subscriptionUrl: 'https://panel.example/sub/conflict',
+    });
+  }
 
   public async health(): Promise<ProviderHealth> {
     return { ok: true, checkedAt: fixedNow, latencyMs: 1 };

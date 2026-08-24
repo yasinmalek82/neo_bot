@@ -1,4 +1,5 @@
 import { DomainConflictError } from './errors.js';
+import type { StorefrontDisplayAttribute, StorefrontEvidenceBadge } from './storefront.js';
 
 export interface CatalogCategory {
   readonly id: string;
@@ -9,9 +10,18 @@ export interface CatalogCategory {
   readonly position: number;
 }
 
+export const REPRESENTATIVE_PRICING_SOURCES = [
+  'public',
+  'representative_base',
+  'representative_override',
+] as const;
+
+export type RepresentativePricingSource = (typeof REPRESENTATIVE_PRICING_SOURCES)[number];
+
 export interface SellableProductVariant {
   readonly id: string;
   readonly code: string;
+  readonly productId?: string;
   readonly productName: string;
   readonly name: string;
   readonly description: string;
@@ -19,6 +29,18 @@ export interface SellableProductVariant {
   readonly dataLimitBytes: bigint;
   readonly deviceLimit: number;
   readonly priceIrr: bigint;
+  readonly displayAttributes?: readonly StorefrontDisplayAttribute[];
+  readonly fulfilledSalesLast30Days?: number;
+  readonly evidenceBadge?: StorefrontEvidenceBadge;
+  readonly pricingSource?: RepresentativePricingSource;
+}
+
+export interface RepresentativeProfile {
+  readonly id: string;
+  readonly code: string;
+  readonly telegramUserId: string;
+  readonly displayName: string;
+  readonly active: boolean;
 }
 
 export interface TelegramCustomer {
@@ -47,6 +69,10 @@ export interface SalesOrder {
   readonly amountIrr: bigint;
   readonly status: SalesOrderStatus;
   readonly serviceId: string | null;
+  readonly representativeId?: string | null;
+  readonly representativeCode?: string | null;
+  readonly pricingSource?: RepresentativePricingSource;
+  readonly serviceUsernameBase: string | null;
   readonly failureCode: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -90,5 +116,41 @@ export function validatePaymentProofReference(fileId: string, fileUniqueId: stri
     fileUniqueId.length > 128
   ) {
     throw new DomainConflictError('INVALID_PAYMENT_PROOF');
+  }
+}
+
+export function isRepresentativePricingSource(value: string): value is RepresentativePricingSource {
+  return REPRESENTATIVE_PRICING_SOURCES.some((source) => source === value);
+}
+
+export function resolveRepresentativePrice(input: {
+  readonly publicPriceIrr: bigint;
+  readonly representativeBasePriceIrr: bigint | null;
+  readonly representativeOverridePriceIrr: bigint | null;
+}): {
+  readonly priceIrr: bigint;
+  readonly pricingSource: RepresentativePricingSource;
+} {
+  requirePositivePrice(input.publicPriceIrr);
+  if (input.representativeOverridePriceIrr !== null) {
+    requirePositivePrice(input.representativeOverridePriceIrr);
+    return {
+      priceIrr: input.representativeOverridePriceIrr,
+      pricingSource: 'representative_override',
+    };
+  }
+  if (input.representativeBasePriceIrr !== null) {
+    requirePositivePrice(input.representativeBasePriceIrr);
+    return {
+      priceIrr: input.representativeBasePriceIrr,
+      pricingSource: 'representative_base',
+    };
+  }
+  return { priceIrr: input.publicPriceIrr, pricingSource: 'public' };
+}
+
+function requirePositivePrice(priceIrr: bigint): void {
+  if (priceIrr <= 0n) {
+    throw new DomainConflictError('INVALID_PRICE');
   }
 }

@@ -41,6 +41,8 @@ export const customerOrderServiceProvider = {
       catalog,
       telegramConfig.botToken,
       new TelegramApiClient(telegramConfig.botToken),
+      telegramConfig.adminTelegramUserIds,
+      directService,
     );
   },
 };

@@ -217,7 +217,7 @@ describe('TelegramApiClient', () => {
     await expect(
       client.setMyCommands([{ command: 'start', description: 'منوی فروشگاه' }]),
     ).resolves.toBeUndefined();
-    await expect(client.setChatMenuButton('https://mini.example.com/')).resolves.toBeUndefined();
+    await expect(client.setCommandsMenuButton()).resolves.toBeUndefined();
     const [, sendOptions] = fetchImplementation.mock.calls[0] as [URL, { body: string }];
     expect(JSON.parse(sendOptions.body)).toMatchObject({
       parse_mode: 'HTML',
@@ -229,6 +229,10 @@ describe('TelegramApiClient', () => {
       chat_id: '10001',
       message_id: 12,
       parse_mode: 'HTML',
+    });
+    const [, menuOptions] = fetchImplementation.mock.calls[3] as [URL, { body: string }];
+    expect(JSON.parse(menuOptions.body)).toMatchObject({
+      menu_button: { type: 'commands' },
     });
   });
 });

@@ -12,6 +12,9 @@ export const REPORTING_EVENT_TYPES = [
   'renewal.failed',
   'system.failure',
   'ops.daily_summary',
+  'reseller.order_created',
+  'reseller.assignment_updated',
+  'reseller.pricing_updated',
 ] as const;
 
 export type ReportingEventType = (typeof REPORTING_EVENT_TYPES)[number];

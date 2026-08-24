@@ -259,6 +259,9 @@ export class PostgresReportingRepository implements ReportingRepository {
            when 'renewal.completed' then 'renewals'
            when 'renewal.failed' then 'renewals'
            when 'ops.daily_summary' then 'daily_summaries'
+           when 'reseller.order_created' then 'resellers'
+           when 'reseller.assignment_updated' then 'resellers'
+           when 'reseller.pricing_updated' then 'resellers'
            else 'errors'
          end as purpose,
          destination.id::text as destination_id,
@@ -283,6 +286,9 @@ export class PostgresReportingRepository implements ReportingRepository {
            when 'renewal.completed' then 'renewals'
            when 'renewal.failed' then 'renewals'
            when 'ops.daily_summary' then 'daily_summaries'
+           when 'reseller.order_created' then 'resellers'
+           when 'reseller.assignment_updated' then 'resellers'
+           when 'reseller.pricing_updated' then 'resellers'
            else 'errors'
          end`,
       [limit, now],

@@ -15,6 +15,8 @@ interface HealthResponse {
   readonly reports: {
     readonly pending: number;
     readonly failed: number;
+    readonly retrying: number;
+    readonly due: number;
   };
 }
 
@@ -25,10 +27,13 @@ export class HealthController {
   @Get()
   public async getHealth(): Promise<HealthResponse> {
     await this.pool.query('select 1');
-    const counts = await this.pool.query<{ status: string; n: number }>(
-      `select status, count(*)::int as n
-       from reporting_deliveries
-       group by status`,
+    const counts = await this.pool.query<DeliveryCountRow>(
+      `select
+         count(*) filter (where status = 'pending')::int as pending,
+         count(*) filter (where status = 'failed')::int as failed,
+         count(*) filter (where status = 'pending' and attempt_count > 0)::int as retrying,
+         count(*) filter (where status = 'pending' and next_attempt_at <= now())::int as due
+       from reporting_deliveries`,
     );
     const migrated = await this.pool.query<{ n: number }>(
       'select count(*)::int as n from schema_migrations',
@@ -41,7 +46,7 @@ export class HealthController {
       telegramReady: telegram.ready,
       telegramError: telegram.error,
       migrations: migrationCount(migrated.rows[0]?.n),
-      reports: deliveryCounts(counts.rows),
+      reports: deliveryCounts(counts.rows[0]),
     };
   }
 }
@@ -68,21 +73,25 @@ function migrationCount(value: number | undefined): number {
   return value;
 }
 
-function deliveryCounts(
-  rows: readonly { readonly status: string; readonly n: number }[],
-): HealthResponse['reports'] {
-  let pending = 0;
-  let failed = 0;
-  for (const row of rows) {
-    if (!Number.isInteger(row.n) || row.n < 0) {
-      continue;
-    }
-    if (row.status === 'pending') {
-      pending = row.n;
-    }
-    if (row.status === 'failed') {
-      failed = row.n;
-    }
+interface DeliveryCountRow {
+  readonly pending: number;
+  readonly failed: number;
+  readonly retrying: number;
+  readonly due: number;
+}
+
+function deliveryCounts(row: DeliveryCountRow | undefined): HealthResponse['reports'] {
+  return {
+    pending: nonNegativeInt(row?.pending),
+    failed: nonNegativeInt(row?.failed),
+    retrying: nonNegativeInt(row?.retrying),
+    due: nonNegativeInt(row?.due),
+  };
+}
+
+function nonNegativeInt(value: number | undefined): number {
+  if (value === undefined || !Number.isInteger(value) || value < 0) {
+    return 0;
   }
-  return { pending, failed };
+  return value;
 }

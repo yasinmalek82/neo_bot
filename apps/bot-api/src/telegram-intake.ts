@@ -2,7 +2,7 @@ const POLLING_STALE_MS = 45_000;
 
 export type TelegramIntakeMode = 'disabled' | 'polling' | 'webhook';
 
-export interface TelegramIntakeHealth {
+interface TelegramIntakeHealth {
   readonly mode: TelegramIntakeMode;
   readonly ready: boolean;
   readonly error: string;
@@ -34,7 +34,7 @@ export function recordTelegramIntakeFailure(error: unknown): void {
   state.lastError = sanitizeIntakeError(error);
 }
 
-export function recordTelegramIntakeProbeOk(): void {
+function recordTelegramIntakeProbeOk(): void {
   state.lastError = 'none';
 }
 

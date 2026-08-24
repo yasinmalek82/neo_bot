@@ -321,6 +321,79 @@ describe('ReportingUseCase', () => {
       ]),
     ).toBe('icon-ok');
   });
+
+  it('maps reseller events to the resellers forum topic', () => {
+    expect(EVENT_PURPOSE['reseller.order_created']).toBe('resellers');
+    expect(EVENT_PURPOSE['reseller.assignment_updated']).toBe('resellers');
+    expect(EVENT_PURPOSE['reseller.pricing_updated']).toBe('resellers');
+  });
+
+  it('formats reseller notices without leaking forbidden values', () => {
+    expect(
+      formatReportText('reseller.order_created', {
+        orderId: '21',
+        representativeCode: 'rep-a',
+        telegramUserId: '10001',
+        productName: 'اقتصادی',
+        variantName: 'یک‌ماهه',
+        amountIrr: '900000',
+        pricingSource: 'representative_override',
+      }),
+    ).toContain('سفارش نماینده');
+    expect(
+      formatReportText('reseller.assignment_updated', {
+        representativeCode: 'rep-a',
+        customerTelegramUserId: '10002',
+        active: 'true',
+      }),
+    ).toContain('تخصیص نماینده');
+    expect(
+      formatReportText('reseller.pricing_updated', {
+        representativeCode: 'rep-a',
+        productName: 'اقتصادی',
+        variantName: 'یک‌ماهه',
+        amountIrr: '1200000',
+        pricingKind: 'base',
+      }),
+    ).toContain('قیمت نماینده');
+  });
+
+  it('delivers reseller notices to the resellers topic', async () => {
+    const repository = new MemoryReportingRepository();
+    const transport: ReportTransport = {
+      send: vi.fn().mockResolvedValue({ messageId: '55' }),
+    };
+    const reporting = new ReportingUseCase(
+      repository,
+      transport,
+      () => new Date('2026-08-21T12:00:00.000Z'),
+    );
+    await repository.replaceForumDestination({
+      chatId: '-100123',
+      topics: { resellers: '33' },
+    });
+    await reporting.record({
+      type: 'reseller.order_created',
+      occurrenceKey: 'reseller:order:21:created',
+      payload: {
+        orderId: '21',
+        representativeCode: 'rep-a',
+        telegramUserId: '10001',
+        productName: 'اقتصادی',
+        variantName: 'یک‌ماهه',
+        amountIrr: '900000',
+        pricingSource: 'representative_override',
+      },
+    });
+    await reporting.dispatchDue();
+    expect(transport.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: '-100123',
+        messageThreadId: '33',
+        text: expect.stringContaining('سفارش نماینده'),
+      }),
+    );
+  });
 });
 
 class MemoryReportingRepository implements ReportingRepository {

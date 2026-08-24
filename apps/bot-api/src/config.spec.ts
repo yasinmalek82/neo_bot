@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  loadAdminApiConfig,
   loadDatabaseConfig,
   loadHttpConfig,
   loadPilotConfig,
@@ -63,6 +62,30 @@ describe('configuration', () => {
     ).toMatchObject({ enabled: true, webhookUrl: null, reportDispatchIntervalMs: 0 });
   });
 
+  it('keeps optional brand media disabled until Telegram file IDs are configured', () => {
+    const base = {
+      TELEGRAM_ENABLED: 'true',
+      TELEGRAM_BOT_TOKEN: '12345:abcdefghijklmnopqrstuvwxyz',
+      TELEGRAM_WEBHOOK_SECRET: 'safe_webhook_secret_123',
+      TELEGRAM_ADMIN_IDS: '70001',
+    };
+    expect(loadTelegramConfig(base)).toMatchObject({
+      brandMedia: { welcomePhotoFileId: null, deliveryPhotoFileId: null },
+    });
+    expect(
+      loadTelegramConfig({
+        ...base,
+        TELEGRAM_BRAND_WELCOME_PHOTO_FILE_ID: ' welcome-file-id ',
+        TELEGRAM_BRAND_DELIVERY_PHOTO_FILE_ID: 'delivery-file-id',
+      }),
+    ).toMatchObject({
+      brandMedia: {
+        welcomePhotoFileId: 'welcome-file-id',
+        deliveryPhotoFileId: 'delivery-file-id',
+      },
+    });
+  });
+
   it('accepts an https webhook URL and rejects http or credentialed URLs', () => {
     const base = {
       TELEGRAM_ENABLED: 'true',
@@ -75,7 +98,7 @@ describe('configuration', () => {
         ...base,
         TELEGRAM_WEBHOOK_URL: 'https://bot.example.com/telegram/webhook',
       }),
-    ).toMatchObject({ webhookUrl: 'https://bot.example.com/telegram/webhook', miniAppUrl: null });
+    ).toMatchObject({ webhookUrl: 'https://bot.example.com/telegram/webhook' });
     expect(() =>
       loadTelegramConfig({ ...base, TELEGRAM_WEBHOOK_URL: 'http://127.0.0.1/telegram/webhook' }),
     ).toThrow('INVALID_TELEGRAM_CONFIGURATION');
@@ -85,22 +108,6 @@ describe('configuration', () => {
         TELEGRAM_WEBHOOK_URL: 'https://user:pass@bot.example.com/telegram/webhook',
       }),
     ).toThrow('INVALID_TELEGRAM_CONFIGURATION');
-    expect(
-      loadTelegramConfig({
-        ...base,
-        TELEGRAM_MINI_APP_URL: 'https://mini.example.com/',
-      }),
-    ).toMatchObject({ miniAppUrl: 'https://mini.example.com/' });
-    expect(() =>
-      loadTelegramConfig({ ...base, TELEGRAM_MINI_APP_URL: 'http://127.0.0.1:4173/' }),
-    ).toThrow('INVALID_TELEGRAM_CONFIGURATION');
-  });
-
-  it('keeps the admin API disabled until a strong token is configured', () => {
-    expect(loadAdminApiConfig({})).toEqual({ token: null });
-    expect(() => loadAdminApiConfig({ ADMIN_API_TOKEN: 'too-short' })).toThrow(
-      'INVALID_ADMIN_API_CONFIGURATION',
-    );
   });
 
   it('loads explicit HTTP origins without allowing arbitrary origins', () => {

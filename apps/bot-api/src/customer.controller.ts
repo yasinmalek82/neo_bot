@@ -1,13 +1,15 @@
 import { DomainConflictError, type SalesOrder } from '@neo-bot/domain';
 import {
   BadRequestException,
-  Body,
   ConflictException,
   Controller,
   Get,
+  GoneException,
   Headers,
   Inject,
+  Param,
   Post,
+  Query,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -16,11 +18,38 @@ import { z } from 'zod';
 import { CustomerOrderService } from './customer-order.service.js';
 import { customerOrderServiceToken } from './customer.provider.js';
 
-const createOrderSchema = z
-  .object({
-    productVariantId: z.string().regex(/^\d+$/u),
-  })
-  .strict();
+const categoryIdSchema = z.string().regex(/^\d+$/u);
+
+interface CustomerShopCategorySummary {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+}
+
+interface CustomerShopVariantSummary {
+  readonly id: string;
+  readonly productName: string;
+  readonly name: string;
+  readonly description: string;
+  readonly durationDays: number;
+  readonly volumeLabel: string;
+  readonly deviceLabel: string;
+  readonly priceToman: number;
+}
+
+interface CustomerShopCategoriesResponse {
+  readonly categories: readonly CustomerShopCategorySummary[];
+  readonly emptyHint: 'admin' | 'customer' | null;
+}
+
+interface CustomerShopCategoryResponse {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly parent: { readonly id: string; readonly name: string } | null;
+  readonly categories: readonly CustomerShopCategorySummary[];
+  readonly variants: readonly CustomerShopVariantSummary[];
+}
 
 @Controller('customer')
 export class CustomerController {
@@ -29,27 +58,47 @@ export class CustomerController {
     private readonly orders: CustomerOrderService | null,
   ) {}
 
-  @Post('orders')
-  public async createOrder(
+  @Get('shop/categories')
+  public async listShopCategories(
     @Headers('x-telegram-init-data') initData: string | undefined,
-    @Headers('idempotency-key') idempotencyKey: string | undefined,
-    @Body() body: unknown,
-  ) {
+    @Query('parentId') parentId: string | undefined,
+  ): Promise<CustomerShopCategoriesResponse> {
     const service = this.requireService();
-    const parsed = createOrderSchema.safeParse(body);
-    if (!parsed.success) {
-      throw new BadRequestException('INVALID_ORDER_PAYLOAD');
+    let parent: string | null = null;
+    if (parentId !== undefined && parentId.length > 0) {
+      const parsedParent = categoryIdSchema.safeParse(parentId);
+      if (!parsedParent.success) {
+        throw new BadRequestException('INVALID_CATEGORY_ID');
+      }
+      parent = parsedParent.data;
     }
     try {
-      const created = await service.createOrder(
-        this.requireInitData(initData),
-        parsed.data.productVariantId,
-        idempotencyKey,
-      );
-      return serializeCustomerOrder(created.order, created.payment);
+      return await service.listShopCategories(this.requireInitData(initData), parent);
     } catch (error: unknown) {
       throw mapCustomerError(error);
     }
+  }
+
+  @Get('shop/categories/:categoryId')
+  public async getShopCategory(
+    @Headers('x-telegram-init-data') initData: string | undefined,
+    @Param('categoryId') categoryId: string,
+  ): Promise<CustomerShopCategoryResponse> {
+    const service = this.requireService();
+    const parsed = categoryIdSchema.safeParse(categoryId);
+    if (!parsed.success) {
+      throw new BadRequestException('INVALID_CATEGORY_ID');
+    }
+    try {
+      return await service.getShopCategory(this.requireInitData(initData), parsed.data);
+    } catch (error: unknown) {
+      throw mapCustomerError(error);
+    }
+  }
+
+  @Post('orders')
+  public createOrder(): never {
+    throw new GoneException('CHAT_CHECKOUT_REQUIRED');
   }
 
   @Get('orders/current')
@@ -61,6 +110,21 @@ export class CustomerController {
     } catch (error: unknown) {
       throw mapCustomerError(error);
     }
+  }
+
+  @Get('service')
+  public async currentService(@Headers('x-telegram-init-data') initData: string | undefined) {
+    const service = this.requireService();
+    try {
+      return await service.hasActiveService(this.requireInitData(initData));
+    } catch (error: unknown) {
+      throw mapCustomerError(error);
+    }
+  }
+
+  @Post('renew')
+  public renew(): never {
+    throw new GoneException('CHAT_CHECKOUT_REQUIRED');
   }
 
   private requireService(): CustomerOrderService {

@@ -10,6 +10,7 @@ const HTTP_ERROR_NAMES: Readonly<Record<number, string>> = {
   403: 'Forbidden',
   404: 'Not Found',
   409: 'Conflict',
+  410: 'Gone',
   429: 'Too Many Requests',
   503: 'Service Unavailable',
 };

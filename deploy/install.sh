@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# First-host installer: writes a gitignored .env, builds Mini App + catalog-admin,
+# First-host installer: writes a gitignored .env and builds customer static assets,
 # then starts Postgres, bot-api, and Caddy with automatic HTTPS.
 # Never run with `bash -x` or `set -x`; prompts include secrets.
 
@@ -123,7 +123,6 @@ fi
 
 WEBHOOK_SECRET="$(url_safe_secret)"
 POSTGRES_PASSWORD="$(url_safe_password)"
-ADMIN_API_TOKEN="$(url_safe_secret)"
 
 umask 077
 {
@@ -135,7 +134,6 @@ umask 077
   printf 'WEB_ORIGINS=https://%s\n' "$HOST_NAME"
   printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
   printf 'DATABASE_URL=postgres://neo_bot:%s@postgres:5432/neo_bot\n' "$POSTGRES_PASSWORD"
-  printf 'ADMIN_API_TOKEN=%s\n' "$ADMIN_API_TOKEN"
   printf 'PASARGUARD_BASE_URL=%s\n' "$PASARGUARD_URL"
   printf 'PASARGUARD_API_KEY=%s\n' "$PASARGUARD_KEY"
   printf '%s\n' 'PASARGUARD_TIMEOUT_MS=5000'
@@ -152,7 +150,6 @@ umask 077
   printf 'TELEGRAM_BOT_TOKEN=%s\n' "$BOT_TOKEN"
   printf 'TELEGRAM_WEBHOOK_SECRET=%s\n' "$WEBHOOK_SECRET"
   printf 'TELEGRAM_WEBHOOK_URL=https://%s/telegram/webhook\n' "$HOST_NAME"
-  printf 'TELEGRAM_MINI_APP_URL=https://%s/\n' "$HOST_NAME"
   printf 'TELEGRAM_ADMIN_IDS=%s\n' "$ADMIN_IDS"
   if [[ -n "$REPORT_GROUP" ]]; then
     printf 'TELEGRAM_REPORT_GROUP_CHAT_ID=%s\n' "$REPORT_GROUP"
@@ -167,8 +164,6 @@ build_static() {
   pnpm --filter admin-web run check:runtime
   pnpm --filter admin-web exec tsc
   pnpm --filter admin-web exec vite build
-  pnpm --filter @neo-bot/catalog-admin exec tsc
-  pnpm --filter @neo-bot/catalog-admin exec vite build --base /console/
 }
 
 if command -v pnpm >/dev/null 2>&1; then
@@ -179,15 +174,11 @@ else
     -w /app \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     node:24-bookworm \
-    bash -lc 'corepack enable && corepack prepare pnpm@11 --activate && pnpm install --frozen-lockfile && pnpm --filter admin-web run check:runtime && pnpm --filter admin-web exec tsc && pnpm --filter admin-web exec vite build && pnpm --filter @neo-bot/catalog-admin exec tsc && pnpm --filter @neo-bot/catalog-admin exec vite build --base /console/'
+    bash -lc 'corepack enable && corepack prepare pnpm@11 --activate && pnpm install --frozen-lockfile && pnpm --filter admin-web run check:runtime && pnpm --filter admin-web exec tsc && pnpm --filter admin-web exec vite build'
 fi
 
 if [[ ! -f apps/admin-web/dist/client/index.html ]]; then
   printf '%s\n' 'Mini App dist/client is missing after the build.' >&2
-  exit 1
-fi
-if [[ ! -f apps/catalog-admin/dist/index.html ]]; then
-  printf '%s\n' 'catalog-admin dist is missing after the build.' >&2
   exit 1
 fi
 
@@ -213,7 +204,6 @@ else
 fi
 
 printf '%s\n' 'Install finished. Caddy will request TLS certificates for the hostname you typed.'
-printf '%s\n' 'Restart bot-api once HTTPS works so the Mini App menu button and webhook stay registered:'
+printf '%s\n' 'Restart bot-api once HTTPS works so the webhook is registered:'
 printf '%s\n' '  docker compose -f docker-compose.production.yml restart bot-api'
 printf '%s\n' 'Do not paste the BotFather token, .env, or webhook secret into chat.'
-printf '%s\n' 'Catalog console: open /console/ from Telegram as an admin (initData). Loopback catalog-admin remains for local DEV only.'

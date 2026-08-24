@@ -83,6 +83,9 @@ export const EVENT_PURPOSE: Readonly<Record<ReportingEventType, ReportTopicPurpo
   'renewal.failed': 'renewals',
   'system.failure': 'errors',
   'ops.daily_summary': 'daily_summaries',
+  'reseller.order_created': 'resellers',
+  'reseller.assignment_updated': 'resellers',
+  'reseller.pricing_updated': 'resellers',
 };
 
 export class ReportingUseCase implements ReportingPublisher {
@@ -334,6 +337,31 @@ export function formatReportText(type: ReportingEventType, payload: ReportingPay
         `فروش: ${payload['fulfilledCount'] ?? '0'}`,
         `مبلغ: ${payload['amountIrr'] ?? '0'} ریال`,
         `خطا: ${payload['failedCount'] ?? '0'}`,
+      ].join('\n');
+    case 'reseller.order_created':
+      return [
+        'سفارش نماینده',
+        `نماینده: ${payload['representativeCode'] ?? 'نامشخص'}`,
+        `سفارش: ${payload['orderId'] ?? 'نامشخص'}`,
+        `محصول: ${payload['productName'] ?? ''} — ${payload['variantName'] ?? ''}`.trim(),
+        `مبلغ: ${payload['amountIrr'] ?? 'نامشخص'} ریال`,
+        `منبع قیمت: ${payload['pricingSource'] ?? 'نامشخص'}`,
+        `شناسه تلگرام: ${telegramUserId}`,
+      ].join('\n');
+    case 'reseller.assignment_updated':
+      return [
+        'تخصیص نماینده',
+        `نماینده: ${payload['representativeCode'] ?? 'نامشخص'}`,
+        `مشتری: ${payload['customerTelegramUserId'] ?? 'نامشخص'}`,
+        `وضعیت: ${payload['active'] ?? 'نامشخص'}`,
+      ].join('\n');
+    case 'reseller.pricing_updated':
+      return [
+        'قیمت نماینده',
+        `نماینده: ${payload['representativeCode'] ?? 'نامشخص'}`,
+        `محصول: ${payload['productName'] ?? ''} — ${payload['variantName'] ?? ''}`.trim(),
+        `مبلغ: ${payload['amountIrr'] ?? 'نامشخص'} ریال`,
+        `نوع: ${payload['pricingKind'] ?? 'نامشخص'}`,
       ].join('\n');
   }
 }

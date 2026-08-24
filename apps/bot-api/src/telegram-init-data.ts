@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import { DomainConflictError } from '@neo-bot/domain';
 
-export interface TelegramWebAppUser {
+interface TelegramWebAppUser {
   readonly id: number;
   readonly first_name: string;
   readonly last_name?: string;

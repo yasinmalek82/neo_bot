@@ -23,27 +23,23 @@ describe('HealthController', () => {
       telegramReady: true,
       telegramError: 'none',
       migrations: 0,
-      reports: { pending: 0, failed: 0 },
+      reports: { pending: 0, failed: 0, retrying: 0, due: 0 },
     });
     expect(query).toHaveBeenCalledWith('select 1');
   });
 
-  it('exposes pending and failed report counts without identifiers', async () => {
+  it('exposes pending, failed, retrying, and due report counts without identifiers', async () => {
     const query = vi
       .fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
-        rows: [
-          { status: 'pending', n: 3 },
-          { status: 'failed', n: 1 },
-          { status: 'delivered', n: 9 },
-        ],
+        rows: [{ pending: 3, failed: 1, retrying: 2, due: 1 }],
       })
       .mockResolvedValueOnce({ rows: [{ n: 6 }] });
     const controller = new HealthController({ query } as unknown as Pool);
 
     await expect(controller.getHealth()).resolves.toMatchObject({
-      reports: { pending: 3, failed: 1 },
+      reports: { pending: 3, failed: 1, retrying: 2, due: 1 },
       migrations: 6,
     });
   });
@@ -67,7 +63,7 @@ describe('HealthController', () => {
       telegramReady: expect.any(Boolean),
       telegramError: expect.stringMatching(/^(none|TELEGRAM_[A-Z0-9_]+)$/u),
       migrations: 0,
-      reports: { pending: 0, failed: 0 },
+      reports: { pending: 0, failed: 0, retrying: 0, due: 0 },
     });
     await app.close();
   });

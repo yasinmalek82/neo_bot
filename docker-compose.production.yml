@@ -5,7 +5,7 @@
 #
 # This file does not deploy anything by itself. On the production host, prefer:
 #   bash deploy/install.sh
-# or, after host `.env` and Mini App dist exist:
+# or, after host `.env` and static customer assets exist:
 #   docker compose -f docker-compose.production.yml up -d --build
 #
 # Caddy in this file terminates TLS on 80/443 and reverse-proxies to `bot-api`.
@@ -44,6 +44,7 @@ services:
       HOST: 0.0.0.0
       PORT: 3100
       DATABASE_URL: postgres://neo_bot:${POSTGRES_PASSWORD}@postgres:5432/neo_bot
+      TELEGRAM_PUBLIC_HOST: ${TELEGRAM_PUBLIC_HOST:-}
     healthcheck:
       test:
         [
@@ -71,11 +72,9 @@ services:
       TELEGRAM_PUBLIC_HOST: ${TELEGRAM_PUBLIC_HOST:?set TELEGRAM_PUBLIC_HOST}
       BOT_API_UPSTREAM: bot-api:3100
       MINI_APP_DIST: /srv/mini-app
-      CATALOG_ADMIN_DIST: /srv/catalog-admin
     volumes:
       - ./deploy/Caddyfile.example:/etc/caddy/Caddyfile:ro
       - ./apps/admin-web/dist/client:/srv/mini-app:ro
-      - ./apps/catalog-admin/dist:/srv/catalog-admin:ro
       - caddy_data:/data
       - caddy_config:/config
 

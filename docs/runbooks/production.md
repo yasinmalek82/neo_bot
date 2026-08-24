@@ -11,14 +11,14 @@ is already deployed. Beginners should start with `docs/runbooks/first-host.md` a
 3. Set `TELEGRAM_ENABLED=true`, a BotFather token, webhook secret, and numeric admin IDs.
 4. Leave `TELEGRAM_WEBHOOK_URL` unset until HTTPS actually reaches this process.
 5. Keep `PILOT_ENABLED=false` until an isolated PasarGuard group ID is configured.
-6. Publish card details from the catalog console, not from environment variables.
+6. Publish card details from private administrator chat, not from environment variables.
 7. `POSTGRES_PASSWORD` must be URL-safe (no `@`, `:`, `/`, or `%`). Compose injects
    `DATABASE_URL` for `bot-api` as `postgres://neo_bot:${POSTGRES_PASSWORD}@postgres:5432/neo_bot`,
    which overrides a loopback `DATABASE_URL` in `.env`. Do not publish Postgres.
 
 ## Bring the process up
 
-Prefer `bash deploy/install.sh` so `.env`, Mini App dist, catalog-admin dist, Compose, and Caddy TLS
+Prefer `bash deploy/install.sh` so `.env`, customer static assets, Compose, and Caddy TLS
 are created together. Manual equivalent:
 
 ```bash
@@ -27,13 +27,18 @@ docker compose -f docker-compose.production.yml up -d --build
 
 Postgres is not published. `bot-api` listens on `127.0.0.1:3100`. Compose Caddy terminates TLS on
 80/443 using `deploy/Caddyfile.example`. Set `TELEGRAM_PUBLIC_HOST` to the public hostname (no
-scheme). Confirm `GET /health` returns `status: ok` through HTTPS.
+scheme). Confirm `GET /health` returns `status: ok` through HTTPS. The JSON includes integer report-queue
+counts only: `reports.pending`, `reports.failed`, `reports.retrying` (pending deliveries already
+retried at least once), and `reports.due` (pending deliveries whose next attempt time has passed).
+No order IDs, file IDs, or secrets appear in the response. Alert when `reports.due` stays above
+zero for several minutes (dispatch lag) or when `reports.retrying` climbs while `reports.failed`
+remains zero (transient Telegram pressure).
 
-## Mini App on the same host
+## Customer static assets on the same host
 
-`apps/admin-web` Vite output is `dist/client`. Same-origin fetch is already used when the page is
-not on loopback, so the Mini App can call `/catalog` and `/customer` without a guessed API host.
-Do not copy this tree into the `bot-api` image: `pnpm --filter admin-web build` also prepares an
+`apps/admin-web` Vite output may still sit at `/` for Caddy, but it is not the customer store. Buy,
+pay, and send the receipt in Telegram chat. `POST /customer/orders` and `POST /customer/renew` are
+gone. Do not copy this tree into the `bot-api` image: `pnpm --filter admin-web build` also prepares an
 OpenAI Sites worker. For Caddy, build only the static client:
 
 ```bash
@@ -42,13 +47,9 @@ pnpm --filter admin-web exec tsc
 pnpm --filter admin-web exec vite build
 ```
 
-Point `MINI_APP_DIST` at that `dist/client` directory (absolute path on the host). After HTTPS
-works, set `TELEGRAM_MINI_APP_URL` to the Mini App origin (`https://` plus the real hostname and a
-trailing `/`) in host `.env` and restart `bot-api`. `/admin/*` stays the catalog API.
-`catalog-admin` static files may be served at `/console/` (Vite `base` `/console/`, same-origin
-`/admin/catalog`). Production console auth is administrator Telegram `initData`, not the
-development Bearer token. Open `/console/` from the admin-hub Mini App button. Local DEV console
-on loopback `4174` is unchanged.
+Point `MINI_APP_DIST` at that `dist/client` directory (absolute path on the host). Catalog management
+runs only in the private administrator chat; no web console or private catalog administration HTTP API
+is served.
 
 ## Register the Telegram webhook
 

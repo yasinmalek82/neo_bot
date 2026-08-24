@@ -1,4 +1,4 @@
-import type { CatalogAdminUseCase } from '@neo-bot/application';
+import { CatalogChatAdminUseCase, type CatalogAdminUseCase } from '@neo-bot/application';
 import {
   CommerceUseCase,
   DirectServiceUseCase,
@@ -7,6 +7,7 @@ import {
 } from '@neo-bot/application';
 import {
   PostgresCommerceRepository,
+  PostgresCatalogChatAdminRepository,
   PostgresProvisioningRepository,
   PostgresReportingRepository,
 } from '@neo-bot/database';
@@ -36,15 +37,14 @@ export const telegramCommerceBotProvider = {
     const provisioningRepository = new PostgresProvisioningRepository(pool);
     const commerceRepository = new PostgresCommerceRepository(pool);
     const reportingRepository = new PostgresReportingRepository(pool);
+    const catalogChat = new CatalogChatAdminUseCase(new PostgresCatalogChatAdminRepository(pool));
     const telegramApi = new TelegramApiClient(telegramConfig.botToken);
     try {
       await telegramApi.setMyCommands([
         { command: 'start', description: 'منوی فروشگاه' },
         { command: 'help', description: 'راهنمای خرید' },
       ]);
-      if (telegramConfig.miniAppUrl !== null) {
-        await telegramApi.setChatMenuButton(telegramConfig.miniAppUrl);
-      }
+      await telegramApi.setCommandsMenuButton();
     } catch {
       // Menu commands are optional; the inline keyboard still works if Telegram rejects this call.
     }
@@ -75,6 +75,7 @@ export const telegramCommerceBotProvider = {
       directService,
       telegramApi,
       catalog,
+      catalogChat,
       reporting,
       dailySummary,
     );

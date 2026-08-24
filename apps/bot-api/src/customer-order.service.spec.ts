@@ -33,6 +33,7 @@ const order: SalesOrder = {
   amountIrr: 1_500_000n,
   status: 'awaiting_receipt',
   serviceId: null,
+  serviceUsernameBase: null,
   failureCode: null,
   createdAt: new Date('2026-08-21T00:00:00.000Z'),
   updatedAt: new Date('2026-08-21T00:00:00.000Z'),
@@ -95,6 +96,7 @@ describe('CustomerOrderService', () => {
       },
       productVariantId: '2',
       idempotencyKey: 'telegram:miniapp:10001:2',
+      serviceUsernameBase: 'u10001',
     });
     expect(messenger.sendMessage).toHaveBeenCalledWith(
       '10001',
@@ -171,5 +173,125 @@ describe('CustomerOrderService', () => {
       payment: { cardNumber: '0000000000000000', cardHolder: 'صاحب کارت' },
     });
     expect(messenger.sendMessage).toHaveBeenCalled();
+  });
+
+  it('returns admin empty-shop hint without catalog product ids leaking as secrets', async () => {
+    const commerce = {
+      listCategories: vi.fn().mockResolvedValue([]),
+    } as unknown as CommerceUseCase;
+    const service = new CustomerOrderService(
+      commerce,
+      { getPublicCatalog: vi.fn() } as unknown as CatalogAdminUseCase,
+      botToken,
+      null,
+      new Set(['10001']),
+    );
+    await expect(service.listShopCategories(signInitData(10001, 'ادمین'), null)).resolves.toEqual({
+      categories: [],
+      emptyHint: 'admin',
+    });
+    await expect(service.listShopCategories(signInitData(20002, 'خریدار'), null)).resolves.toEqual({
+      categories: [],
+      emptyHint: 'customer',
+    });
+  });
+
+  it('lists a category with parent back and sellable variants', async () => {
+    const commerce = {
+      getCategory: vi
+        .fn()
+        .mockResolvedValueOnce({
+          id: '10',
+          code: 'eco',
+          name: 'اقتصادی',
+          description: 'توضیح دسته',
+          parentId: '1',
+          position: 0,
+        })
+        .mockResolvedValueOnce({
+          id: '1',
+          code: 'root',
+          name: 'ریشه',
+          description: '',
+          parentId: null,
+          position: 0,
+        }),
+      listCategories: vi.fn().mockResolvedValue([]),
+      listVariants: vi.fn().mockResolvedValue([
+        {
+          id: '30',
+          code: 'eco-1m',
+          productName: 'اقتصادی',
+          name: 'یک‌ماهه',
+          description: 'پلن ماهانه',
+          durationDays: 30,
+          dataLimitBytes: 50n * 1024n ** 3n,
+          deviceLimit: 1,
+          priceIrr: 1_500_000n,
+        },
+      ]),
+    } as unknown as CommerceUseCase;
+    const service = new CustomerOrderService(
+      commerce,
+      { getPublicCatalog: vi.fn() } as unknown as CatalogAdminUseCase,
+      botToken,
+    );
+    await expect(service.getShopCategory(signInitData(10001, 'خریدار'), '10')).resolves.toEqual({
+      id: '10',
+      name: 'اقتصادی',
+      description: 'توضیح دسته',
+      parent: { id: '1', name: 'ریشه' },
+      categories: [],
+      variants: [
+        {
+          id: '30',
+          productName: 'اقتصادی',
+          name: 'یک‌ماهه',
+          description: 'پلن ماهانه',
+          durationDays: 30,
+          volumeLabel: '50 گیگابایت',
+          deviceLabel: '1',
+          priceToman: 150_000,
+        },
+      ],
+    });
+  });
+
+  it('renews without putting the subscription URL in the HTTP result', async () => {
+    const commerce = {
+      renewForCustomer: vi.fn().mockResolvedValue({ id: '40' }),
+      hasActiveService: vi.fn().mockResolvedValue(true),
+    } as unknown as CommerceUseCase;
+    const messenger = {
+      sendMessage: vi.fn().mockResolvedValue({ messageId: '8' }),
+    };
+    const serviceReader = {
+      get: vi.fn().mockResolvedValue({
+        remote: { subscriptionUrl: 'https://panel.example/sub/secret' },
+      }),
+    };
+    const service = new CustomerOrderService(
+      commerce,
+      { getPublicCatalog: vi.fn() } as unknown as CatalogAdminUseCase,
+      botToken,
+      messenger as never,
+      new Set(),
+      serviceReader,
+    );
+    await expect(service.hasActiveService(signInitData(10001, 'خریدار'))).resolves.toEqual({
+      hasActiveService: true,
+    });
+    await expect(service.renew(signInitData(10001, 'خریدار'))).resolves.toEqual({
+      status: 'renewed',
+    });
+    expect(JSON.stringify(await service.renew(signInitData(10001, 'خریدار')))).not.toContain(
+      'https://',
+    );
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('تمدید انجام شد'),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
   });
 });

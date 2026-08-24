@@ -8,6 +8,7 @@
     "update:runtime-lock": "node scripts/update-mobile-runtime-lock.mjs",
     "test:runtime": "playwright test",
     "test:sites": "node --test tests/sites-worker.test.mjs",
+    "test": "vitest run tests/customer-copy.spec.ts",
     "predev": "npm run check:runtime",
     "dev": "vite",
     "prebuild": "npm run check:runtime",
@@ -30,6 +31,7 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.3",
     "typescript": "7.0.2",
-    "vite": "8.1.3"
+    "vite": "8.1.3",
+    "vitest": "^4.1.11"
   }
 }

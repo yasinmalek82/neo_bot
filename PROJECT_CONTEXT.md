@@ -1,9 +1,9 @@
 <!--
 context-schema: 1
-last-updated: 2026-08-21T21:18:59.155Z
-source-fingerprint: f342469c6bd7bd12512a30c6547075845f0d0b032fdb8767042595046a345266
-current-phase: production-foundation-and-real-customer-journey
-next-task: vps-install-waiting-terminal-ssh
+last-updated: 2026-08-24T20:48:28.284Z
+source-fingerprint: 0c44b9f179e8b584cf14276d5a78b77ef76f20a9ca758a13bf5e3eee126155eb
+current-phase: revival-slice-1-mutation-safety
+next-task: implement-paid-renewal-stable-provisioning-and-mutation-gate
 -->
 
 # neo_bot Project Context
@@ -23,10 +23,11 @@ decisions. This file is the single source of truth for current status and sequen
    empty.
 4. Run `pnpm context:check`. If it reports a stale fingerprint, inspect the existing changes and bring
    this file up to date before starting new implementation. Never blindly stamp unknown changes.
-5. Query the existing Graphify graph before broad code exploration. Prefer `graphify query`,
-   `graphify path` and `graphify explain`. If `graphify-out/wiki/index.md` exists, start there. Use
-   budget `600` by default and `1200` maximum. After changing `.graphifyignore`, rebuild with
-   `graphify extract . --force --code-only` then `graphify update . --force`.
+5. If the owner pasted Telegram bot copy, Grep that sentence in `apps/bot-api/src/telegram-menu.ts`
+   first. Use Graphify only when the file path is unknown (`query` / `path` / `explain`, budget
+   `600`, maximum `1200`). If `graphify-out/wiki/index.md` exists, start there for architecture
+   questions. After changing `.graphifyignore`, rebuild with `graphify extract . --force --code-only`
+   then `graphify update . --force`.
 6. Verify the relevant current behavior before editing. Do not treat this snapshot as proof that a
    live dependency is still healthy.
 7. Continue from **Current priority and next task** unless the user explicitly changes priority.
@@ -87,23 +88,44 @@ Authoritative decisions are recorded in:
 - `docs/adr/0008-catalog-card-and-miniapp-identity.md`
 - `docs/adr/0009-ops-health-backup-topic-recovery.md`
 - `docs/adr/0010-redacted-runtime-logs.md`
+- `docs/adr/0011-representative-pricing-precedence.md`
+- `docs/adr/0012-telegram-chat-catalog-administration.md`
+- `docs/adr/0013-flexible-chat-storefront-presentation.md`
+- `docs/adr/0014-role-aware-commerce-and-service-operations.md`
 
 Create a new ADR before materially changing one of these decisions.
 
 ## Current verified snapshot
 
-Last evidence refresh: `2026-08-22`, local development environment only.
+Last evidence refresh: `2026-08-25`, local baseline plus the previously authorized first-host
+chat-store-redesign deploy.
 
-- Production-MVP readiness estimate: approximately `86-90%` of in-repo work; live Telegram, TLS host
-  and seven-day pilot gates remain owner-side.
+- Production-MVP readiness estimate: the customer store and catalog administration are both chat
+  paths; live administrator publication, live purchase, and the seven-day pilot remain owner-side.
 - Full envisioned product readiness estimate: approximately `45-50%`.
-- `pnpm check` is the in-repo gate after this slice. Unit tests: `8` domain, `25` application, `4`
-  PasarGuard, `65` bot API.
+- Current local unit suites: `24` domain, `43` application, `4` PasarGuard, `100` bot API, and `5`
+  retained customer-web copy/viewport tests. Database integration suite has `10` tests. The final
+  repository gate for this slice is recorded in the newest handoff entry. The redesign and migration
+  `0010` are deployed; no Telegram message, purchase or PasarGuard mutation was performed.
 - Local `GET /health` on loopback is `ok` with Telegram `polling`, `telegramReady` `true`,
-  `telegramError` `none`, `migrations` `6`, and zero pending or failed report deliveries. Webhook
+  `telegramError` `none`, `migrations` `8`, and zero pending or failed report deliveries. Webhook
   mode records `telegramReady` false on allowlisted errors and probes `getWebhookInfo` in the
-  background. Public `GET /catalog` omits card numbers. Mini App checkout uses verified `initData`
-  and `CommerceUseCase`. Receipt photos (and image documents) remain in the private bot chat.
+  background. Public `GET /catalog` omits card numbers. Customer checkout is the private chat.
+  `POST /customer/orders` and `POST /customer/renew` are gone. Receipt photos stay Telegram files.
+  Migrations through `0010` are in-repo and applied on first-host (`schema_migrations=10`), including
+  durable catalog revisions, administrator sessions and ordered variant presentation attributes.
+- The 2026-08-25 local baseline passes `pnpm check` (`178` unit tests), `pnpm deadcode`,
+  `git diff --check`, and all `10` PostgreSQL integration tests after Docker Desktop was made
+  available. The integration session test now reads the PostgreSQL clock instead of a stale fixed
+  date; production repository and schema behavior were unchanged. No server, Telegram, payment, or
+  PasarGuard mutation was performed for this baseline refresh.
+- Host `bot-api` health is `ok` after the authorized chat-store redesign build and targeted recreate.
+  Loopback and public HTTPS health report `telegramReady=true`, `migrations=10`, and zero pending,
+  failed, retrying or due report deliveries. The production read model retains one category, one
+  product and two variants; the new attribute table and fulfilled-sales index exist. Both approved
+  welcome/delivery Telegram photo IDs remain loaded; `PILOT_ENABLED` stayed false. Owner still needs
+  to validate the customer comparison and administrator edit/review screens on a phone; delivery
+  media remains unproven until an authorized real order reaches successful delivery.
 - `pnpm db:restore-drill` restored a fresh dump onto a disposable Postgres on loopback
   (`schema_migrations=6`), then destroyed the instance and dump. The live local database was not
   overwritten. Restore onto a chosen target still requires `RESTORE_CONFIRM=yes`.
@@ -113,11 +135,12 @@ Last evidence refresh: `2026-08-22`, local development environment only.
   activity, one `order.created`, and one `ops.daily_summary` (four deliveries, none failed). One
   sales order is `awaiting_receipt` with zero payment proofs. Receipt, approval and provisioning
   notices are still unconfirmed. Owner visual check of the daily-summaries topic is still required.
-- Authorized Git baseline exists: `6c9bbe4` on `main`, remote `https://github.com/yasinmalek82/neo_bot`.
-  `.env` was not committed. Shop, admin-hub, and first-host install changes are in this work unit.
-- No live-user migration, production deployment, public HTTPS webhook or live forum-group delivery of
-  the new Mini App/renewal/daily-summary paths has been validated. `deploy/install.sh` is in-repo only
-  until the owner opens a terminal with VPS access.
+- Authorized Git baseline exists: latest pushed `0a1a9b0` on `main`, remote
+  `https://github.com/yasinmalek82/neo_bot`. `.env` was not committed. Uncommitted local work
+  includes customer Mini App tabs, `/console/` asset base, and the admin reply-keyboard console
+  opener.
+- The owner reported first-host install completed. Public HTTPS Mini App purchase and receipt photo
+  still need live evidence. No live-user migration or isolated PasarGuard pilot.
 
 Passing local checks proves the local code boundary only. It does not prove a real Telegram purchase,
 off-host backup restoration or public security.
@@ -127,9 +150,10 @@ off-host backup restoration or public security.
 ### Applications
 
 - `apps/bot-api`: NestJS + Fastify API, health/catalog endpoints, Telegram webhook and pilot CLI.
-- `apps/admin-web`: customer Mini App visual/runtime project. The name is historical; it is not the
-  catalog administration console.
-- `apps/catalog-admin`: separate browser console for editing and atomically publishing the catalog.
+- `apps/admin-web`: retained customer WebApp statics. It is not the customer store or an administrator
+  catalog console.
+- Catalog administration is a private Telegram chat workflow in `apps/bot-api`, backed by typed
+  application commands and PostgreSQL repositories.
 
 ### Packages
 
@@ -146,15 +170,22 @@ off-host backup restoration or public security.
 - `0004_storefront_payment_settings.sql`: published card-to-card details on the storefront.
 - `0005_admin_reporting.sql`: reporting events, outbox deliveries and forum destination/topic maps.
 - `0006_ops_daily_summary.sql`: `ops.daily_summary` event type for the daily_summaries topic.
+- `0007_reseller_pricing_and_ops.sql`: representatives, variant access, base and override prices, order pricing source, and `reseller.*` event types.
+- `0008_order_service_username_base.sql`: validated nullable order username base for provisioning-time
+  `base_random4` generation.
+- `0009_catalog_chat_admin_core.sql`: catalog revision compare-and-swap, durable administrator wizard
+  sessions, and redacted publish audit records.
+- `0010_storefront_variant_attributes.sql`: up to four ordered variant display attributes and an
+  index supporting trailing-thirty-day fulfilled-sales evidence.
 
 ### Runtime boundaries
 
 - `docker-compose.yml` provisions local PostgreSQL by default. Profile `app` builds `bot-api` from
   `Dockerfile` without embedding secrets. `docker-compose.production.yml` is the host shape (Postgres
   unpublished, API on loopback, `bot-api` `DATABASE_URL` injected with host `postgres` so a loopback
-  `.env` value cannot strand the container, Caddy on 80/443 for Mini App `/` and catalog-admin
-  `/console/`, TLS via `deploy/Caddyfile.example`); it is not deployed until `deploy/install.sh`
-  runs on a host.
+  `.env` value cannot strand the container, Caddy on 80/443 for retained customer statics and API
+  routes, TLS via `deploy/Caddyfile.example`, JSON access logs to Caddy stdout); it is not
+  deployed until `deploy/install.sh` runs on a host.
 - In-repo CI is `.github/workflows/check.yml` (`pnpm check` and required high-severity `pnpm audit`).
   `pnpm db:backup`, `pnpm db:restore`, and `pnpm db:restore-drill` cover dump/restore. Compose-network
   URLs dump via `docker compose exec` (production file when the host is `postgres`). Dumps are
@@ -163,30 +194,32 @@ off-host backup restoration or public security.
   until the owner runs that script on a VPS.
 - `SECURITY.md` records the current threat model. `.env.example` contains placeholders only. Real
   `.env` values are local secrets and must never be committed or printed.
-- Agent session skills, a Graphify explore subagent, and start/stop hooks live under `.cursor/`.
+- Cursor tooling and `.cursor/**` have been deleted locally and from first-host. They are not part of
+  the project and must not be recreated or used without explicit owner authorization.
 
 ## Capability status
 
-| Capability                           | Status      | Verified boundary or gap                                                                                            |
-| ------------------------------------ | ----------- | ------------------------------------------------------------------------------------------------------------------- |
-| Modular pnpm/TypeScript foundation   | Implemented | Strict builds and architecture gate pass locally.                                                                   |
-| PostgreSQL schema and migrations     | Implemented | Fresh Testcontainers lifecycle passes.                                                                              |
-| PasarGuard health and group sync     | Implemented | Valid/invalid connectivity and group snapshots covered.                                                             |
-| Direct service create/read/renew     | Implemented | Numeric IDs, idempotency and read-after-write covered.                                                              |
-| Durable card-to-card order lifecycle | Implemented | Checkout, proof, approval/rejection, retry provisioning and catalog card source.                                    |
-| Telegram chat purchase flow          | Partial     | Category HTML, nested back, empty-shop owner hint; one live order still awaiting a receipt photo.                   |
-| Receipt review                       | Partial     | Admin private-chat review; image documents accepted; receipts topic gets a redacted text summary.                   |
-| Admin reporting group and topics     | Partial     | Local outbox delivered first-contact, activity, order.created, and one daily summary; receipt/approval unconfirmed. |
-| New-user `/start` reporting          | Partial     | First-contact and same-day activity notices were delivered to the new-users topic.                                  |
-| Renewal customer journey             | Partial     | Failed renewals complete the Telegram update and keep the previous service; live PasarGuard renew unconfirmed.      |
-| Data-driven catalog                  | Implemented | Products and supported selector values are database-driven and atomically published.                                |
-| Catalog administration console       | Partial     | Dev bearer locally; production `/console/` same-origin API with admin `initData`; no Telegram catalog editor.       |
-| Customer Mini App catalog UX         | Implemented | Loading/error/empty states and data-driven selection were browser-checked.                                          |
-| Customer Mini App checkout           | Partial     | Same-origin Caddy Mini App + `/console/`; private-chat checkout copy; live receipt photo still outstanding.         |
-| Telegram Mini App authentication     | Implemented | HMAC `initData` verification, expiry, and numeric `user.id` covered by unit tests.                                  |
-| Production deployment and operations | Partial     | `deploy/install.sh` + compose Caddy TLS in-repo; no live host until owner SSH in a terminal.                        |
-| Resellers, wallet and debt           | Not started | Explicitly deferred until after the first trustworthy release.                                                      |
-| Legacy import and cutover            | Not started | Must begin read-only with backup, preflight, rollback and controlled cutover.                                       |
+| Capability                           | Status      | Verified boundary or gap                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------------ | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Modular pnpm/TypeScript foundation   | Implemented | Strict builds and architecture gate pass locally.                                                                                                                                                                                                                                                                                                                                  |
+| PostgreSQL schema and migrations     | Implemented | Fresh Testcontainers lifecycle passes.                                                                                                                                                                                                                                                                                                                                             |
+| PasarGuard health and group sync     | Implemented | Valid/invalid connectivity and group snapshots covered.                                                                                                                                                                                                                                                                                                                            |
+| Direct service create/read/renew     | Implemented | Numeric IDs, idempotency and read-after-write covered.                                                                                                                                                                                                                                                                                                                             |
+| Durable card-to-card order lifecycle | Implemented | Checkout, proof, approval/rejection, retry provisioning and catalog card source.                                                                                                                                                                                                                                                                                                   |
+| Telegram chat purchase flow          | Partial     | ReplyKeyboard-only home plus category -> product -> three-plan comparison -> detail -> payment -> receipt is deployed. Free copy, typed sale facts, evidence badges and bounded HTML rendering are covered; live phone and receipt-to-delivery validation remain outstanding.                                                                                                      |
+| Customer visual identity             | Partial     | Versioned master, welcome and successful-delivery PNGs use the approved charcoal/ivory/signal-orange `NN / NEO NETWORK / PRIVATE ACCESS` direction. Welcome and delivery assets were uploaded privately to Telegram, their file IDs are configured on first-host, and runtime presence is verified; phone `/start` and real successful-delivery rendering are not both proven yet. |
+| Receipt review                       | Partial     | Admin private-chat review; image documents accepted; receipts topic gets a redacted text summary. Customer copy consistently promises a maximum 60-minute review, but durable SLA tracking and escalation are not implemented yet.                                                                                                                                                 |
+| Admin reporting group and topics     | Partial     | Local outbox delivered first-contact, activity, order.created, and one daily summary; receipt/approval unconfirmed.                                                                                                                                                                                                                                                                |
+| New-user `/start` reporting          | Partial     | First-contact and same-day activity notices were delivered to the new-users topic.                                                                                                                                                                                                                                                                                                 |
+| Renewal customer journey             | Partial     | Renewal now requires a preview and explicit final confirmation; back/menu causes no provider mutation. Failed renewals complete the Telegram update and keep the previous service; live PasarGuard renew remains unconfirmed.                                                                                                                                                      |
+| Data-driven catalog                  | Implemented | Products and supported selector values are database-driven and atomically published. Variants support free display title/copy plus four ordered presentation attributes while volume, duration, device limit, effective price and provider binding remain typed. Migration `0010` is applied on first-host.                                                                        |
+| Telegram chat catalog administration | Partial     | Private allowlisted administration is deployed and hierarchical by category, product and variant, with selective multi-field drafts, bounded diff/customer preview, reviewed reorder, durable resume and an atomic category+product+variant guided changeset. Phone validation remains separate evidence.                                                                          |
+| Customer Mini App catalog UX         | Abandoned   | Not the store. Copy tells the customer to buy in chat.                                                                                                                                                                                                                                                                                                                             |
+| Customer Mini App checkout           | Abandoned   | `POST /customer/orders` and `POST /customer/renew` return gone. Chat menu button is commands.                                                                                                                                                                                                                                                                                      |
+| Telegram WebApp customer identity    | Implemented | Retained customer statics validate Telegram `initData`; catalog administrator authorization is numeric allowlist plus private-chat enforcement inside the bot.                                                                                                                                                                                                                     |
+| Production deployment and operations | Partial     | First-host `bot-api` was rebuilt/recreated after a root-only source/env/database backup. Migration `0010`, public/loopback health, webhook readiness, report queues, schema objects, read model, retired-route 404s and disabled pilot provisioning were verified. Caddy/Postgres were not recreated; no purchase or PasarGuard mutation was performed.                            |
+| Resellers, wallet and debt           | Partial     | Schema, listing, checkout snapshot, customer assignment, and current-price audit exist. Override then base then public. No wallet, debt, or admin price UI. Dedicated `reseller.*` notices are not published yet.                                                                                                                                                                  |
+| Legacy import and cutover            | Not started | Must begin read-only with backup, preflight, rollback and controlled cutover.                                                                                                                                                                                                                                                                                                      |
 
 ## Confirmed admin reporting requirement
 
@@ -248,26 +281,25 @@ Gate remaining:
 - confirm redacted receipt, approval and failure notices on the created topics;
 - owner visual confirmation of the `daily_summaries` topic text.
 
-### Phase 3 - Real Mini App transaction
+### Phase 3 - Real chat purchase
 
-Status: `initData` verification, customer order API, Persian status/error copy, checkout retry and
-idempotent Mini App keys are in-repo. A Mini App order also sends the same checkout copy to the
-customer private bot chat so the receipt photo can be submitted there. Caddy can serve
-`admin-web` `dist/client` on the same public host as the API. File upload is intentionally
-deferred. Catalog-without-card now fails before creating an order.
+Status: customer store and catalog administration are private Telegram chat paths. The administrator
+Mini App and `/console/` are removed. File upload is not in scope.
 
 Gate remaining:
 
-- live Mini App order from Telegram; receipt photo in the bot; shared order status;
-- later: bounded receipt upload if the owner authorizes object storage.
+- owner creates or reviews a category, product and variant in «مدیریت فروشگاه» and publishes one
+  sellable variant after the live `0009` migration;
+- live chat order from `/start`; receipt photo in the same chat; shared order status;
+- later: bounded receipt upload only if the owner authorizes object storage.
 
 ### Phase 4 - Production security and operations
 
 Status: in-repo hardening landed (health Telegram intake mode plus ready/error, report-queue and
 migration counts, graceful pool shutdown, webhook rate-limit exclusion, compose restart/healthcheck,
-optional Mini App menu URL, dump/restore plus a disposable restore drill, production compose overlay
+dump/restore plus a disposable restore drill, production compose overlay
 that injects `bot-api` `DATABASE_URL` with host `postgres`, compose-aware dump/restore, webhook
-`getWebhookInfo` intake honesty, Caddy Mini App plus `/console/` catalog-admin, first-host
+`getWebhookInfo` intake honesty, Caddy routing for retained customer statics and APIs, first-host
 `deploy/install.sh`, runbook, secret-rotation checklist, redacted stdout and HTTP error codes).
 Production host, TLS certificates, off-host backup storage and a live secret rotation are not done
 until the owner provides VPS access in a terminal.
@@ -284,46 +316,60 @@ Status: not started.
 
 Gate:
 
-- full deployed path succeeds: Telegram/Mini App identity -> checkout -> receipt -> admin decision ->
+- full deployed path succeeds: Telegram chat identity -> checkout -> receipt -> admin decision ->
   PasarGuard provisioning -> customer delivery -> renewal;
 - retries never create duplicate orders or provider users;
 - rollback and recovery procedures are exercised;
 - a small invited cohort runs for at least seven days without lost orders, duplicate services or
   unresolved critical alerts.
 
-### Phase 6 - Later product scope
+### Phase 6 - Role-aware revival roadmap
 
-Status: intentionally deferred.
+Status: approved on 2026-08-25 and active after the local checkpoint.
 
-- reseller roles, wallets, debt and reporting;
-- automated payment or bank-message integrations;
-- legacy read-only import tooling, migration rehearsal and controlled cutover;
-- richer customer service management and support workflows;
-- entirely new catalog selector dimensions when justified by a real product need.
+- Slice 1 closes unpaid renewal, unstable provisioning identity and missing runtime mutation gates.
+- Slice 2 adds multi-service customer self-service, paid renew/top-up/controlled-upgrade operations,
+  manual-payment attempts, support tickets and bounded secret delivery.
+- Slice 3 adds staff RBAC, exception queues, hierarchical operations, SLA and removal of the unused
+  customer web prototype after live-consumer proof.
+- Slice 4 adds representative-owned customers, non-negative prepaid wallets, append-only ledger and
+  tenant-isolated service operations.
+- Automated bank-message matching, extra payment providers, marketing features, bulk reseller
+  creation, white-label and legacy import remain later scope.
 
 ## Current priority and next task
 
-Current phase: **Phase 4 - Production security and operations** (in-repo install ready; live host
-blocked on owner SSH). Phase 2 live receipt confirmation is still outstanding.
+Current phase: **Phase 6 / Slice 1 - Mutation safety**. The owner explicitly replaced the prior
+phone-only next task with the four-slice NEO NETWORK revival plan recorded in ADR 0014.
 
-Next implementation slice: owner opens a terminal with temporary VPS access (not chat) so
-`bash deploy/install.sh` can run. Until then, local `getUpdates` still lets the owner send a
-receipt photo in the private bot chat. In-repo shop HTML, admin failed-provisioning/catalog-health,
-and first-host TLS/Mini App/`/console/` wiring are closed. One live order is waiting for a receipt
-photo. Restart `bot-api` to pin the new shop and admin-hub keyboards.
+Next task: implement paid renewal, persist a stable provisioning candidate before remote create,
+replace the misleading pilot boundary with explicit mutation modes, and make receipt/delivery retry
+restart-safe. These changes remain local until their focused, integration, crash/replay and full
+repository gates pass.
 
 Expected sequence:
 
-1. Owner: DNS A record, then a terminal with SSH (not this chat).
-2. On the host: `bash deploy/install.sh`, confirm HTTPS `/health` (status only), restart `bot-api`.
-3. Send a card-to-card receipt image to the bot (do not paste file IDs or secrets in chat).
-4. Confirm the receipts topic gets a redacted text summary, then approve or reject from the admin
-   private-chat buttons.
+1. Use the authorized local checkpoint as the base; do not push it.
+2. Complete and independently verify Slice 1 in isolated writer/reviewer worktrees.
+3. Update this context and ADR evidence, then prepare a reversible disabled-mode deployment.
+4. Obtain a separate live gate before any isolated or live PasarGuard mutation.
+5. Continue with customer services, staff control plane, and representative workspace as separate
+   slices. Android/iPhone evidence remains mandatory before customer-facing visual completion.
 
 Owner-only remaining gates: public HTTPS webhook URL, live isolated PasarGuard group, TLS host,
 off-host backup storage, seven-day pilot.
 
 Do not request group tokens or secrets in chat.
+
+## Cross-cutting Codex execution governance
+
+`AGENTS.md` is canonical for Codex orchestration. The preferred flow is Sol supervisor -> Luna or
+Terra executor -> independent verifier -> Sol close. Keep at most two subagents active and one
+writer; preserve the dirty-worktree baseline. Sol owns final authority, ADR/context truthfulness,
+stamping and completion. A role-equivalent fallback must disclose `requested_role`, `actual_model`,
+and `fallback_reason`. Cursor tooling is absent from the project and must not be recreated or used
+unless the owner explicitly authorizes it.
+This execution rule does not change the current phase or next product task.
 
 ## Production definition of done
 
@@ -368,6 +414,365 @@ handoff entry.
 ## Handoff log
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
+
+### 2026-08-25 - Revival baseline and decision checkpoint
+
+- Outcome: the owner approved the four-slice role-aware revival, manual-card payment adapter,
+  paid service operations, staff RBAC, prepaid representative wallet and removal of the unused web
+  prototype after proof. ADR 0014 records the clean-room architecture. Luna diagnosed a stale
+  integration-test clock; Terra aligned that test with PostgreSQL time without changing production
+  behavior. Requested and actual roles were Luna and Terra; no model fallback occurred.
+- Validation: `pnpm check` passes with `178` unit tests, `pnpm deadcode` and `git diff --check` pass,
+  and Docker-backed `pnpm test:integration` passes all `10` tests. No deploy, Telegram message,
+  payment, migration, or PasarGuard mutation occurred.
+- Next: use the authorized local checkpoint without push and implement Slice 1 in a dedicated writer
+  worktree with independent read-only verification.
+
+### 2026-08-22 - First-host hierarchical chat-store redesign deployment
+
+- Outcome: after explicit owner authorization, Sol backed up first-host source, host-only environment
+  and PostgreSQL, synchronized the reviewed redesign, built a new image and force-recreated only
+  `bot-api`. Startup applied additive migration `0010`; Caddy, Postgres, Telegram messages, purchases
+  and PasarGuard were not mutated. Luna independently reviewed the runbook and acceptance boundary;
+  no model fallback occurred.
+- Validation: backup `/var/backups/neo_bot/chat-store-redesign-20260822T200444Z` and rollback image
+  `neo-bot-chat-store-pre:20260822T200444Z` exist. Loopback and public HTTPS health are `ok` with
+  `telegramReady=true`, `migrations=10` and zero report backlog. The attribute table and fulfilled-sales
+  index exist; the read model retains one category, one product and two variants; runtime source hashes
+  match local; all three Compose services run, retired admin HTTP/console paths stay `404`, pilot is
+  disabled and no recent runtime error remains. A signed empty webhook probe restored readiness after
+  the controlled restart without storing an update or sending a Telegram message. Post-deploy
+  `pnpm check`, dead-code, diff and Graphify refresh pass (`1400` nodes, `2809` edges). A redundant
+  integration rerun was infrastructure-blocked because the local Docker runtime was unavailable; the
+  previously passing `10` integration tests plus the live transactional migration/schema/read-model
+  checks remain the evidence for this deployment.
+- Next: owner validates customer comparison plus administrator edit/review/publish on a phone and
+  supplies Android/iPhone screenshots before any separately authorized real purchase or provisioning.
+
+### 2026-08-22 - Flexible hierarchical chat storefront redesign
+
+- Outcome: Terra implemented the approved ReplyKeyboard-only home, category-to-product customer
+  navigation, bounded three-plan comparisons, free plan title/copy, four normalized display
+  attributes, factual evidence badges, hierarchical administrator navigation, selective working-copy
+  drafts, reviewed reorder and atomic guided category+product+variant publication. Sol corrected home
+  duplication, badge assignment and all customer/admin Telegram length boundaries; Luna independently
+  found the original comparison-length risk. ADR 0013 records the durable presentation and changeset
+  decisions. Models used were Terra writer, Luna verifier and Sol close; no fallback occurred.
+- Validation: domain `24`, application `43`, PasarGuard `4`, database unit `2`, retained customer-web
+  `5`, bot API `100` and PostgreSQL integration `10` tests pass. Build, typecheck, lint, formatting,
+  architecture, dead-code and diff gates pass. No deployment, production migration, live Telegram
+  message or PasarGuard mutation occurred. Root `design-qa.md` is blocked because no source/current
+  Telegram screenshots were available for same-state Android/iPhone comparison.
+- Next: obtain explicit owner authorization for backup, migration `0010` and deployment, then capture
+  real customer comparison and administrator edit/review screens before the live purchase gate.
+
+### 2026-08-22 - Production catalog read-model repair and Cursor removal
+
+- Outcome: after the owner reported systemic inline-button failure, Sol refreshed Graphify and traced
+  the store path from `handleCallback` through fourteen `getReadModel` consumers. A read-only query
+  inside the production container exposed PostgreSQL `42703`: the new read model selected nonexistent
+  `products.position` instead of the authoritative `product_category_assignments.position`. Terra
+  corrected the query without adding a redundant migration and added a production-shaped regression;
+  Luna independently accepted the schema mapping. At the owner's explicit direction, all `.cursor/**`
+  files were deleted locally and from first-host rather than retained as an archive, and active policy
+  and quality-tool references were removed. No model fallback occurred.
+- Validation: database integration passes `9/9`, including a nonzero assignment position through both
+  repository and `CatalogChatAdminUseCase`; application tests pass `42/42`, with typecheck, lint,
+  formatting and diff checks passing. Sol deployed only the corrected repository after backup
+  `/var/backups/neo_bot/catalog-readmodel-fix-20260822T170331Z`. The live container read model now
+  succeeds with one category, one product and two variants; health is `ok`, `telegramReady=true`,
+  `migrations=9`, report queues are zero and pilot provisioning remains disabled. Graphify was rebuilt
+  after corpus shrink (`100` indexed code files). A fresh Telegram store-entry button was accepted;
+  the owner's tap remains the final live UX proof.
+- Next: owner taps the latest «ورود به مدیریت فروشگاه» button. If it renders, validate category,
+  product and variant navigation before any publish or PasarGuard mutation.
+
+### 2026-08-22 - Production store-management opener hotfix
+
+- Outcome: production evidence showed nine recent Telegram updates failed with
+  `TELEGRAM_HTTP_400` while opening the administrator store. Terra made callback acknowledgement
+  best-effort so an expired acknowledgement cannot fail and replay completed work, and routed both
+  the current reply-keyboard label and legacy «مدیریت فروشگاه» text to the private allowlisted store
+  hub. Sol deployed only the two runtime source files after a recoverable source/image snapshot and
+  sent the administrator one fresh direct-entry button. Luna performed the read-only route audit;
+  no model fallback occurred.
+- Validation: Bot API tests pass (`93`) with exact-label, non-admin, expired-acknowledgement and
+  original-error coverage; Bot API typecheck, lint, formatting and diff checks pass. First-host
+  health is `ok` with `telegramReady=true`, `migrations=9`, zero report backlog and pilot
+  provisioning still disabled. Backup:
+  `/var/backups/neo_bot/store-open-hotfix-20260822T164508Z`. The direct message was accepted by
+  Telegram; the owner's tap and rendered phone screen remain the final live UX evidence.
+- Next: owner taps the newly sent «باز کردن مدیریت فروشگاه» button and confirms the hub renders;
+  then validate create, preview and publish without a real purchase or PasarGuard mutation.
+
+### 2026-08-22 - Chat-native catalog administration and Mini App removal
+
+- Outcome: Terra implemented typed, durable Telegram administration for categories, products,
+  variants, templates, storefront/payment settings, archive/restore, provider-group selection,
+  preview and revision-checked publication. The administrator Mini App package, `/console/`, private
+  admin catalog API, WebApp buttons, token/configuration, and deploy/build surfaces were removed.
+  Luna independently verified both the chat flow corrections and removal boundary; Sol accepted the
+  architecture and recorded ADR 0012. Models used were Terra writer, Luna verifier and Sol close;
+  no fallback occurred.
+- Validation: build, typecheck, lint, formatting, architecture, dead-code and unit suites pass
+  locally; PostgreSQL integration is `8/8`. Under explicit owner authorization, Sol backed up source,
+  env and database to `/var/backups/neo_bot/chat-admin-20260822T155535Z`, synchronized the approved
+  workspace, removed the retired server package, and rebuilt/recreated `bot-api` plus Caddy. Public
+  health is `ok` with `telegramReady=true`, `migrations=9`, zero report backlog, three running
+  services, three new catalog-admin tables, `PILOT_ENABLED=false`, and public `/console/` plus
+  `/admin/catalog` both `404`. Cursor tooling was subsequently removed by owner direction. The readiness
+  probe was signed and synthetic; live phone UX and a real catalog publication remain unproven.
+- Next: owner opens «مدیریت فروشگاه» in the bot and validates the complete phone flow before any real
+  purchase or PasarGuard mutation.
+
+### 2026-08-22 - NEO NETWORK first-host activation
+
+- Outcome: after explicit owner authorization, Sol deployed only the four Bot API source files and
+  three approved brand assets to first-host, privately uploaded the welcome and delivery images to
+  the configured administrator, atomically configured their Telegram photo IDs, built the new image,
+  and force-recreated only `bot-api`. Terra prepared the deployment packet but could not obtain its
+  own SSH escalation, so Sol performed the production operation; no model substitution occurred.
+- Validation: all seven remote source hashes match local. The container became healthy; loopback and
+  public HTTPS health are `ok` with `telegramReady=true`, `migrations=8`, and report queues at zero.
+  Runtime media booleans are true, `PILOT_ENABLED=false`, and webhook info is set with zero pending
+  updates. The fresh webhook last-error timestamp occurred during the controlled recreate and had no
+  synchronization error. Root-only rollback snapshot
+  `/var/backups/neo_bot/brand-20260822T132238Z` and image tag
+  `neo-bot-brand-pre:20260822T132238Z` remain available. No database, Postgres, Caddy, purchase,
+  receipt, provisioning or renewal mutation was performed.
+- Next: owner confirms `/start`, non-repeating «منوی اصلی», fast purchase and selection-guide copy on
+  a phone; successful-delivery media remains unproven until a separately authorized real order.
+
+### 2026-08-22 - NEO NETWORK customer journey and visual identity
+
+- Outcome: Terra implemented the approved `NN / NEO NETWORK / PRIVATE ACCESS` customer identity,
+  ingested the master/welcome/delivery PNGs, added optional fail-open Telegram media, separated fast
+  purchase from a practical selection guide, softened username copy, changed displayed prices to
+  Toman-only, added the owner-approved 60-minute receipt copy, and changed renewal to preview plus
+  explicit confirmation. No live Telegram or provider action was performed.
+- Validation: Luna found and Terra fixed one P2 that repeated welcome art for text «منوی اصلی»;
+  independent re-verification found no remaining issue. Bot API tests pass (`89`), Bot API typecheck
+  and `git diff --check` pass, and the archived `.cursor` status entries are unchanged. Used Terra
+  writer and Luna verifier with no model fallback. Real Telegram file IDs, phone UX, live receipt,
+  delivery and PasarGuard renewal remain unproven.
+- Next: implement durable in-bot support tickets and receipt-SLA tracking; then obtain separate owner
+  authorization for Telegram asset upload, runtime configuration, deployment and phone validation.
+
+### 2026-08-22 - Codex-only execution governance
+
+- Outcome: owner deactivated Cursor tooling after high token overhead; Codex-only governance is
+  active with the preferred Sol supervisor, Luna/Terra execution roles, one-writer/two-subagent
+  limit, dirty-worktree preservation, fallback disclosure, and Sol-only close authority. Independent
+  verification findings, including the `0008` migration map entry, were revised without changing
+  Cursor artifacts.
+- Validation: Luna independently verified the governance contract and unchanged hashes for all ten
+  archived `.cursor` files. Sol stamped the context, and `pnpm check` passed context validation,
+  build, typecheck, lint, formatting, architecture, and all unit suites.
+- Next: use the Codex-only flow for Telegram intake isolation; do not reactivate Cursor or perform a
+  live Telegram change without separate owner authorization.
+
+### 2026-08-22 - First-host deploy and independent verification
+
+- Outcome: deployed the chat copy + admin mini-app + username-base flow to first-host via the existing
+  rsync + `docker compose.production.yml` rebuild flow; independent verifier confirmed deployment state.
+- Validation: first-host loopback and public HTTPS `GET /health` both report `status=ok`,
+  `telegramReady=true`, and `migrations=8`. `schema_migrations` contains `0008`, and
+  `sales_orders.service_username_base` exists.
+- Next: owner runs phone validation for full chat path (shop -> username prompt -> checkout -> receipt),
+  then resume reseller-facing admin pricing UI.
+
+### 2026-08-22 - Chat-sales copy polish and username base flow
+
+- Outcome: polished customer-facing purchase copy across Telegram shop/category/variant screens and kept
+  one-row plan listing plus callback-aligned back labels. Added purchase-time username base input with
+  strict validation (`[a-z0-9_-]` only, no `@`/space), persisted on order, and provisioning-time generation
+  as `baseName_random4` with bounded retry on username collisions.
+- Validation: `pnpm --filter @neo-bot/application test` (`41`), `pnpm --filter @neo-bot/bot-api test`
+  (`83`), `pnpm --filter @neo-bot/catalog-admin test` (`4`), full `pnpm check` pass, and `graphify update .`.
+- Next: owner validates chat UX and username prompt on phone; then run authorized runtime migration `0008`
+  and continue reseller admin pricing UI.
+
+### 2026-08-22 - Product-flow copy polish for customer chat
+
+- Outcome: customer-facing product copy in Telegram shop/category/variant screens was rewritten with a
+  cleaner professional tone, clearer CTAs, and explicit missing-category guidance. Shop-back labels now
+  match callback destination (`shop`) in variant and missing-category flows.
+- Validation: bot-api targeted specs passed: `src/telegram-menu.spec.ts` and
+  `src/telegram-commerce-bot.spec.ts` (`29` tests), including category single-row plan layout and new
+  checks for missing-category and variant-detail action rows. `graphify update .` refreshed project map.
+- Next: owner verifies the new copy and button clarity on phone, then we continue reseller admin pricing UI.
+
+### 2026-08-22 - Single-row plan buttons in category view
+
+- Outcome: in Telegram category screens, plan buttons are now rendered one-per-row (single-column) while
+  subcategory buttons remain paired and footer navigation stays intact. This addresses the owner UX
+  request from live screenshot feedback.
+- Validation: `apps/bot-api/src/telegram-commerce-bot.spec.ts` expanded to `26` passing tests, including
+  a new assertion that two plans appear as two single-button rows; local run via workspace fallback pnpm.
+- Next: owner verifies the new row layout on phone, then we continue reseller admin pricing UI.
+
+### 2026-08-22 - Admin catalog delete persistence and customer plan labels
+
+- Outcome: catalog replacement no longer revives removed products in admin flows. On publish, previous
+  admin-managed products/categories are archived out of the managed set, and inactive leftover variants
+  are excluded from admin/public reads, so delete+add+save and variant removal behave as expected after
+  reload. Customer shop variant rows are now denser and clearer with price-first compact labels, and
+  variant detail copy is cleaner.
+- Validation: bot-api unit tests for menu and commerce flow passed (`src/telegram-menu.spec.ts`,
+  `src/telegram-commerce-bot.spec.ts`). Database integration test update added for replace-after-delete
+  behavior; execution is blocked in this environment because Testcontainers runtime is unavailable.
+- Next: owner verifies `/console/` delete+add+save on host and confirms improved plan readability in chat;
+  then resume reseller admin pricing UI.
+
+### 2026-08-22 - Representative assignment and price audit
+
+- Outcome: commerce repository now lists representatives, assigns a customer by Telegram id, and
+  lists current representative prices with override/base/public source. Public shop listing is
+  unchanged. No wallet, debt, or admin price UI. `PILOT_ENABLED` stayed false.
+- Validation: database integration tests `6`, including assignment plus override audit. Targeted
+  `pnpm --filter @neo-bot/database test:integration`.
+- Next: owner publishes a sellable variant and completes one chat purchase. Reseller admin UI and
+  `reseller.*` notices are later.
+
+### 2026-08-22 - Representative listing and checkout pricing
+
+- Outcome: public shop still uses `product_variants.price_irr`. An active representative sees only
+  granted variants. Checkout snapshots override, else base, else public, and stores `pricing_source`
+  plus `representative_id`. ADR 0011. No wallet, assignment, or admin price UI. `PILOT_ENABLED`
+  stayed false.
+- Validation: domain tests `10`, application `32`, bot-api `77`, database integration `5`.
+  `pnpm check` after this slice. Live databases still need an authorized migrate for `0007`.
+- Next: owner publishes a sellable variant and completes one chat purchase. Reseller admin UI and
+  `reseller.*` notices are later.
+
+### 2026-08-22 - Production-reseller scaffold (work in progress)
+
+- Outcome: started a production+reseller foundation slice: domain types now include representative-aware pricing source on variants/orders, Commerce use case paths for representative-scoped listing/checkout were introduced, `telegram-commerce-bot` category/variant rendering now routes through customer-scoped variant reads, and migration `0007_reseller_pricing_and_ops.sql` was added for representatives, representative variant access, base pricing, and per-representative override pricing plus reseller reporting event types.
+- Next: finish repository/controller wiring and verification gates before enabling representative flows in runtime.
+
+### 2026-08-22 - Hybrid admin plan management
+
+- Outcome: implemented the hybrid admin flow from `admin-plan-config-hybrid`: catalog-admin now hides low-value fields from the main path, adds a 3-step wizard for category+plan creation, and keeps fast edit cards focused on core plan fields. Telegram admin hub now includes `مدیریت سریع پلن` with in-chat quick operations for selecting a plan, editing price/volume/days/devices, toggling sellable state, instant publish, and quick copy.
+- Validation: `pnpm --filter @neo-bot/catalog-admin test`, `pnpm --filter @neo-bot/bot-api test`.
+- Next: owner validates the new `/console/` wizard and quick chat operations on phone, then publishes and edits one real plan end-to-end.
+
+### 2026-08-22 - Phased UX polish for chat and Mini App
+
+- Outcome: catalog-admin quick wins landed (textarea for long copy fields, stronger mobile
+  scroll-safe spacing, clearer sticky save state, and split sections into `CatalogSettingsPanel`
+  plus `StickySaveBar`). Customer Mini App removed the dead-end payment screen and now closes
+  directly back to chat from plan details. Bot chat flow now keeps post-checkout and post-reject
+  actions explicit with `پیگیری سفارش` CTAs, richer order-state copy, shorter admin queue labels,
+  and less admin `/start` spam.
+- Validation: `pnpm --filter @neo-bot/catalog-admin test`, `pnpm --filter admin-web test`,
+  `pnpm --filter @neo-bot/bot-api test`, then full `pnpm check`.
+- Next: owner live-checks `/console/` and Telegram chat on phone for copy clarity and tap count.
+
+### 2026-08-22 - Catalog console Mini App scroll and zoom
+
+- Outcome: catalog-admin Mini App uses a single visual-viewport frame, inner form scroll, 16px
+  inputs, locked scale, and disabled Telegram vertical swipes so focusing a field no longer zooms
+  the page away from the field or stacks columns on top of each other.
+- Validation: catalog-admin tests `4`. `pnpm check` after this slice. Live `/console/` still serves
+  the previous build until an authorized host catalog-admin rebuild.
+- Next: owner reloads the catalog console after that rebuild, then publishes a sellable variant.
+
+### 2026-08-22 - Chat-first customer store
+
+- Outcome: customer purchase is chat-only. The Telegram menu button is commands, not a shop WebApp.
+  `POST /customer/orders` and `POST /customer/renew` return gone. Catalog console Mini App stays.
+  ADR 0008 amended. `PILOT_ENABLED` stayed false.
+- Validation: in-repo `pnpm check` after this slice. Live chat purchase still outstanding.
+- Next: owner publishes a sellable variant from `/console/`, then buys and sends a receipt in chat.
+
+### 2026-08-22 - Synced PasarGuard groups for catalog console
+
+- Outcome: catalog console showed no PasarGuard group checkboxes because `provider_groups` was empty.
+  Host `pilot sync-groups` listed panel groups into Postgres. `PILOT_ENABLED` stayed false. No user
+  create or seed-variant.
+- Validation: group rows `5`, selectable `5`, provider instance `1`. Console Mini App must be reloaded.
+- Next: owner reloads `/console/`, ticks a prepared group, then save-and-publish.
+
+### 2026-08-22 - Stopped local polling that stole the host webhook
+
+- Outcome: a local `bot-api` `tsx watch` was still running with `TELEGRAM_ENABLED=true` and no Mini
+  App, public host, or webhook URL. `pnpm check` rebuilt packages, the watcher restarted, and that
+  process deleted the host webhook. Local polling was stopped. Host `bot-api` was restarted so
+  Telegram intake is webhook again. `PILOT_ENABLED` stayed false.
+- Validation: local poller PIDs gone. Host `GET /health` status ok, `telegram` webhook,
+  `telegramReady` true, Mini App origin present, console path `/console/`.
+- Next: owner `/start` on the live bot; missing Mini App address copy should not appear.
+
+### 2026-08-22 - Mini App origin fallback and cheaper agent rules
+
+- Outcome: `bot-api` derives the Mini App/console HTTPS origin from `TELEGRAM_MINI_APP_URL`, else
+  the webhook origin, else `TELEGRAM_PUBLIC_HOST`. ADR 0008 notes that origin is the public host,
+  not a separately omitable env key. Cursor graphify/session/efficiency rules treat owner Telegram
+  copy as P0. Unused marketplace plugins stay uninstalled. `PILOT_ENABLED` stayed false.
+- Validation: bot-api tests `74`. Host env flags `hasMini`/`hasPublicHost`/`hasWebhook` true.
+  Recreated `bot-api`; `GET /health` status ok, `telegramReady` true, in-process Mini App origin
+  present with console path `/console/`. A later local poller deleted the webhook until it was
+  stopped and the host process restarted.
+- Next: owner `/start` and tap the catalog console opener, then publish a sellable variant.
+
+### 2026-08-22 - Host PasarGuard URL and API key from local env
+
+- Outcome: first-host `.env` had placeholder PasarGuard values from install. The live panel URL and
+  API key were copied from the local untracked `.env` onto the host, then `bot-api` was recreated.
+  `PILOT_ENABLED` stayed false. Values were not printed or committed.
+- Validation: host `GET /health` status ok. In-container panel health returned ok. Catalog still
+  empty.
+- Next: owner opens the catalog console Mini App from `/start` and publishes a sellable variant.
+
+### 2026-08-22 - Catalog console opens from a dedicated Mini App message
+
+- Outcome: home and admin hub always show «کنسول کاتالوگ» as a normal callback. That sends a new
+  message with a single Mini App button so Telegram cannot hide it inside an edited mixed keyboard.
+  Empty shop for admins has the same callback. Reply-keyboard Mini App remains as a second path.
+  Temporary debug ingest logs were removed.
+- Validation: bot-api tests `72` for the dedicated opener. Live Telegram open still needs `/start`
+  after host rebuild.
+- Next: owner taps «کنسول کاتالوگ» then «باز کردن کنسول کاتالوگ», publishes a sellable variant.
+
+### 2026-08-22 - Admin catalog console on the reply keyboard
+
+- Outcome: with Mini App URL set, the admin hub still includes an inline console WebApp row, and
+  opening the hub also pins «کنسول کاتالوگ» on the persistent bottom keyboard so the editor is not
+  only a mixed inline button. Catalog-admin production assets stay under `/console/`. Temporary
+  redacted debug logs remain in `bot-api` until the owner confirms the console opens.
+- Validation: bot-api tests `72`. Host `GET /health` status ok after `bot-api` rebuild. Host catalog
+  product count `0`. Owner has not yet confirmed the Telegram console WebApp.
+- Next: owner opens the bottom-keyboard console, publishes a sellable variant, then Mini App
+  purchase.
+
+### 2026-08-22 - Catalog console assets under `/console/`
+
+- Outcome: catalog-admin production build uses Vite `base` `/console/` so JS/CSS are not swallowed
+  by the Mini App SPA fallback at `/assets/`. Console HTML also loads the Telegram Web App script.
+- Validation: host wget of the console module URL returned `text/javascript`. Public catalog product
+  count was `0`; shop without initData returned `401`. Live Telegram console login still needs the
+  owner to open the admin hub WebApp button.
+- Next: owner publishes at least one sellable variant from `/console/`, then Mini App shop.
+
+### 2026-08-22 - Mini App Telegram initData and shop error copy
+
+- Outcome: Mini App loads the official Telegram Web App script, reads `initData` from the SDK or
+  `tgWebAppData` hash, and tints Telegram chrome to the shop navy. Shop copy no longer treats a
+  missing identity, an empty catalog, and a failed fetch as the same line. Help stays reachable.
+- Validation: Mini App tests `5`. `pnpm check` passed. Host Mini App dist includes the Telegram
+  script; `GET /health` returned status ok. Live purchase still outstanding.
+- Next: owner opens Mini App from the Telegram menu button.
+
+### 2026-08-22 - Customer Mini App shop, orders, renew, help
+
+- Outcome: Mini App home matches the chat journey (shop with nested categories, open order, renew,
+  help). Checkout POSTs only after confirm. Customer shop/renew APIs use `initData` and never return
+  subscription URLs. Phone chrome is CSS-hidden unless `?preview=1`; locked runtime files unchanged.
+- Validation: application tests `26`, bot-api tests `71`, Mini App copy tests `4`. `pnpm check`
+  passed. Host Mini App dist was copied and `bot-api` rebuilt; `GET /health` returned status ok.
+  Live Telegram Mini App purchase is not evidenced.
+- Next: owner opens Mini App from Telegram, completes one checkout, and sends a receipt photo in
+  the private chat.
 
 ### 2026-08-22 - First-host install script, Caddy TLS, Mini App, `/console/`
 

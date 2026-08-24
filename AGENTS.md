@@ -6,7 +6,9 @@
 
 At the start of every task:
 
-- Read this file, all of `PROJECT_CONTEXT.md`, and any nearer `AGENTS.md` before editing.
+- Read this file and any nearer `AGENTS.md` before editing. Read all of `PROJECT_CONTEXT.md` on a
+  new session. In a continuation of the same conversation, skip a full re-read when the fingerprint
+  was already confirmed current.
 - Run `git status` and `pnpm context:check`.
 - If the context fingerprint is stale, inspect and document the existing changes before starting new
   work. Never blindly run the stamp command over unknown changes.
@@ -45,16 +47,34 @@ Legacy repositories and migration journals are read-only evidence unless a task 
 - Never run pilot provisioning unless `PILOT_ENABLED=true` and an explicit isolated group ID is configured.
 - Never connect to production, migrate users, deploy, commit, or push without explicit authorization.
 
-## Agent tooling
+## Removed Cursor tooling
 
-Project skills are in `.cursor/skills/`, session/stop hooks in `.cursor/hooks/`, and the cheap
-codebase mapper is `.cursor/agents/graphify-explore.md`. Spawn at most two subagents.
+Cursor tooling and `.cursor/**` are not part of this project and must not be recreated, installed or
+used unless the owner explicitly authorizes a new integration. Spawn at most two subagents.
+
+## Codex orchestration
+
+- Preferred supervisor: `GPT-5.6 Sol High`. Preferred executors: Luna for bounded discovery,
+  reports, tests, independent verification and small patches; Terra for medium or complex
+  multi-file implementation. Sol delegates routine work and does not directly implement it.
+- Sol enters directly only for an unresolved product or architecture decision; data-model,
+  authentication, payment, provisioning/idempotency or secret boundary; migration, restore,
+  deployment or other live mutation; failed/conflicting verification; or final authority work.
+- At most two subagents may be active and at most one may write. Preserve the dirty-worktree
+  baseline: before delegation record existing changes, give each subagent an explicit path scope,
+  and never use cleanup, reset, restore or staging to simplify another worker's changes.
+- Every task packet states `scope`, `forbidden`, `risk`, `output`, `tests`, and `stop` conditions.
+  Subagents may not update ADRs or `PROJECT_CONTEXT.md`, stamp context, commit, push, deploy,
+  migrate live data, call Telegram, or provision services without Sol's explicit final authority.
+- If a preferred role is unavailable, use a role-equivalent fallback and disclose
+  `requested_role`, `actual_model`, and `fallback_reason` in the task handoff. Repository policy
+  selects roles; it does not claim to enforce the runtime model.
 
 ## Verification
 
-- Before changes, inspect the repository and use Graphify queries when a graph exists.
-- Prefer `graphify query`, `graphify path` and `graphify explain`. If `graphify-out/wiki/index.md`
-  exists, navigate that wiki instead of reading the raw graph report first.
-- Use Graphify query budget 600 by default and 1200 maximum.
+- If the owner pasted Telegram bot copy, Grep that sentence in `apps/bot-api/src/telegram-menu.ts`
+  first, then follow `telegram-commerce-bot.ts` and `config.ts`.
+- Use Graphify (`query` / `path` / `explain`, budget 600, maximum 1200) when the file path is
+  unknown. If `graphify-out/wiki/index.md` exists, use it for architecture questions.
 - After changes run context check, typecheck, lint, tests, build, dependency-cruiser, and
   `graphify update .` when initialized. Use `graphify update . --force` after shrinking the corpus.

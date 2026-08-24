@@ -7,14 +7,7 @@ const databaseEnvironmentSchema = z.object({
 const httpEnvironmentSchema = z.object({
   HOST: z.string().default('127.0.0.1'),
   PORT: z.coerce.number().int().min(1).max(65_535).default(3100),
-  WEB_ORIGINS: z.string().default('http://127.0.0.1:4173,http://127.0.0.1:4174'),
-});
-
-const adminApiEnvironmentSchema = z.object({
-  ADMIN_API_TOKEN: z
-    .string()
-    .regex(/^[A-Za-z0-9_-]{32,128}$/u)
-    .optional(),
+  WEB_ORIGINS: z.string().default('http://127.0.0.1:4173'),
 });
 
 const telegramEnvironmentSchema = z.object({
@@ -22,7 +15,8 @@ const telegramEnvironmentSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
   TELEGRAM_WEBHOOK_URL: z.string().optional(),
-  TELEGRAM_MINI_APP_URL: z.string().optional(),
+  TELEGRAM_BRAND_WELCOME_PHOTO_FILE_ID: z.string().optional(),
+  TELEGRAM_BRAND_DELIVERY_PHOTO_FILE_ID: z.string().optional(),
   TELEGRAM_ADMIN_IDS: z.string().optional(),
   TELEGRAM_REPORT_GROUP_CHAT_ID: z.string().optional(),
   TELEGRAM_REPORT_TOPIC_NEW_USERS: z.string().optional(),
@@ -65,10 +59,6 @@ interface HttpConfig {
   readonly webOrigins: readonly string[];
 }
 
-interface AdminApiConfig {
-  readonly token: string | null;
-}
-
 interface PilotConfig extends DatabaseConfig {
   readonly baseUrl: string;
   readonly apiKey: string;
@@ -103,7 +93,10 @@ export type TelegramConfig =
       readonly botToken: string;
       readonly webhookSecret: string;
       readonly webhookUrl: string | null;
-      readonly miniAppUrl: string | null;
+      readonly brandMedia: {
+        readonly welcomePhotoFileId: string | null;
+        readonly deliveryPhotoFileId: string | null;
+      };
       readonly adminTelegramUserIds: ReadonlySet<string>;
       readonly reporting: TelegramReportingConfig | null;
       readonly reportDispatchIntervalMs: number;
@@ -125,12 +118,6 @@ export function loadHttpConfig(environment: NodeJS.ProcessEnv = process.env): Ht
     .filter((origin) => /^https?:\/\/[^/]+(?::\d+)?$/u.test(origin));
   if (webOrigins.length === 0) throw new Error('INVALID_HTTP_CONFIGURATION');
   return { host: parsed.data.HOST, port: parsed.data.PORT, webOrigins };
-}
-
-export function loadAdminApiConfig(environment: NodeJS.ProcessEnv = process.env): AdminApiConfig {
-  const parsed = adminApiEnvironmentSchema.safeParse(environment);
-  if (!parsed.success) throw new Error('INVALID_ADMIN_API_CONFIGURATION');
-  return { token: parsed.data.ADMIN_API_TOKEN ?? null };
 }
 
 export function loadPilotConfig(environment: NodeJS.ProcessEnv = process.env): PilotConfig {
@@ -181,11 +168,21 @@ export function loadTelegramConfig(environment: NodeJS.ProcessEnv = process.env)
     botToken,
     webhookSecret,
     webhookUrl: loadHttpsPublicUrl(parsed.data.TELEGRAM_WEBHOOK_URL),
-    miniAppUrl: loadHttpsPublicUrl(parsed.data.TELEGRAM_MINI_APP_URL),
+    brandMedia: {
+      welcomePhotoFileId: optionalTelegramFileId(parsed.data.TELEGRAM_BRAND_WELCOME_PHOTO_FILE_ID),
+      deliveryPhotoFileId: optionalTelegramFileId(
+        parsed.data.TELEGRAM_BRAND_DELIVERY_PHOTO_FILE_ID,
+      ),
+    },
     adminTelegramUserIds: new Set(adminIds),
     reporting: loadTelegramReportingConfig(parsed.data),
     reportDispatchIntervalMs: parsed.data.TELEGRAM_REPORT_DISPATCH_INTERVAL_MS,
   };
+}
+
+function optionalTelegramFileId(value: string | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized === undefined || normalized.length === 0 ? null : normalized;
 }
 
 function loadHttpsPublicUrl(value: string | undefined): string | null {

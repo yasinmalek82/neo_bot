@@ -5,18 +5,24 @@ import {
   ProvisioningPendingError,
   ProvisioningProviderError,
   validateDirectProductVariant,
+  composeServiceUsername,
+  isServiceUsernameUnavailableError,
+  MAX_SERVICE_USERNAME_SUFFIX_ATTEMPTS,
+  validateServiceUsernameBase,
   type DirectProductVariant,
   type ProviderUser,
   type ProvisioningProvider,
   type ServiceBinding,
 } from '@neo-bot/domain';
 
-import type { ProvisioningRepository } from './ports.js';
+import type { ProvisioningRepository, ReservedOperation } from './ports.js';
+import { generateServiceUsernameSuffix } from './service-username.js';
 
 export interface CreateDirectServiceCommand {
   readonly productVariantId: string;
   readonly idempotencyKey: string;
   readonly requestedUsername?: string;
+  readonly serviceUsernameBase?: string;
 }
 
 export interface RenewDirectServiceCommand {
@@ -37,10 +43,18 @@ export class DirectServiceUseCase {
   }
 
   public async create(command: CreateDirectServiceCommand): Promise<ServiceBinding> {
+    if (command.requestedUsername !== undefined && command.serviceUsernameBase !== undefined) {
+      throw new DomainConflictError('SERVICE_USERNAME_INPUT_CONFLICT');
+    }
+    if (command.serviceUsernameBase !== undefined) {
+      validateServiceUsernameBase(command.serviceUsernameBase);
+    }
+
     const variant = await this.requiredVariant(command.productVariantId);
     const requestHash = stableHash({
       productVariantId: command.productVariantId,
       requestedUsername: command.requestedUsername ?? null,
+      serviceUsernameBase: command.serviceUsernameBase ?? null,
     });
     const reserved = await this.repository.reserveOperation(
       'create',
@@ -67,19 +81,58 @@ export class DirectServiceUseCase {
       throw new DomainConflictError('INVALID_PROVIDER_GROUP');
     }
 
+    if (command.serviceUsernameBase !== undefined) {
+      return this.createWithServiceUsernameBase(reserved, variant, command.serviceUsernameBase);
+    }
+
     const username = command.requestedUsername ?? deterministicUsername(command.idempotencyKey);
+    return this.createWithFixedUsername(reserved, variant, username);
+  }
+
+  private async createWithServiceUsernameBase(
+    reserved: ReservedOperation,
+    variant: DirectProductVariant,
+    serviceUsernameBase: string,
+  ): Promise<ServiceBinding> {
+    for (let attempt = 0; attempt < MAX_SERVICE_USERNAME_SUFFIX_ATTEMPTS; attempt += 1) {
+      const username = composeServiceUsername(serviceUsernameBase, generateServiceUsernameSuffix());
+      try {
+        return await this.createWithFixedUsername(reserved, variant, username);
+      } catch (error: unknown) {
+        if (!isServiceUsernameUnavailableError(error)) {
+          throw error;
+        }
+      }
+    }
+    await this.repository.markOperationFailed(reserved.operation.id, 'SERVICE_USERNAME_EXHAUSTED');
+    throw new DomainConflictError('SERVICE_USERNAME_EXHAUSTED');
+  }
+
+  private async createWithFixedUsername(
+    reserved: ReservedOperation,
+    variant: DirectProductVariant,
+    username: string,
+  ): Promise<ServiceBinding> {
     if (reserved.outcome === 'existing') {
       const reconciled = await this.provider.findUserByUsername(username);
       if (reconciled === null) {
         throw new ProvisioningPendingError('CREATE_IN_PROGRESS');
       }
-      assertUserMatchesVariant(reconciled, variant);
+      try {
+        assertUserMatchesVariant(reconciled, variant);
+      } catch {
+        throw new DomainConflictError('SERVICE_USERNAME_TAKEN');
+      }
       return this.repository.completeCreate(reserved.operation.id, variant, reconciled);
     }
 
     let remote = await this.provider.findUserByUsername(username);
     if (remote !== null) {
-      assertUserMatchesVariant(remote, variant);
+      try {
+        assertUserMatchesVariant(remote, variant);
+      } catch {
+        throw new DomainConflictError('SERVICE_USERNAME_TAKEN');
+      }
     } else {
       try {
         remote = await this.provider.createUser({
@@ -92,6 +145,9 @@ export class DirectServiceUseCase {
         });
       } catch (error: unknown) {
         if (!(error instanceof ProvisioningProviderError) || !error.mayHaveApplied) {
+          if (isServiceUsernameUnavailableError(error)) {
+            throw new DomainConflictError('SERVICE_USERNAME_TAKEN');
+          }
           await this.repository.markOperationFailed(
             reserved.operation.id,
             error instanceof ProvisioningProviderError ? error.code : 'CREATE_FAILED',
@@ -103,7 +159,11 @@ export class DirectServiceUseCase {
           await this.repository.markOperationPending(reserved.operation.id, 'CREATE_UNCONFIRMED');
           throw new ProvisioningPendingError('CREATE_UNCONFIRMED');
         }
-        assertUserMatchesVariant(remote, variant);
+        try {
+          assertUserMatchesVariant(remote, variant);
+        } catch {
+          throw new DomainConflictError('SERVICE_USERNAME_TAKEN');
+        }
       }
     }
 

@@ -1,6 +1,7 @@
 import type { CatalogRepository } from '@neo-bot/application';
 import {
   DomainConflictError,
+  parseSafeProviderGroupId,
   type ProviderGroupChoice,
   type ReplaceStorefrontCatalogCommand,
   type StorefrontCatalog,
@@ -90,7 +91,7 @@ export class PostgresCatalogRepository implements CatalogRepository {
     );
     return result.rows.map((row) => ({
       providerCode: row.provider_code,
-      groupId: Number(row.group_id),
+      groupId: parseSafeProviderGroupId(row.group_id),
       name: row.name,
       available: row.available,
       disabled: row.disabled,
@@ -103,6 +104,7 @@ export class PostgresCatalogRepository implements CatalogRepository {
     const client = await this.pool.connect();
     try {
       await client.query('begin');
+      await client.query('select revision from catalog_revisions where id = 1 for update');
       await client.query(
         `update storefront_settings set
            brand_name = $1,
@@ -129,7 +131,7 @@ export class PostgresCatalogRepository implements CatalogRepository {
 
       await client.query(
         `update product_categories
-         set active = false, updated_at = now()
+         set active = false, managed_by_admin = false, updated_at = now()
          where managed_by_admin = true`,
       );
       await client.query(
@@ -140,7 +142,7 @@ export class PostgresCatalogRepository implements CatalogRepository {
       );
       await client.query(
         `update products
-         set active = false, updated_at = now()
+         set active = false, managed_by_admin = false, updated_at = now()
          where managed_by_admin = true`,
       );
 
@@ -280,6 +282,10 @@ export class PostgresCatalogRepository implements CatalogRepository {
         }
       }
 
+      await client.query(
+        'update catalog_revisions set revision = revision + 1, updated_at = now() where id = 1',
+      );
+
       await client.query('commit');
     } catch (error: unknown) {
       await client.query('rollback');
@@ -338,10 +344,12 @@ export class PostgresCatalogRepository implements CatalogRepository {
          left join provisioning_policy_groups policy_group
            on policy_group.provisioning_policy_id = policy.id
          where product.managed_by_admin = true
-           and ($1::boolean or (
-             product.active = true and variant.active = true and variant.sellable = true
-             and variant.price_irr > 0
-           ))
+           and variant.active = true
+           and (
+             $1::boolean or (
+               product.active = true and variant.sellable = true and variant.price_irr > 0
+             )
+           )
          group by variant.id, provider.code
          order by variant.product_id, variant.position, variant.id`,
         [includeInactive],
@@ -443,7 +451,7 @@ function mapVariant(row: VariantRow): StorefrontVariant {
     position: row.position,
     sellable: row.sellable,
     providerCode: row.provider_code ?? '',
-    groupIds: row.group_ids.map(Number),
+    groupIds: row.group_ids.map(parseSafeProviderGroupId),
   };
 }
 

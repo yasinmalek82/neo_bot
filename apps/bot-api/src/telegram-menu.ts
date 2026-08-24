@@ -4,13 +4,16 @@ import type {
   TelegramInlineButton,
   TelegramInlineKeyboardMarkup,
   TelegramPersistentKeyboardMarkup,
+  TelegramReplyKeyboardButton,
 } from './telegram-api.js';
 
 export const HOME_CALLBACK = 'menu';
 export const SHOP_CALLBACK = 'shop';
 export const ORDER_CALLBACK = 'order';
 export const RENEW_CALLBACK = 'renew';
+export const RENEW_CONFIRM_CALLBACK = 'renew:confirm';
 export const HELP_CALLBACK = 'help';
+export const GUIDE_CALLBACK = 'guide';
 export const ADMIN_STATUS_CALLBACK = 'admin:status';
 export const ADMIN_REPORTS_CALLBACK = 'admin:reports';
 export const ADMIN_QUEUE_CALLBACK = 'admin:queue';
@@ -18,9 +21,11 @@ export const ADMIN_HUB_CALLBACK = 'admin:hub';
 export const ADMIN_SUMMARY_CALLBACK = 'admin:summary';
 export const ADMIN_FAILED_CALLBACK = 'admin:failed';
 export const ADMIN_CATALOG_CALLBACK = 'admin:catalog';
+export const ADMIN_STORE_CALLBACK = 'admin:store';
 
 export const MENU_LABEL = {
-  shop: 'خرید سرویس 🛍',
+  shop: 'خرید سریع 🛍',
+  guide: 'راهنمای انتخاب 🧭',
   order: 'پیگیری سفارش 📦',
   renew: 'تمدید سرویس ♻️',
   help: 'راهنما 📘',
@@ -29,21 +34,28 @@ export const MENU_LABEL = {
   queue: 'سفارش‌های باز 📋',
   failed: 'ساخت ناموفق ⚠️',
   catalog: 'سلامت کاتالوگ 🗂️',
+  store: 'مدیریت فروشگاه 🏪',
   admin: 'بخش ادمین 👨‍💻',
 } as const;
 
 export type MenuAction =
-  'home' | 'shop' | 'order' | 'renew' | 'help' | 'status' | 'reports' | 'queue' | 'admin';
+  | 'home'
+  | 'shop'
+  | 'guide'
+  | 'order'
+  | 'renew'
+  | 'help'
+  | 'status'
+  | 'reports'
+  | 'queue'
+  | 'admin'
+  | 'store';
 
 interface CallbackButton {
   readonly text: string;
   readonly callback_data: string;
 }
-interface WebAppButton {
-  readonly text: string;
-  readonly web_app: { readonly url: string };
-}
-type InlineButton = CallbackButton | WebAppButton;
+type InlineButton = CallbackButton;
 type InlineRow = InlineButton | readonly InlineButton[];
 
 export function escapeHtml(value: string): string {
@@ -58,7 +70,7 @@ export function buttonLabel(value: string): string {
   return `${trimmed.slice(0, 63)}…`;
 }
 
-export function inlineMenu(rows: readonly InlineRow[]): TelegramInlineKeyboardMarkup {
+function inlineMenu(rows: readonly InlineRow[]): TelegramInlineKeyboardMarkup {
   return {
     inline_keyboard: rows.map((row) =>
       isButton(row) ? [serializeInlineButton(row)] : row.map(serializeInlineButton),
@@ -74,30 +86,28 @@ export function pairedKeyboard(buttons: readonly InlineButton[]): TelegramInline
   return inlineMenu(pairButtons(buttons));
 }
 
-export function persistentKeyboard(
-  rows: readonly (readonly string[])[],
-): TelegramPersistentKeyboardMarkup {
-  return {
-    keyboard: rows.map((row) => row.map((text) => ({ text: buttonLabel(text) }))),
-    resize_keyboard: true,
-    is_persistent: true,
-    input_field_placeholder: 'از دکمه‌های پایین انتخاب کن',
-  };
-}
-
 export function matchMenuAction(text: string): MenuAction | null {
   const normalized = text.trim();
   if (normalized === '/start' || normalized.startsWith('/start@') || normalized === 'منوی اصلی') {
     return 'home';
   }
-  if (normalized === '/buy' || normalized === MENU_LABEL.shop || normalized === 'خرید سرویس') {
+  if (
+    normalized === '/buy' ||
+    normalized === MENU_LABEL.shop ||
+    normalized === 'خرید سرویس' ||
+    normalized === 'خرید'
+  ) {
     return 'shop';
+  }
+  if (normalized === MENU_LABEL.guide || normalized === 'راهنمای انتخاب') {
+    return 'guide';
   }
   if (
     normalized === '/order' ||
     normalized.startsWith('/order@') ||
     normalized === MENU_LABEL.order ||
-    normalized === 'پیگیری سفارش'
+    normalized === 'پیگیری سفارش' ||
+    normalized === 'سفارش'
   ) {
     return 'order';
   }
@@ -105,7 +115,8 @@ export function matchMenuAction(text: string): MenuAction | null {
     normalized === '/renew' ||
     normalized.startsWith('/renew@') ||
     normalized === MENU_LABEL.renew ||
-    normalized === 'تمدید سرویس'
+    normalized === 'تمدید سرویس' ||
+    normalized === 'تمدید'
   ) {
     return 'renew';
   }
@@ -129,57 +140,111 @@ export function matchMenuAction(text: string): MenuAction | null {
   if (normalized === MENU_LABEL.admin || normalized === 'بخش ادمین') {
     return 'admin';
   }
+  if (normalized === MENU_LABEL.store || normalized === 'مدیریت فروشگاه') {
+    return 'store';
+  }
   return null;
 }
 
 export function homeText(isAdmin: boolean): string {
   const lines = [
-    '<b>سلام، خوش آمدی</b>',
-    'از این گفتگو می‌توانی سرویس بخری، سفارش باز را پیگیری کنی، یا سرویس فعال را تمدید کنی.',
+    '<b>NEO NETWORK</b>',
+    '<i>PRIVATE ACCESS</i>',
+    '',
+    'خرید سریع، پرداخت و ارسال رسید همه در همین گفتگو است.',
     '',
     'دکمه‌های پایین صفحه را لمس کن؛ لازم نیست دستوری تایپ کنی.',
   ];
   if (isAdmin) {
-    lines.push('', 'برای وضعیت سیستم، گزارش‌ها و صف رسید، «بخش ادمین» را بزن.');
+    lines.push('', 'برای وضعیت سیستم، گزارش‌ها، صف رسید و مدیریت فروشگاه، «بخش ادمین» را بزن.');
   }
   return lines.join('\n');
 }
 
-export function homeInlineKeyboard(isAdmin: boolean): TelegramInlineKeyboardMarkup {
-  return inlineMenu([
-    { text: MENU_LABEL.shop, callback_data: SHOP_CALLBACK },
-    [
-      { text: MENU_LABEL.order, callback_data: ORDER_CALLBACK },
-      { text: MENU_LABEL.renew, callback_data: RENEW_CALLBACK },
-    ],
-    { text: MENU_LABEL.help, callback_data: HELP_CALLBACK },
-    ...(isAdmin ? [{ text: MENU_LABEL.admin, callback_data: ADMIN_HUB_CALLBACK }] : []),
-  ]);
-}
-
 export function homeReplyKeyboard(isAdmin: boolean): TelegramPersistentKeyboardMarkup {
-  return persistentKeyboard([
-    [MENU_LABEL.shop],
-    [MENU_LABEL.order, MENU_LABEL.renew],
-    [MENU_LABEL.help],
-    ...(isAdmin ? [[MENU_LABEL.admin]] : []),
-  ]);
+  const rows: TelegramReplyKeyboardButton[][] = [
+    [{ text: buttonLabel(MENU_LABEL.shop) }],
+    [{ text: buttonLabel(MENU_LABEL.guide) }],
+    [{ text: buttonLabel(MENU_LABEL.order) }, { text: buttonLabel(MENU_LABEL.renew) }],
+    [{ text: buttonLabel(MENU_LABEL.help) }],
+  ];
+  if (isAdmin) {
+    rows.push([{ text: buttonLabel(MENU_LABEL.admin) }]);
+  }
+  return {
+    keyboard: rows,
+    resize_keyboard: true,
+    is_persistent: true,
+    input_field_placeholder: 'از دکمه‌های پایین انتخاب کن',
+  };
 }
 
 export function shopText(): string {
-  return ['<b>خرید سرویس</b>', 'دسته را انتخاب کن تا پلن‌ها و مبلغ دقیق را ببینی.'].join('\n');
+  return ['<b>خرید سرویس</b>', 'یک دسته انتخاب کن تا پلن‌ها و قیمت هر پلن را ببینی.'].join('\n');
+}
+
+export function homeReturnText(): string {
+  return 'به منوی اصلی برگشتی. از دکمه‌های پایین صفحه انتخاب کن.';
+}
+
+export function productPlansText(input: {
+  readonly productName: string;
+  readonly planCount: number;
+  readonly page: number;
+  readonly pageCount: number;
+  readonly variants: readonly SellableProductVariant[];
+}): string {
+  return [
+    `<b>${escapeWithin(input.productName, 300)}</b>`,
+    `پلن مناسب را انتخاب کن · صفحه ${String(input.page + 1)} از ${String(input.pageCount)}`,
+    `${String(input.planCount)} پلن فعال با قیمت نهایی نمایش داده می‌شود.`,
+    '',
+    ...input.variants.slice(0, 3).flatMap((variant, index) => productPlanBlock(variant, index + 1)),
+  ].join('\n');
+}
+
+function productPlanBlock(variant: SellableProductVariant, index: number): readonly string[] {
+  const devices = variant.deviceLimit === 0 ? 'نامحدود' : `${String(variant.deviceLimit)} دستگاه`;
+  return [
+    `<b>${String(index)}. ${escapeWithin(variant.name, 100)}</b>`,
+    ...(variant.description.trim().length === 0 ? [] : [escapeWithin(variant.description, 160)]),
+    ...(variant.evidenceBadge === undefined
+      ? []
+      : [`نشان: <b>${escapeHtml(variant.evidenceBadge.label)}</b>`]),
+    `حجم: <b>${escapeHtml(formatTrafficLabel(variant.dataLimitBytes))}</b> · مدت: <b>${String(variant.durationDays)} روز</b> · اتصال: <b>${escapeHtml(devices)}</b>`,
+    ...(variant.displayAttributes ?? [])
+      .slice(0, 4)
+      .map(
+        (attribute) =>
+          `${escapeWithin(attribute.label, 40)}: <b>${escapeWithin(attribute.value, 80)}</b>`,
+      ),
+    `قیمت نهایی: <b>${escapeHtml(formatMoney(variant.priceIrr))}</b>`,
+    '',
+  ];
+}
+
+export function escapeWithin(value: string, maxEscapedLength: number): string {
+  const escaped = escapeHtml(value.trim());
+  if (escaped.length <= maxEscapedLength) return escaped;
+  let result = '';
+  for (const character of Array.from(value.trim())) {
+    const encoded = escapeHtml(character);
+    if (result.length + encoded.length + 1 > maxEscapedLength) break;
+    result += encoded;
+  }
+  return `${result}…`;
 }
 
 export function emptyShopText(isAdmin: boolean): string {
   if (isAdmin) {
     return [
       '<b>فروشگاه خالی است</b>',
-      'از کنسول کاتالوگ دسته و پلن را ذخیره و منتشر کن. بعد از انتشار، همین منوی خرید به‌روز می‌شود.',
+      'از «مدیریت فروشگاه» دسته و پلن را بساز و منتشر کن. بعد از انتشار، همین فروشگاه به روز می شود.',
     ].join('\n');
   }
   return [
     '<b>فروشگاه خالی است</b>',
-    'هنوز پلنی برای فروش منتشر نشده. بعداً از منوی خرید دوباره سر بزن.',
+    'فعلاً پلن فعالی برای فروش منتشر نشده. کمی بعد دوباره «خرید سرویس» را بزن.',
   ].join('\n');
 }
 
@@ -200,14 +265,22 @@ export function categoryText(input: {
   lines.push('');
   lines.push(
     input.hasItems
-      ? 'یکی از پلن‌ها را لمس کن تا مدت، حجم و مبلغ را ببینی.'
-      : 'در این دسته پلنی برای فروش نیست. از دکمهٔ بازگشت دستهٔ دیگری را باز کن.',
+      ? 'یک محصول انتخاب کن تا پلن‌ها و قیمت‌ها را مقایسه کنی.'
+      : 'در این دسته پلن فعالی نیست. با دکمهٔ دستهٔ قبلی یا «خرید سرویس ⬅️» برگرد.',
   );
   return lines.join('\n');
 }
 
+export function missingCategoryText(): string {
+  const shopBack = shopBackButton().text;
+  return [
+    '<b>دسته در دسترس نیست</b>',
+    `این دسته حذف شده یا موقتاً غیرفعال است. با دکمهٔ «${shopBack}» به لیست دسته‌ها برگرد.`,
+  ].join('\n');
+}
+
 export function shopBackButton(): InlineButton {
-  return { text: 'فروشگاه ⬅️', callback_data: SHOP_CALLBACK };
+  return { text: 'خرید سرویس ⬅️', callback_data: SHOP_CALLBACK };
 }
 
 export function categoryBackButton(
@@ -226,34 +299,91 @@ export function catalogKeyboard(
   return inlineMenu([...pairButtons(items), ...extras]);
 }
 
-export function variantText(variant: SellableProductVariant): string {
-  const traffic =
-    variant.dataLimitBytes === 0n
-      ? 'نامحدود'
-      : `${String(variant.dataLimitBytes / 1024n ** 3n)} گیگابایت`;
-  const devices = variant.deviceLimit === 0 ? 'نامحدود' : String(variant.deviceLimit);
+export function serviceDeliveredText(subscriptionUrl: string): string {
   return [
-    `<b>${escapeHtml(variant.productName)}</b>`,
-    `<i>${escapeHtml(variant.name)}</i>`,
-    escapeHtml(variant.description),
+    '<b>NEO NETWORK | سرویس آماده است</b>',
+    'لینک اشتراک را در برنامه وارد کن.',
     '',
-    `⏱ مدت: ${String(variant.durationDays)} روز`,
-    `📶 حجم: ${escapeHtml(traffic)}`,
-    `📱 دستگاه: ${escapeHtml(devices)}`,
-    `💰 مبلغ: <b>${escapeHtml(formatMoney(variant.priceIrr))}</b>`,
-    '',
-    'اگر همین پلن را می‌خواهی، «ادامه و دریافت شماره کارت» را بزن.',
+    `<code>${escapeHtml(subscriptionUrl)}</code>`,
   ].join('\n');
+}
+
+export function renewalCompletedText(subscriptionUrl: string): string {
+  return [
+    '<b>NEO NETWORK | تمدید انجام شد</b>',
+    'لینک اشتراک به‌روز است و همان لینک قبلی قابل استفاده است.',
+    '',
+    `<code>${escapeHtml(subscriptionUrl)}</code>`,
+  ].join('\n');
+}
+
+export function renewalPreviewText(): string {
+  return [
+    '<b>تمدید سرویس</b>',
+    'آخرین سرویس فعال با همان مشخصات دورهٔ اصلی تمدید می‌شود و لینک اشتراک ثابت می‌ماند.',
+    'برای ثبت تمدید، تأیید را بزن.',
+  ].join('\n');
+}
+
+export function variantText(variant: SellableProductVariant): string {
+  const traffic = formatTrafficLabel(variant.dataLimitBytes);
+  const devices = variant.deviceLimit === 0 ? 'نامحدود' : `${String(variant.deviceLimit)} دستگاه`;
+  const description = variant.description.trim();
+  return [
+    `<b>${escapeWithin(variant.productName, 250)}</b>`,
+    `<b>${escapeWithin(variant.name, 300)}</b>`,
+    ...(description.length === 0 ? [] : [escapeWithin(description, 1_000)]),
+    '',
+    `حجم: <b>${escapeHtml(traffic)}</b>`,
+    `مدت: <b>${String(variant.durationDays)} روز</b>`,
+    `اتصال همزمان: <b>${escapeHtml(devices)}</b>`,
+    ...(variant.displayAttributes ?? [])
+      .slice(0, 4)
+      .map(
+        (attribute) =>
+          `${escapeWithin(attribute.label, 80)}: <b>${escapeWithin(attribute.value, 300)}</b>`,
+      ),
+    `قیمت: <b>${escapeHtml(formatMoney(variant.priceIrr))}</b>`,
+    '',
+    'برای ثبت سفارش، «ادامه و دریافت شماره کارت» را بزن.',
+  ].join('\n');
+}
+
+export function variantListLabel(variant: SellableProductVariant): string {
+  const traffic = formatTrafficLabel(variant.dataLimitBytes);
+  return [
+    formatCompactPrice(variant.priceIrr),
+    variant.name,
+    traffic,
+    `${String(variant.durationDays)} روز`,
+  ].join(' · ');
 }
 
 export function helpText(): string {
   return [
     '<b>راهنمای خرید</b>',
-    '۱. از منوی پایین «خرید سرویس» را بزن، دسته و پلن را انتخاب کن.',
-    '۲. مبلغ نمایش‌داده‌شده را <b>دقیقاً</b> کارت‌به‌کارت کن؛ همین عدد، نه گردشده.',
-    '۳. فقط <b>عکس رسید</b> را در همین گفتگو بفرست. فایل PDF، سند یا ویدیو قبول نیست.',
-    '۴. نتیجهٔ تأیید و لینک سرویس همین‌جا می‌آید؛ لینک را در انجمن گزارش نمی‌فرستیم.',
+    'فروشگاه همین چت است؛ «خرید سریع» را بزن، دسته و پلن را انتخاب کن.',
+    'مبلغ نمایش‌داده‌شده را کارت‌به‌کارت کن و عکس رسید را در همین چت خصوصی بفرست.',
+    'PDF و ویدیو پذیرفته نمی‌شود. بررسی رسید و اعلام نتیجه حداکثر ۶۰ دقیقه زمان می‌برد.',
+    'پس از تأیید، لینک سرویس در همین گفتگوی خصوصی ارسال می‌شود.',
   ].join('\n');
+}
+
+export function guideText(): string {
+  return [
+    '<b>راهنمای انتخاب</b>',
+    'حجم را بر اساس مصرف ماهانه انتخاب کن؛ اگر مطمئن نیستی از پلن کم‌حجم‌تر شروع کن.',
+    'تعداد دستگاه را برابر استفاده هم‌زمان انتخاب کن.',
+    'مدت بیشتر را فقط وقتی انتخاب کن که الگوی مصرفت مشخص است.',
+    'برای دیدن جزئیات هر پلن، دکمه «دیدن پلن‌ها» را بزن.',
+  ].join('\n');
+}
+
+export function guideInlineKeyboard(): TelegramInlineKeyboardMarkup {
+  return columnKeyboard([
+    { text: 'دیدن پلن‌ها', callback_data: SHOP_CALLBACK },
+    backToMenuButton(),
+  ]);
 }
 
 export function orderStatusText(order: SalesOrder | null): string {
@@ -267,25 +397,38 @@ export function orderStatusText(order: SalesOrder | null): string {
       '<b>سفارش در حال بررسی است</b>',
       `محصول: ${escapeHtml(order.productName)} — ${escapeHtml(order.variantName)}`,
       `مبلغ: ${escapeHtml(formatMoney(order.amountIrr))}`,
-      'نتیجه را همین‌جا می‌فرستیم؛ لازم نیست دوباره پرداخت کنی.',
+      'بررسی و اعلام نتیجه حداکثر ۶۰ دقیقه زمان می‌برد؛ لازم نیست دوباره پرداخت کنی.',
     ].join('\n');
   }
   if (order.status === 'rejected') {
     return [
-      '<b>رسید قبلی تأیید نشد</b>',
-      'یک عکس واضح‌تر از همان پرداخت را همین‌جا بفرست. مبلغ را دوباره واریز نکن مگر پشتیبانی بگوید.',
+      '<b>رسید قبلی تایید نشد</b>',
+      'یک عکس واضح تر از همان پرداخت را همین جا بفرست. مبلغ را دوباره واریز نکن مگر پشتیبانی بگوید.',
     ].join('\n');
   }
   if (order.status === 'provisioning') {
     return [
-      '<b>پرداخت تأیید شد</b>',
-      'سرویس در حال آماده‌سازی است. لینک را همین گفتگو دریافت می‌کنی.',
+      '<b>پرداخت تایید شد</b>',
+      'سرویس در حال آماده سازی است. لینک را همین گفتگو دریافت می کنی.',
     ].join('\n');
   }
   if (order.status === 'provisioning_failed') {
     return [
-      '<b>آماده‌سازی سرویس کامل نشد</b>',
+      '<b>آماده سازی سرویس کامل نشد</b>',
       'پشتیبانی در حال بررسی است. لازم نیست دوباره پرداخت کنی.',
+    ].join('\n');
+  }
+  if (order.status === 'fulfilled') {
+    return [
+      '<b>سفارش تکمیل شد</b>',
+      `محصول: ${escapeHtml(order.productName)} — ${escapeHtml(order.variantName)}`,
+      'اگر نیاز داشتی، از منوی پایین «تمدید سرویس» را بزن.',
+    ].join('\n');
+  }
+  if (order.status === 'cancelled') {
+    return [
+      '<b>سفارش لغو شد</b>',
+      'برای شروع دوباره از منوی پایین «خرید سرویس» را انتخاب کن.',
     ].join('\n');
   }
   return [
@@ -296,6 +439,25 @@ export function orderStatusText(order: SalesOrder | null): string {
   ].join('\n');
 }
 
+export function serviceUsernamePromptText(variantName: string): string {
+  return [
+    '<b>نام سرویس را انتخاب کن</b>',
+    `برای «${escapeHtml(variantName)}» یک نام کوتاه انگلیسی بفرست تا سرویس با آن شناخته شود.`,
+    'حروف کوچک انگلیسی، عدد، خط تیره و زیرخط مجاز است؛ فاصله و @ مجاز نیست.',
+    'برای یکتا ماندن سرویس، یک بخش کوتاه خودکار به انتهای نام اضافه می‌شود.',
+    '',
+    'مثال: <code>ali_reza</code>',
+  ].join('\n');
+}
+
+export function invalidServiceUsernameBaseText(): string {
+  return [
+    'نام کاربری نامعتبر است.',
+    'فقط <code>a-z</code>، <code>0-9</code>، <code>_</code> و <code>-</code> بدون فاصله و بدون @ مجاز است.',
+    'دوباره یک نام پایه بفرست.',
+  ].join('\n');
+}
+
 export function checkoutText(
   order: { readonly amountIrr: bigint },
   cardNumber: string,
@@ -303,34 +465,39 @@ export function checkoutText(
 ): string {
   return [
     '<b>سفارش ثبت شد؛ نوبت پرداخت است</b>',
-    'مبلغ را دقیقاً با همین عدد کارت‌به‌کارت کن.',
+    'مبلغ را دقیقا با همین عدد کارت به کارت کن.',
     '',
     `💰 <b>${escapeHtml(formatMoney(order.amountIrr))}</b>`,
     `💳 <code>${escapeHtml(formatCardNumber(cardNumber))}</code>`,
     `👤 ${escapeHtml(cardHolder)}`,
     '',
-    'شماره کارت را لمس کن تا کپی شود. بعد از واریز، <b>فقط عکس رسید</b> را همین‌جا بفرست.',
+    'شماره کارت را لمس کن تا کپی شود. بعد از واریز، <b>فقط عکس رسید</b> را همین جا بفرست.',
+    'بررسی رسید و اعلام نتیجه حداکثر ۶۰ دقیقه زمان می‌برد. برای دیدن وضعیت، «پیگیری سفارش» را بزن.',
   ].join('\n');
 }
 
 export function receiptAcceptedText(): string {
   return [
     '<b>رسید ثبت شد</b>',
-    'برای بررسی ارسال شد. نتیجه را همین گفتگو اعلام می‌کنیم؛ لازم نیست پیام دیگری تایپ کنی.',
+    'برای بررسی ارسال شد. اعلام نتیجه حداکثر ۶۰ دقیقه زمان می‌برد؛ لازم نیست پیام دیگری تایپ کنی.',
   ].join('\n');
 }
 
-export function noOpenOrderText(): string {
+export function receiptRejectedText(): string {
+  return ['<b>رسید تایید نشد</b>', 'یک عکس واضح تر از همان پرداخت را همین جا بفرست.'].join('\n');
+}
+
+function noOpenOrderText(): string {
   return [
     '<b>سفارش باز پیدا نشد</b>',
     'اول از منوی پایین «خرید سرویس» را بزن، بعد عکس رسید را بفرست.',
   ].join('\n');
 }
 
-export function receiptUnderReviewText(): string {
+function receiptUnderReviewText(): string {
   return [
     '<b>همین سفارش در حال بررسی است</b>',
-    'رسید قبلی برای بررسی رفته. اگر عکس واضح‌تری داری، صبر کن تا نتیجه اعلام شود.',
+    'رسید قبلی برای بررسی رفته و اعلام نتیجه حداکثر ۶۰ دقیقه زمان می‌برد. لازم نیست دوباره عکس بفرستی.',
   ].join('\n');
 }
 
@@ -354,7 +521,7 @@ export function receiptPhotoHint(): string {
 export function paymentDetailsMissingText(): string {
   return [
     '<b>شماره کارت هنوز منتشر نشده</b>',
-    'ادمین باید کارت را از کنسول کاتالوگ ذخیره و منتشر کند. الان پرداخت نکن.',
+    'ادمین باید کارت را از «مدیریت فروشگاه» ذخیره و منتشر کند. الان پرداخت نکن.',
   ].join('\n');
 }
 
@@ -386,11 +553,11 @@ export function customerOrderStatusLabel(status: SalesOrderStatus): string {
     case 'receipt_submitted':
       return 'رسید در حال بررسی';
     case 'rejected':
-      return 'رسید تأیید نشد؛ عکس واضح‌تر بفرست';
+      return 'رسید تایید نشد؛ عکس واضح تر بفرست';
     case 'provisioning':
-      return 'در حال آماده‌سازی سرویس';
+      return 'در حال آماده سازی سرویس';
     case 'provisioning_failed':
-      return 'آماده‌سازی ناتمام؛ پشتیبانی در حال بررسی است';
+      return 'آماده سازی ناتمام؛ پشتیبانی در حال بررسی است';
     case 'fulfilled':
       return 'سرویس آماده است؛ لینک در چت ربات';
     case 'cancelled':
@@ -460,37 +627,26 @@ export function dailySummaryQueuedText(created: boolean): string {
 
 export function adminHubText(): string {
   return [
-    '<b>بخش ادمین</b>',
-    'وضعیت سیستم، گزارش انجمن، صف رسید و ساخت ناموفق از همین‌جا باز می‌شود.',
-    'سلامت کاتالوگ فقط تعداد دسته و وضعیت انتشار کارت را نشان می‌دهد؛ رقم کارت اینجا نیست.',
+    '<b>NEO NETWORK — بخش ادمین</b>',
+    'مدیریت فروشگاه، تنظیمات پرداخت، گزارش‌ها و صف رسید از همین چت خصوصی انجام می‌شود.',
+    'مدیریت فروشگاه مسیر واحد ساخت، ویرایش، بایگانی و انتشار دسته و پلن است.',
     'رسیدها با عکس در چت خصوصی می‌آیند؛ تأیید و رد روی همان پیام است.',
-    'کاتالوگ از کنسول جداگانه منتشر می‌شود؛ از ربات محصول جدید نساز.',
+    'اطلاعات حساس کارت فقط هنگام ورود نمایش داده نمی‌شود و پیش‌نمایش آن ماسک است.',
   ].join('\n');
 }
 
-export function adminHubKeyboard(catalogConsoleUrl?: string | null): TelegramInlineKeyboardMarkup {
+export function adminHubKeyboard(): TelegramInlineKeyboardMarkup {
   return inlineMenu([
     { text: MENU_LABEL.status, callback_data: ADMIN_STATUS_CALLBACK },
     [
       { text: MENU_LABEL.reports, callback_data: ADMIN_REPORTS_CALLBACK },
       { text: MENU_LABEL.queue, callback_data: ADMIN_QUEUE_CALLBACK },
     ],
+    { text: MENU_LABEL.store, callback_data: ADMIN_STORE_CALLBACK },
     { text: MENU_LABEL.failed, callback_data: ADMIN_FAILED_CALLBACK },
     { text: MENU_LABEL.catalog, callback_data: ADMIN_CATALOG_CALLBACK },
-    ...(catalogConsoleUrl === undefined ||
-    catalogConsoleUrl === null ||
-    catalogConsoleUrl.length === 0
-      ? []
-      : [{ text: 'کنسول کاتالوگ 🧩', web_app: { url: catalogConsoleUrl } }]),
     backToMenuButton(),
   ]);
-}
-
-export function catalogConsoleUrl(miniAppUrl: string | null): string | null {
-  if (miniAppUrl === null || miniAppUrl.length === 0) {
-    return null;
-  }
-  return new URL('console/', miniAppUrl.endsWith('/') ? miniAppUrl : `${miniAppUrl}/`).href;
 }
 
 export function adminQueueText(orders: readonly SalesOrder[]): string {
@@ -503,7 +659,7 @@ export function adminQueueText(orders: readonly SalesOrder[]): string {
 export function adminQueueKeyboard(orders: readonly SalesOrder[]): TelegramInlineKeyboardMarkup {
   return inlineMenu([
     ...orders.map((order) => ({
-      text: `${order.productName} — ${reviewStatusLabel(order.status)}`,
+      text: `${formatToman(order.amountIrr)} · ${reviewStatusLabel(order.status)}`,
       callback_data: `admin:order:${order.id}`,
     })),
     { text: MENU_LABEL.admin, callback_data: ADMIN_HUB_CALLBACK },
@@ -527,7 +683,7 @@ export function adminCatalogHealthText(input: {
     '<b>سلامت کاتالوگ</b>',
     `دسته‌های ریشهٔ منتشرشده: ${String(input.categoryCount)}`,
     input.cardPublished ? 'کارت کارت‌به‌کارت: منتشر شده' : 'کارت کارت‌به‌کارت: هنوز منتشر نشده',
-    'رقم کارت در این پیام نیست. انتشار از کنسول کاتالوگ است، نه از همین گفتگو.',
+    'رقم کارت در این پیام نیست. انتشار از «مدیریت فروشگاه» انجام می‌شود.',
   ].join('\n');
 }
 
@@ -545,12 +701,7 @@ export function backToMenuButton(): InlineButton {
 }
 
 export function formatMoney(amountIrr: bigint): string {
-  const rial = new Intl.NumberFormat('fa-IR').format(amountIrr);
-  if (amountIrr % 10n !== 0n) {
-    return `${rial} ریال`;
-  }
-  const toman = new Intl.NumberFormat('fa-IR').format(amountIrr / 10n);
-  return `${rial} ریال (${toman} تومان)`;
+  return formatTomanAmount(amountIrr);
 }
 
 function reviewStatusLabel(status: SalesOrderStatus): string {
@@ -570,12 +721,36 @@ function formatCardNumber(value: string): string {
   return value.match(/.{1,4}/gu)?.join(' ') ?? value;
 }
 
-function serializeInlineButton(button: InlineButton): TelegramInlineButton {
-  const text = buttonLabel(button.text);
-  if ('web_app' in button) {
-    return { text, web_app: button.web_app };
+function formatToman(amountIrr: bigint): string {
+  return formatCompactPrice(amountIrr);
+}
+
+function formatCompactPrice(amountIrr: bigint): string {
+  return formatTomanAmount(amountIrr);
+}
+
+function formatTomanAmount(amountIrr: bigint): string {
+  const formatter = new Intl.NumberFormat('fa-IR');
+  const negative = amountIrr < 0n;
+  const absoluteAmount = negative ? -amountIrr : amountIrr;
+  const toman = absoluteAmount / 10n;
+  const rialRemainder = absoluteAmount % 10n;
+  const sign = negative ? '-' : '';
+  if (rialRemainder === 0n) {
+    return `${sign}${formatter.format(toman)} تومان`;
   }
-  return { text, callback_data: button.callback_data };
+  return `${sign}${formatter.format(toman)}٫${formatter.format(rialRemainder)} تومان`;
+}
+
+function formatTrafficLabel(dataLimitBytes: bigint): string {
+  if (dataLimitBytes === 0n) {
+    return 'نامحدود';
+  }
+  return `${String(dataLimitBytes / 1024n ** 3n)} گیگ`;
+}
+
+function serializeInlineButton(button: InlineButton): TelegramInlineButton {
+  return { text: buttonLabel(button.text), callback_data: button.callback_data };
 }
 
 function pairButtons(buttons: readonly InlineButton[]): readonly InlineRow[] {

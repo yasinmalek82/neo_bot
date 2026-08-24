@@ -1,15 +1,28 @@
-import { timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import type {
   CommerceRepository,
   CommerceUseCase,
+  CatalogChatAdminUseCase,
   OpsDailySummaryUseCase,
   ReportingUseCase,
 } from '@neo-bot/application';
-import { DomainConflictError, type SalesOrder, type TelegramCustomerInput } from '@neo-bot/domain';
+import {
+  DomainConflictError,
+  type CatalogAdminSession,
+  type CatalogAdminDelta,
+  type CatalogAdminReadModel,
+  type CatalogAdminWizardState,
+  type ProviderGroupChoice,
+  type SalesOrder,
+  type StorefrontCatalog,
+  type SellableProductVariant,
+  type TelegramCustomerInput,
+} from '@neo-bot/domain';
 
 import type { TelegramConfig } from './config.js';
 import type { TelegramInlineKeyboardMarkup, TelegramMessenger } from './telegram-api.js';
+import { brandDeliveryCaption, brandWelcomeCaption } from './telegram-brand.js';
 import {
   ADMIN_CATALOG_CALLBACK,
   ADMIN_FAILED_CALLBACK,
@@ -17,6 +30,7 @@ import {
   ADMIN_QUEUE_CALLBACK,
   ADMIN_REPORTS_CALLBACK,
   ADMIN_STATUS_CALLBACK,
+  ADMIN_STORE_CALLBACK,
   ADMIN_SUMMARY_CALLBACK,
   adminCatalogHealthText,
   adminFailedProvisioningText,
@@ -28,22 +42,29 @@ import {
   adminReportsKeyboard,
   adminReportsText,
   adminStatusText,
-  catalogConsoleUrl,
   backToMenuButton,
+  buttonLabel,
   catalogKeyboard,
   categoryBackButton,
   categoryText,
+  missingCategoryText,
   checkoutText,
+  invalidServiceUsernameBaseText,
+  serviceUsernamePromptText,
   columnKeyboard,
   dailySummaryQueuedText,
   emptyShopText,
   escapeHtml,
+  escapeWithin,
   formatMoney,
+  GUIDE_CALLBACK,
+  guideInlineKeyboard,
+  guideText,
   HELP_CALLBACK,
   helpText,
   HOME_CALLBACK,
-  homeInlineKeyboard,
   homeReplyKeyboard,
+  homeReturnText,
   homeText,
   matchMenuAction,
   MENU_LABEL,
@@ -53,16 +74,23 @@ import {
   orderStatusText,
   pairedKeyboard,
   paymentDetailsMissingText,
+  productPlansText,
   provisioningDelayedText,
   receiptAcceptedText,
   receiptConflictText,
   receiptPhotoHint,
+  receiptRejectedText,
   RENEW_CALLBACK,
+  RENEW_CONFIRM_CALLBACK,
+  renewalCompletedText,
   renewalFailedText,
+  renewalPreviewText,
+  serviceDeliveredText,
   SHOP_CALLBACK,
   shopBackButton,
   shopText,
   unknownTextHint,
+  variantListLabel,
   variantText,
 } from './telegram-menu.js';
 import { readTelegramIntakeHealth } from './telegram-intake.js';
@@ -85,14 +113,19 @@ interface MenuTarget {
   readonly messageId?: string;
 }
 
-interface PaymentSettingsReader {
+interface CatalogAdminReader {
   getPublicCatalog(): Promise<{
     readonly settings: { readonly cardNumber: string; readonly cardHolder: string };
   }>;
+  listProviderGroups(): Promise<readonly ProviderGroupChoice[]>;
 }
 
 export class TelegramCommerceBot {
   private readonly config: Extract<TelegramConfig, { readonly enabled: true }>;
+  private readonly pendingPurchaseUsername = new Map<
+    string,
+    { readonly variantId: string; readonly variantName: string }
+  >();
 
   public constructor(
     config: Extract<TelegramConfig, { readonly enabled: true }>,
@@ -100,7 +133,8 @@ export class TelegramCommerceBot {
     private readonly repository: CommerceRepository,
     private readonly serviceReader: ServiceReader,
     private readonly messenger: TelegramMessenger,
-    private readonly paymentSettings: PaymentSettingsReader,
+    private readonly catalogAdmin: CatalogAdminReader,
+    private readonly catalogChat: CatalogChatAdminUseCase,
     private readonly reporting: ReportingUseCase | null = null,
     private readonly dailySummary: OpsDailySummaryUseCase | null = null,
   ) {
@@ -168,16 +202,84 @@ export class TelegramCommerceBot {
       return;
     }
     await this.commerce.recordCustomerActivity(customer);
-    const action = matchMenuAction(message.text ?? '');
-    if (action === null) {
-      await this.present(
+    const pendingPurchase = this.pendingPurchaseUsername.get(customer.telegramUserId);
+    if (pendingPurchase !== undefined && (message.text ?? '').trim().length > 0) {
+      await this.completePendingPurchase(
+        update,
         target,
-        unknownTextHint(),
-        homeInlineKeyboard(this.isAdmin(customer.telegramUserId)),
+        customer,
+        message.text ?? '',
+        pendingPurchase,
       );
       return;
     }
-    await this.routeAction(action, target, customer, action === 'home');
+    if (this.isAdmin(customer.telegramUserId) && (message.text ?? '').trim().length > 0) {
+      const pendingStore = await this.catalogChat.getPendingSession(customer.telegramUserId);
+      if (pendingStore !== null) {
+        try {
+          await this.handleStoreText(
+            target,
+            customer.telegramUserId,
+            message.text ?? '',
+            pendingStore,
+            String(message.message_id),
+          );
+        } catch (error: unknown) {
+          if (!(error instanceof DomainConflictError)) throw error;
+          await this.present(
+            target,
+            `ورودی معتبر نیست.\n${this.storePrompt(pendingStore.state)}`,
+            columnKeyboard([{ text: 'لغو', callback_data: 'store:cancel' }]),
+          );
+        }
+        return;
+      }
+    }
+    const action = matchMenuAction(message.text ?? '');
+    if (action === null) {
+      await this.present(target, unknownTextHint(), columnKeyboard([backToMenuButton()]));
+      return;
+    }
+    await this.routeAction(action, target, customer, isFreshStartCommand(message.text));
+  }
+
+  private async completePendingPurchase(
+    update: TelegramUpdate,
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+    rawText: string,
+    pending: { readonly variantId: string; readonly variantName: string },
+  ): Promise<void> {
+    const baseName = rawText.trim().toLowerCase();
+    try {
+      const card = await this.readCheckoutCard();
+      const order = await this.commerce.beginCheckout({
+        customer,
+        productVariantId: pending.variantId,
+        idempotencyKey: `telegram:${String(update.update_id)}:buy:${pending.variantId}`,
+        serviceUsernameBase: baseName,
+      });
+      this.pendingPurchaseUsername.delete(customer.telegramUserId);
+      await this.present(
+        target,
+        checkoutText(order, card.cardNumber, card.cardHolder),
+        columnKeyboard([
+          { text: MENU_LABEL.order, callback_data: ORDER_CALLBACK },
+          backToMenuButton(),
+        ]),
+      );
+    } catch (error: unknown) {
+      if (error instanceof DomainConflictError && error.code === 'INVALID_SERVICE_USERNAME_BASE') {
+        await this.present(
+          target,
+          invalidServiceUsernameBaseText(),
+          columnKeyboard([shopBackButton(), backToMenuButton()]),
+        );
+        return;
+      }
+      this.pendingPurchaseUsername.delete(customer.telegramUserId);
+      throw error;
+    }
   }
 
   private async handleReceiptFile(
@@ -235,7 +337,7 @@ export class TelegramCommerceBot {
     const data = callback.data;
     const chatId = callback.message?.chat.id;
     if (data === undefined || chatId === undefined || callback.message?.chat.type !== 'private') {
-      await this.messenger.answerCallbackQuery(callback.id);
+      await this.answerCallbackBestEffort(callback.id);
       return;
     }
     const actorId = String(callback.from.id);
@@ -251,12 +353,16 @@ export class TelegramCommerceBot {
         await this.routeAction('home', target, customer, false);
       } else if (data === SHOP_CALLBACK) {
         await this.routeAction('shop', target, customer, false);
+      } else if (data === GUIDE_CALLBACK) {
+        await this.routeAction('guide', target, customer, false);
       } else if (data === HELP_CALLBACK) {
         await this.routeAction('help', target, customer, false);
       } else if (data === ORDER_CALLBACK) {
         await this.routeAction('order', target, customer, false);
       } else if (data === RENEW_CALLBACK) {
         await this.routeAction('renew', target, customer, false);
+      } else if (data === RENEW_CONFIRM_CALLBACK) {
+        await this.completeCustomerRenewal(target, customer);
       } else if (data === ADMIN_STATUS_CALLBACK) {
         await this.routeAction('status', target, customer, false);
       } else if (data === ADMIN_REPORTS_CALLBACK) {
@@ -265,6 +371,12 @@ export class TelegramCommerceBot {
         await this.routeAction('queue', target, customer, false);
       } else if (data === ADMIN_HUB_CALLBACK) {
         await this.routeAction('admin', target, customer, false);
+      } else if (data === ADMIN_STORE_CALLBACK) {
+        this.requireAdmin(actorId);
+        await this.showStoreHub(target, actorId);
+      } else if (data.startsWith('store:')) {
+        this.requireAdmin(actorId);
+        await this.handleStoreCallback(target, actorId, data);
       } else if (data === ADMIN_FAILED_CALLBACK) {
         this.requireAdmin(actorId);
         await this.showFailedProvisioning(target);
@@ -278,20 +390,23 @@ export class TelegramCommerceBot {
         this.requireAdmin(actorId);
         await this.showAdminOrder(target, data.slice('admin:order:'.length));
       } else if (/^cat:\d+$/u.test(data)) {
-        await this.showCategory(target, data.slice(4));
+        await this.showCategory(target, data.slice(4), customer);
+      } else if (/^product:\d+:\d+:\d+$/u.test(data)) {
+        const [, categoryId = '', productId = '', page = '0'] = data.split(':');
+        await this.showProductPlans(target, categoryId, productId, Number(page), customer);
       } else if (/^variant:\d+$/u.test(data)) {
-        await this.showVariant(target, data.slice(8));
+        await this.showVariant(target, data.slice(8), customer);
       } else if (/^buy:\d+$/u.test(data)) {
-        const card = await this.readCheckoutCard();
-        const order = await this.commerce.beginCheckout({
-          customer,
-          productVariantId: data.slice(4),
-          idempotencyKey: `telegram:${String(update.update_id)}:buy`,
+        const variantId = data.slice(4);
+        const variant = await this.commerce.getVariantForCustomer(variantId, customer);
+        this.pendingPurchaseUsername.set(customer.telegramUserId, {
+          variantId,
+          variantName: variant.name,
         });
         await this.present(
           target,
-          checkoutText(order, card.cardNumber, card.cardHolder),
-          columnKeyboard([backToMenuButton()]),
+          serviceUsernamePromptText(variant.name),
+          columnKeyboard([shopBackButton(), backToMenuButton()]),
         );
       } else if (/^admin:retry:\d+$/u.test(data)) {
         this.requireAdmin(actorId);
@@ -303,9 +418,9 @@ export class TelegramCommerceBot {
         this.requireAdmin(actorId);
         await this.completeRejection(data.slice(7), actorId, String(chatId));
       }
-      await this.messenger.answerCallbackQuery(callback.id);
+      await this.answerCallbackBestEffort(callback.id);
     } catch (error: unknown) {
-      await this.messenger.answerCallbackQuery(callback.id, customerSafeError(error));
+      await this.answerCallbackBestEffort(callback.id, customerSafeError(error));
       if (error instanceof DomainConflictError) {
         if (error.code === 'PAYMENT_DETAILS_MISSING') {
           await this.present(
@@ -339,14 +454,17 @@ export class TelegramCommerceBot {
     action: MenuAction,
     target: MenuTarget,
     customer: TelegramCustomerInput,
-    persistKeyboard: boolean,
+    showWelcomeMedia = false,
   ): Promise<void> {
     switch (action) {
       case 'home':
-        await this.showHome(target, customer.telegramUserId, persistKeyboard);
+        await this.showHome(target, customer.telegramUserId, showWelcomeMedia);
         return;
       case 'shop':
         await this.showRootCategories(target, this.isAdmin(customer.telegramUserId));
+        return;
+      case 'guide':
+        await this.present(target, guideText(), guideInlineKeyboard());
         return;
       case 'help':
         await this.present(target, helpText(), columnKeyboard([backToMenuButton()]));
@@ -355,7 +473,7 @@ export class TelegramCommerceBot {
         await this.showOrder(target, customer);
         return;
       case 'renew':
-        await this.completeCustomerRenewal(target, customer);
+        await this.showRenewalPreview(target, customer);
         return;
       case 'status':
       case 'reports':
@@ -364,30 +482,66 @@ export class TelegramCommerceBot {
         this.requireAdmin(customer.telegramUserId);
         await this.showAdmin(action, target);
         return;
+      case 'store':
+        this.requireAdmin(customer.telegramUserId);
+        this.requirePrivateTarget(target, customer);
+        await this.showStoreHub(target, customer.telegramUserId);
+        return;
+    }
+  }
+
+  private async answerCallbackBestEffort(callbackId: string, text?: string): Promise<void> {
+    try {
+      if (text === undefined) {
+        await this.messenger.answerCallbackQuery(callbackId);
+      } else {
+        await this.messenger.answerCallbackQuery(callbackId, text);
+      }
+    } catch {
+      // Callback acknowledgements can expire after the requested work already completed.
+    }
+  }
+
+  private requirePrivateTarget(target: MenuTarget, customer: TelegramCustomerInput): void {
+    if (target.chatId !== customer.privateChatId) {
+      throw new DomainConflictError('ADMIN_ACCESS_DENIED');
     }
   }
 
   private async showHome(
     target: MenuTarget,
     actorId: string,
-    persistKeyboard: boolean,
+    showWelcomeMedia: boolean,
   ): Promise<void> {
-    const admin = this.isAdmin(actorId);
-    await this.present(target, homeText(admin), homeInlineKeyboard(admin));
-    if (persistKeyboard && target.messageId === undefined) {
-      await this.messenger.sendMessage(
+    if (target.messageId !== undefined) {
+      await this.present(target, homeReturnText(), { inline_keyboard: [] });
+      return;
+    }
+    if (showWelcomeMedia) {
+      await this.sendBrandPhoto(
         target.chatId,
-        'دکمه‌های پایین صفحه همیشه در دسترس‌اند.',
-        homeReplyKeyboard(admin),
-        { parseMode: 'HTML' },
+        this.config.brandMedia.welcomePhotoFileId,
+        brandWelcomeCaption(),
       );
     }
+    const admin = this.isAdmin(actorId);
+    await this.messenger.sendMessage(target.chatId, homeText(admin), homeReplyKeyboard(admin), {
+      parseMode: 'HTML',
+    });
   }
 
   private async showRootCategories(target: MenuTarget, isAdmin: boolean): Promise<void> {
     const categories = await this.commerce.listCategories(null);
     if (categories.length === 0) {
-      await this.present(target, emptyShopText(isAdmin), columnKeyboard([backToMenuButton()]));
+      await this.present(
+        target,
+        emptyShopText(isAdmin),
+        columnKeyboard(
+          isAdmin
+            ? [{ text: MENU_LABEL.store, callback_data: ADMIN_STORE_CALLBACK }, backToMenuButton()]
+            : [backToMenuButton()],
+        ),
+      );
       return;
     }
     await this.present(
@@ -403,17 +557,16 @@ export class TelegramCommerceBot {
     );
   }
 
-  private async showCategory(target: MenuTarget, categoryId: string): Promise<void> {
+  private async showCategory(
+    target: MenuTarget,
+    categoryId: string,
+    customer: TelegramCustomerInput,
+  ): Promise<void> {
     const category = await this.repository.getCategory(categoryId);
     if (category === null) {
       await this.present(
         target,
-        categoryText({
-          name: 'دسته پیدا نشد',
-          description: '',
-          parentName: null,
-          hasItems: false,
-        }),
+        missingCategoryText(),
         catalogKeyboard([], [shopBackButton(), backToMenuButton()]),
       );
       return;
@@ -423,7 +576,7 @@ export class TelegramCommerceBot {
         ? Promise.resolve(null)
         : this.repository.getCategory(category.parentId),
       this.commerce.listCategories(categoryId),
-      this.commerce.listVariants(categoryId),
+      this.commerce.listVariantsForCustomer(categoryId, customer),
     ]);
     const hasItems = children.length > 0 || variants.length > 0;
     await this.present(
@@ -434,30 +587,124 @@ export class TelegramCommerceBot {
         parentName: parent?.name ?? null,
         hasItems,
       }),
-      catalogKeyboard(
-        [
-          ...children.map((child) => ({
-            text: child.name,
-            callback_data: `cat:${child.id}`,
-          })),
-          ...variants.map((variant) => ({
-            text: `${variant.name} — ${formatMoney(variant.priceIrr)}`,
-            callback_data: `variant:${variant.id}`,
-          })),
-        ],
-        [categoryBackButton(parent), backToMenuButton()],
-      ),
+      this.buildCategoryKeyboard(categoryId, children, variants, parent),
     );
   }
 
-  private async showVariant(target: MenuTarget, variantId: string): Promise<void> {
-    const variant = await this.commerce.getVariant(variantId);
+  private buildCategoryKeyboard(
+    categoryId: string,
+    children: readonly { readonly id: string; readonly name: string }[],
+    variants: readonly SellableProductVariant[],
+    parent: { readonly id: string; readonly name: string } | null,
+  ): TelegramInlineKeyboardMarkup {
+    const childItems = children.map((child) => ({
+      text: child.name,
+      callback_data: `cat:${child.id}`,
+    }));
+    const productGroups = new Map<string, { readonly id: string; readonly name: string }>();
+    for (const variant of variants) {
+      if (variant.productId !== undefined) {
+        productGroups.set(variant.productId, { id: variant.productId, name: variant.productName });
+      }
+    }
+    const productItems = [...productGroups.values()].map((product) => ({
+      text: product.name,
+      callback_data: `product:${categoryId}:${product.id}:0`,
+    }));
+    const variantItems = variants.map((variant) => ({
+      text: variantListLabel(variant),
+      callback_data: `variant:${variant.id}`,
+    }));
+    const footer = [categoryBackButton(parent), backToMenuButton()];
+
+    if (variantItems.length === 0) {
+      return catalogKeyboard(childItems, footer);
+    }
+
+    if (productItems.length > 0) {
+      return {
+        inline_keyboard: [
+          ...(childItems.length > 0 ? catalogKeyboard(childItems, []).inline_keyboard : []),
+          ...columnKeyboard(productItems).inline_keyboard,
+          ...catalogKeyboard([], footer).inline_keyboard,
+        ],
+      };
+    }
+
+    return {
+      inline_keyboard: [
+        ...(childItems.length > 0 ? catalogKeyboard(childItems, []).inline_keyboard : []),
+        ...columnKeyboard(variantItems).inline_keyboard,
+        ...catalogKeyboard([], footer).inline_keyboard,
+      ],
+    };
+  }
+
+  private async showProductPlans(
+    target: MenuTarget,
+    categoryId: string,
+    productId: string,
+    requestedPage: number,
+    customer: TelegramCustomerInput,
+  ): Promise<void> {
+    const variants = (await this.commerce.listVariantsForCustomer(categoryId, customer)).filter(
+      (variant) => variant.productId === productId,
+    );
+    if (variants.length === 0) {
+      await this.showCategory(target, categoryId, customer);
+      return;
+    }
+    const pageCount = Math.ceil(variants.length / 3);
+    const page = Math.max(0, Math.min(requestedPage, pageCount - 1));
+    const selected = variants.slice(page * 3, page * 3 + 3);
+    await this.present(
+      target,
+      productPlansText({
+        productName: variants[0]?.productName ?? 'محصول',
+        planCount: variants.length,
+        page,
+        pageCount,
+        variants: selected,
+      }),
+      columnKeyboard([
+        ...selected.map((variant) => ({
+          text: variantListLabel(variant),
+          callback_data: `variant:${variant.id}`,
+        })),
+        ...(page > 0
+          ? [
+              {
+                text: 'پلن‌های قبلی ◀',
+                callback_data: `product:${categoryId}:${productId}:${String(page - 1)}`,
+              },
+            ]
+          : []),
+        ...(page + 1 < pageCount
+          ? [
+              {
+                text: 'پلن‌های بعدی ▶',
+                callback_data: `product:${categoryId}:${productId}:${String(page + 1)}`,
+              },
+            ]
+          : []),
+        { text: 'بازگشت به دسته ⬅️', callback_data: `cat:${categoryId}` },
+        shopBackButton(),
+      ]),
+    );
+  }
+
+  private async showVariant(
+    target: MenuTarget,
+    variantId: string,
+    customer: TelegramCustomerInput,
+  ): Promise<void> {
+    const variant = await this.commerce.getVariantForCustomer(variantId, customer);
     await this.present(
       target,
       variantText(variant),
       columnKeyboard([
         { text: 'ادامه و دریافت شماره کارت 💳', callback_data: `buy:${variant.id}` },
-        { text: 'دسته‌ها ⬅️', callback_data: SHOP_CALLBACK },
+        shopBackButton(),
       ]),
     );
   }
@@ -465,15 +712,7 @@ export class TelegramCommerceBot {
   private async showOrder(target: MenuTarget, customer: TelegramCustomerInput): Promise<void> {
     const recorded = await this.commerce.recordCustomerActivity(customer);
     const order = await this.repository.getOpenOrderForCustomer(recorded.customer.id);
-    await this.present(
-      target,
-      orderStatusText(order),
-      columnKeyboard(
-        order === null
-          ? [{ text: MENU_LABEL.shop, callback_data: SHOP_CALLBACK }, backToMenuButton()]
-          : [backToMenuButton()],
-      ),
-    );
+    await this.present(target, orderStatusText(order), this.orderKeyboard(order));
   }
 
   private async showAdmin(
@@ -520,10 +759,1449 @@ export class TelegramCommerceBot {
       await this.present(target, adminQueueText(orders), adminQueueKeyboard(orders));
       return;
     }
+    await this.present(target, adminHubText(), adminHubKeyboard());
+  }
+
+  private async showStoreHub(target: MenuTarget, adminId: string): Promise<void> {
+    const [model, pending] = await Promise.all([
+      this.catalogChat.getReadModel(),
+      this.catalogChat.getPendingSession(adminId),
+    ]);
     await this.present(
       target,
-      adminHubText(),
-      adminHubKeyboard(catalogConsoleUrl(this.config.miniAppUrl)),
+      [
+        '<b>NEO NETWORK — مدیریت فروشگاه</b>',
+        `دسته‌ها: ${String(model.categories.length)} | محصولات: ${String(model.products.length)} | پلن‌ها: ${String(model.variants.length)}`,
+        'یک کار را انتخاب کن. هر تغییر ابتدا پیش‌نمایش می‌شود و فقط با «انتشار نهایی» اعمال می‌شود.',
+      ].join('\n'),
+      columnKeyboard([
+        { text: 'دسته‌ها', callback_data: 'store:list:c:0' },
+        { text: 'محصولات', callback_data: 'store:list:p:0' },
+        { text: 'پلن‌ها', callback_data: 'store:list:v:0' },
+        { text: 'ساخت سریع', callback_data: 'store:create' },
+        { text: 'تنظیمات فروش و کارت', callback_data: 'store:new:settings' },
+        { text: 'بایگانی و بازگردانی', callback_data: 'store:list:a:0' },
+        { text: 'سلامت گروه‌ها', callback_data: 'store:groups:0' },
+        { text: 'نمای فروشگاه', callback_data: 'store:preview' },
+        ...(pending === null ? [] : [{ text: 'ادامه فرم باز', callback_data: 'store:resume' }]),
+        { text: MENU_LABEL.admin, callback_data: ADMIN_HUB_CALLBACK },
+      ]),
+    );
+  }
+
+  private async handleStoreCallback(
+    target: MenuTarget,
+    adminId: string,
+    data: string,
+  ): Promise<void> {
+    if (data === 'store:cancel') {
+      const session = await this.catalogChat.getPendingSession(adminId);
+      if (session !== null)
+        await this.catalogChat.cancelSession({
+          id: session.id,
+          adminTelegramUserId: adminId,
+          now: new Date(),
+        });
+      await this.showStoreHub(target, adminId);
+      return;
+    }
+    if (data === 'store:resume') {
+      const session = await this.catalogChat.getPendingSession(adminId);
+      if (session === null) return this.showStoreHub(target, adminId);
+      await this.renderStoreSession(target, adminId, session, true);
+      return;
+    }
+    if (data === 'store:create') {
+      await this.present(
+        target,
+        'مورد جدید را انتخاب کن.',
+        columnKeyboard([
+          { text: 'دسته + محصول + پلن', callback_data: 'store:new:guided' },
+          { text: 'دسته', callback_data: 'store:new:category' },
+          { text: 'محصول', callback_data: 'store:new:product' },
+          { text: 'پلن', callback_data: 'store:new:variant' },
+          { text: 'مدیریت فروشگاه', callback_data: ADMIN_STORE_CALLBACK },
+        ]),
+      );
+      return;
+    }
+    if (/^store:list:[cpva]:\d+$/u.test(data)) {
+      const [, , kind, page] = data.split(':');
+      await this.showStoreList(target, kind as 'c' | 'p' | 'v' | 'a', Number(page));
+      return;
+    }
+    if (/^store:enable:v:\d+$/u.test(data)) {
+      await this.startStoreEnableVariant(target, adminId, data.slice('store:enable:v:'.length));
+      return;
+    }
+    if (/^store:detail:[cpv]:\d+$/u.test(data)) {
+      const [, , kind = '', id = ''] = data.split(':');
+      await this.showStoreDetail(target, kind as 'c' | 'p' | 'v', id);
+      return;
+    }
+    if (/^store:customer:[cpv]:\d+$/u.test(data)) {
+      const [, , kind = '', id = ''] = data.split(':');
+      await this.showStoreCustomerPreview(target, kind as 'c' | 'p' | 'v', id);
+      return;
+    }
+    if (/^store:edit:[cpv]:\d+$/u.test(data)) {
+      const [, , kind = '', id = ''] = data.split(':');
+      await this.startStoreEdit(target, adminId, kind as 'c' | 'p' | 'v', id);
+      return;
+    }
+    if (/^store:move:[cpv]:\d+:(up|down)$/u.test(data)) {
+      const [, , kind = '', id = '', direction = ''] = data.split(':');
+      await this.startStoreReorder(
+        target,
+        adminId,
+        kind as 'c' | 'p' | 'v',
+        id,
+        direction as 'up' | 'down',
+      );
+      return;
+    }
+    if (
+      /^store:field:[cpv]:(name|description|position|shortName|badge|durationDays|groupIds|displayAttributes)$/u.test(
+        data,
+      )
+    ) {
+      const [, , kind = '', field = ''] = data.split(':');
+      await this.selectStoreDraftField(target, adminId, kind as 'c' | 'p' | 'v', field);
+      return;
+    }
+    if (data === 'store:draft:review') {
+      await this.reviewStoreDraft(target, adminId);
+      return;
+    }
+    if (/^store:action:(archive|restore):[cpv]:\d+$/u.test(data)) {
+      const [, , action = '', kind = '', id = ''] = data.split(':');
+      await this.startStoreReviewForEntity(
+        target,
+        adminId,
+        action as 'archive' | 'restore',
+        kind as 'c' | 'p' | 'v',
+        id,
+      );
+      return;
+    }
+    if (data === 'store:publish') {
+      const session = await this.catalogChat.getPendingSession(adminId);
+      if (session === null) throw new DomainConflictError('CATALOG_ADMIN_SESSION_NOT_FOUND');
+      const published = await this.catalogChat.publishSession({
+        id: session.id,
+        adminTelegramUserId: adminId,
+        now: new Date(),
+      });
+      await this.present(
+        target,
+        `<b>منتشر شد</b>\nنسخهٔ کاتالوگ: ${String(published.revision)}`,
+        columnKeyboard([{ text: 'مدیریت فروشگاه', callback_data: ADMIN_STORE_CALLBACK }]),
+      );
+      return;
+    }
+    if (data === 'store:preview') {
+      await this.showStorePreview(target, 0);
+      return;
+    }
+    if (/^store:preview:\d+$/u.test(data)) {
+      await this.showStorePreview(target, Number(data.slice('store:preview:'.length)));
+      return;
+    }
+    if (/^store:groups:\d+$/u.test(data)) {
+      await this.showProviderHealth(target, Number(data.slice('store:groups:'.length)));
+      return;
+    }
+    if (data === 'store:new:category') {
+      await this.startStoreSession(target, adminId, {
+        kind: 'category',
+        step: 'category-fields',
+        field: 'select',
+        mode: 'edit',
+        values: { code: generatedCatalogCode('cat') },
+      });
+      return;
+    }
+    if (data === 'store:new:guided') {
+      await this.startStoreGuidedChangeset(target, adminId);
+      return;
+    }
+    if (data === 'store:new:product') {
+      await this.startStoreProduct(target, adminId);
+      return;
+    }
+    if (data === 'store:new:variant') {
+      await this.startStoreVariant(target, adminId);
+      return;
+    }
+    if (data === 'store:new:settings') {
+      await this.startStoreSettings(target, adminId);
+      return;
+    }
+    if (data === 'store:pick:category') {
+      await this.showPicker(target, 'category', 0);
+      return;
+    }
+    if (/^store:picker:(category|product):\d+$/u.test(data)) {
+      const [, , kind, page] = data.split(':');
+      await this.showPicker(target, kind as 'category' | 'product', Number(page));
+      return;
+    }
+    if (/^store:pick:category:\d+:\d+$/u.test(data)) {
+      const [, , , id] = data.split(':');
+      const category = (await this.catalogChat.getReadModel()).categories.find(
+        (item) => item.id === id,
+      );
+      if (category === undefined) throw new DomainConflictError('CATEGORY_NOT_FOUND');
+      await this.advanceStoreSession(target, adminId, (session) => ({
+        kind: 'product',
+        step: 'product-fields',
+        field: 'select',
+        mode: 'edit',
+        values: { ...storeValues(session.state), categoryCode: category.code },
+      }));
+      return;
+    }
+    if (data === 'store:pick:product') {
+      await this.showPicker(target, 'product', 0);
+      return;
+    }
+    if (/^store:pick:product:\d+:\d+$/u.test(data)) {
+      const [, , , id] = data.split(':');
+      const product = (await this.catalogChat.getReadModel()).products.find(
+        (item) => item.id === id,
+      );
+      if (product === undefined) throw new DomainConflictError('PRODUCT_NOT_FOUND');
+      await this.present(
+        target,
+        'نوع پلن را انتخاب کن.',
+        columnKeyboard([
+          { text: 'حجمی', callback_data: `store:template:volume:${product.id}` },
+          { text: 'نامحدود', callback_data: `store:template:unlimited:${product.id}` },
+          { text: 'مولتی‌کانکشن', callback_data: `store:template:multi:${product.id}` },
+          { text: 'سفارشی', callback_data: `store:template:custom:${product.id}` },
+          { text: 'لغو', callback_data: 'store:cancel' },
+        ]),
+      );
+      return;
+    }
+    if (/^store:template:(volume|unlimited|multi|custom):\d+$/u.test(data)) {
+      await this.applyVariantTemplate(target, adminId, data);
+      return;
+    }
+    if (/^store:g:\d+$/u.test(data)) {
+      await this.toggleProviderGroup(target, adminId, Number(data.slice('store:g:'.length)));
+      return;
+    }
+    if (data === 'store:g:done') {
+      await this.finishProviderGroups(target, adminId);
+      return;
+    }
+    if (/^store:gpage:\d+$/u.test(data)) {
+      await this.showProviderGroups(
+        target,
+        adminId,
+        undefined,
+        Number(data.slice('store:gpage:'.length)),
+      );
+      return;
+    }
+  }
+
+  private async startStoreSession(
+    target: MenuTarget,
+    adminId: string,
+    state: CatalogAdminWizardState,
+  ): Promise<void> {
+    try {
+      const session = await this.catalogChat.startSession({
+        id: randomUUID(),
+        adminTelegramUserId: adminId,
+        now: new Date(),
+      });
+      await this.catalogChat.updateSession({
+        id: session.id,
+        adminTelegramUserId: adminId,
+        state,
+        now: new Date(),
+      });
+      await this.renderStoreSession(target, adminId, { ...session, state }, false);
+    } catch (error: unknown) {
+      if (error instanceof DomainConflictError && error.code === 'CATALOG_ADMIN_SESSION_ACTIVE') {
+        const existing = await this.catalogChat.getPendingSession(adminId);
+        if (existing !== null) {
+          await this.renderStoreSession(target, adminId, existing, true);
+          return;
+        }
+      }
+      throw error;
+    }
+  }
+
+  private async startStoreProduct(target: MenuTarget, adminId: string): Promise<void> {
+    if ((await this.catalogChat.getReadModel()).categories.length === 0)
+      throw new DomainConflictError('CATEGORY_NOT_FOUND');
+    await this.startStoreSession(target, adminId, {
+      kind: 'product',
+      step: 'product-fields',
+      field: 'categoryCode',
+      values: { code: generatedCatalogCode('product') },
+    });
+    await this.showPicker(target, 'category', 0);
+  }
+  private async startStoreVariant(target: MenuTarget, adminId: string): Promise<void> {
+    if ((await this.catalogChat.getReadModel()).products.length === 0)
+      throw new DomainConflictError('PRODUCT_NOT_FOUND');
+    await this.startStoreSession(target, adminId, {
+      kind: 'variant',
+      step: 'variant-fields',
+      field: 'productCode',
+      values: { code: generatedCatalogCode('plan') },
+    });
+    await this.showPicker(target, 'product', 0);
+  }
+  private async startStoreGuidedChangeset(target: MenuTarget, adminId: string): Promise<void> {
+    await this.startStoreSession(target, adminId, {
+      kind: 'changeset',
+      step: 'guided-fields',
+      field: 'categoryName',
+      values: {
+        categoryCode: generatedCatalogCode('cat'),
+        productCode: generatedCatalogCode('product'),
+        variantCode: generatedCatalogCode('plan'),
+      },
+    });
+  }
+  private async startStoreSettings(target: MenuTarget, adminId: string): Promise<void> {
+    const settings = (await this.catalogAdmin.getPublicCatalog()).settings;
+    await this.startStoreSession(target, adminId, {
+      kind: 'settings',
+      step: 'settings-fields',
+      field: 'brandName',
+      values: { ...settings },
+    });
+  }
+  private async advanceStoreSession(
+    target: MenuTarget,
+    adminId: string,
+    next: (session: CatalogAdminSession) => CatalogAdminWizardState,
+  ): Promise<void> {
+    const session = await this.catalogChat.getPendingSession(adminId);
+    if (session === null) throw new DomainConflictError('CATALOG_ADMIN_SESSION_NOT_FOUND');
+    const state = next(session);
+    await this.catalogChat.updateSession({
+      id: session.id,
+      adminTelegramUserId: adminId,
+      state,
+      now: new Date(),
+    });
+    await this.renderStoreSession(target, adminId, { ...session, state }, false);
+  }
+
+  private async renderStoreSession(
+    target: MenuTarget,
+    adminId: string,
+    session: CatalogAdminSession,
+    resumed: boolean,
+  ): Promise<void> {
+    const state = session.state;
+    if (
+      (state.kind === 'category' || state.kind === 'product' || state.kind === 'variant') &&
+      state.field === 'select'
+    ) {
+      await this.showStoreDraftFields(target, state);
+      return;
+    }
+    if (state.kind === 'product' && state.field === 'categoryCode') {
+      await this.showPicker(target, 'category', 0);
+      return;
+    }
+    if (state.kind === 'variant' && state.field === 'productCode') {
+      await this.showPicker(target, 'product', 0);
+      return;
+    }
+    if (state.kind === 'variant' && state.field === 'groupIds') {
+      await this.showProviderGroups(target, adminId);
+      return;
+    }
+    if (state.kind === 'changeset' && state.field === 'groupIds') {
+      await this.showProviderGroups(target, adminId);
+      return;
+    }
+    await this.present(
+      target,
+      state.kind === 'review'
+        ? await this.storeReviewText(state)
+        : `${this.storePrompt(state)}${resumed ? '\n\nفرم ذخیره‌شده ادامه دارد.' : ''}`,
+      state.kind === 'review'
+        ? columnKeyboard([
+            { text: 'انتشار نهایی', callback_data: 'store:publish' },
+            { text: 'لغو', callback_data: 'store:cancel' },
+          ])
+        : columnKeyboard([{ text: 'لغو', callback_data: 'store:cancel' }]),
+    );
+  }
+
+  private async handleStoreText(
+    target: MenuTarget,
+    adminId: string,
+    raw: string,
+    session: CatalogAdminSession,
+    messageId: string,
+  ): Promise<void> {
+    const text = raw.trim();
+    if (session.state.kind === 'changeset') {
+      const values = session.state.values;
+      if (session.state.field === 'categoryName')
+        return this.advanceStoreSession(target, adminId, () => ({
+          kind: 'changeset',
+          step: 'guided-fields',
+          field: 'productName',
+          values: { ...values, categoryName: text },
+        }));
+      if (session.state.field === 'productName')
+        return this.advanceStoreSession(target, adminId, () => ({
+          kind: 'changeset',
+          step: 'guided-fields',
+          field: 'variantSpec',
+          values: { ...values, productName: text },
+        }));
+      if (session.state.field === 'variantSpec') {
+        const parsed = parseCustomVariant(text);
+        return this.beginVariantDisplayCopy(target, adminId, { ...values, ...parsed });
+      }
+      if (session.state.field === 'variantName')
+        return this.advanceStoreSession(target, adminId, () => ({
+          kind: 'changeset',
+          step: 'guided-fields',
+          field: 'variantDescription',
+          values: { ...values, variantName: text === '-' ? '' : text },
+        }));
+      if (session.state.field === 'variantDescription')
+        return this.advanceStoreSession(target, adminId, () => ({
+          kind: 'changeset',
+          step: 'guided-fields',
+          field: 'displayAttributes',
+          values: { ...values, variantDescription: text === '-' ? '' : text },
+        }));
+      if (session.state.field === 'displayAttributes') {
+        return this.showProviderGroups(target, adminId, {
+          ...values,
+          displayAttributes: parseDisplayAttributes(text),
+        });
+      }
+    }
+    if (session.state.kind === 'category') {
+      const values = session.state.values;
+      if (session.state.field === 'name')
+        if (session.state.mode === 'edit')
+          return this.returnToStoreDraftFields(target, adminId, 'category', {
+            ...values,
+            name: text,
+          });
+        else
+          return this.advanceStoreSession(target, adminId, () => ({
+            kind: 'category',
+            step: 'category-fields',
+            field: 'description',
+            values: { ...values, name: text },
+          }));
+      if (session.state.field === 'description')
+        if (session.state.mode === 'edit')
+          return this.returnToStoreDraftFields(target, adminId, 'category', {
+            ...values,
+            description: text === '-' ? '' : text,
+          });
+        else
+          return this.advanceStoreSession(target, adminId, () => ({
+            kind: 'category',
+            step: 'category-fields',
+            field: 'position',
+            values: { ...values, description: text === '-' ? '' : text },
+          }));
+      if (session.state.mode === 'edit')
+        return this.returnToStoreDraftFields(target, adminId, 'category', {
+          ...values,
+          position: parsePersianInteger(text),
+        });
+      return this.advanceStoreSession(target, adminId, () => ({
+        kind: 'review',
+        step: 'confirm',
+        delta: {
+          kind: 'category',
+          code: requiredStoreString(values.code),
+          name: requiredStoreString(values.name),
+          description: values.description ?? '',
+          position: parsePersianInteger(text),
+        },
+      }));
+    }
+    if (session.state.kind === 'product') {
+      const values = session.state.values;
+      if (session.state.field === 'name')
+        if (session.state.mode === 'edit')
+          return this.returnToStoreDraftFields(target, adminId, 'product', {
+            ...values,
+            name: text,
+          });
+        else
+          return this.advanceStoreSession(target, adminId, () => ({
+            kind: 'product',
+            step: 'product-fields',
+            field: 'shortName',
+            values: { ...values, name: text },
+          }));
+      if (session.state.field === 'shortName')
+        if (session.state.mode === 'edit')
+          return this.returnToStoreDraftFields(target, adminId, 'product', {
+            ...values,
+            shortName: text,
+          });
+        else
+          return this.advanceStoreSession(target, adminId, () => ({
+            kind: 'product',
+            step: 'product-fields',
+            field: 'description',
+            values: { ...values, shortName: text },
+          }));
+      if (session.state.field === 'description')
+        if (session.state.mode === 'edit')
+          return this.returnToStoreDraftFields(target, adminId, 'product', {
+            ...values,
+            description: text === '-' ? '' : text,
+          });
+        else
+          return this.advanceStoreSession(target, adminId, () => ({
+            kind: 'product',
+            step: 'product-fields',
+            field: 'badge',
+            values: { ...values, description: text === '-' ? '' : text },
+          }));
+      if (session.state.field === 'badge')
+        if (session.state.mode === 'edit')
+          return this.returnToStoreDraftFields(target, adminId, 'product', {
+            ...values,
+            badge: text === '-' ? null : text,
+          });
+        else
+          return this.advanceStoreSession(target, adminId, () => ({
+            kind: 'review',
+            step: 'confirm',
+            delta: {
+              kind: 'product',
+              code: requiredStoreString(values.code),
+              categoryCode: requiredStoreString(values.categoryCode),
+              name: requiredStoreString(values.name),
+              shortName: values.shortName ?? requiredStoreString(values.name),
+              description: values.description ?? '',
+              badge: text === '-' ? null : text,
+              iconKey: values.iconKey ?? 'globe',
+              position: values.position ?? 0,
+              active: values.active ?? true,
+            },
+          }));
+    }
+    if (session.state.kind === 'settings') {
+      if (session.state.field === 'cardNumber')
+        await this.messenger.deleteMessage?.(target.chatId, messageId).catch(() => undefined);
+      const values = {
+        ...session.state.values,
+        [session.state.field]:
+          session.state.field === 'cardNumber' ? normalizeNumericText(text) : text,
+      };
+      const fields: (keyof typeof values)[] = [
+        'brandName',
+        'heroTitle',
+        'heroSubtitle',
+        'deliveryNote',
+        'supportNote',
+        'volumeHelper',
+        'cardNumber',
+        'cardHolder',
+      ];
+      const next = fields[fields.indexOf(session.state.field) + 1];
+      if (next === undefined)
+        return this.advanceStoreSession(target, adminId, () => ({
+          kind: 'review',
+          step: 'confirm',
+          delta: { kind: 'settings', settings: values as StorefrontCatalog['settings'] },
+        }));
+      return this.advanceStoreSession(target, adminId, () => ({
+        kind: 'settings',
+        step: 'settings-fields',
+        field: next,
+        values,
+      }));
+    }
+    if (session.state.kind === 'variant' && session.state.field === 'name') {
+      const values = session.state.values;
+      if (session.state.mode !== 'edit')
+        return this.advanceStoreSession(target, adminId, () => ({
+          kind: 'variant',
+          step: 'variant-fields',
+          field: 'description',
+          values: { ...values, name: text === '-' ? '' : text },
+        }));
+      return this.returnToStoreDraftFields(target, adminId, 'variant', {
+        ...values,
+        name: text,
+      });
+    }
+    if (session.state.kind === 'variant' && session.state.field === 'displayAttributes') {
+      const values = { ...session.state.values, displayAttributes: parseDisplayAttributes(text) };
+      if (session.state.mode === 'edit')
+        return this.returnToStoreDraftFields(target, adminId, 'variant', values);
+      return this.showProviderGroups(target, adminId, values);
+    }
+    if (session.state.kind === 'variant' && session.state.field === 'description') {
+      const values = session.state.values;
+      if (session.state.mode !== 'edit')
+        return this.advanceStoreSession(target, adminId, () => ({
+          kind: 'variant',
+          step: 'variant-fields',
+          field: 'displayAttributes',
+          values: { ...values, description: text === '-' ? '' : text },
+        }));
+      return this.returnToStoreDraftFields(target, adminId, 'variant', {
+        ...values,
+        description: text === '-' ? '' : text,
+      });
+    }
+    if (session.state.kind === 'variant' && session.state.field === 'durationDays') {
+      const parsed = parseCustomVariant(text);
+      const current = session.state.values;
+      if (session.state.mode === 'edit')
+        return this.returnToStoreDraftFields(target, adminId, 'variant', { ...current, ...parsed });
+      return this.beginVariantDisplayCopy(target, adminId, {
+        ...current,
+        ...parsed,
+        code: current.code ?? generatedCatalogCode('plan'),
+        position: current.position ?? 0,
+        sellable: current.sellable ?? true,
+      });
+    }
+    await this.present(
+      target,
+      this.storePrompt(session.state),
+      columnKeyboard([{ text: 'لغو', callback_data: 'store:cancel' }]),
+    );
+  }
+
+  private async applyVariantTemplate(
+    target: MenuTarget,
+    adminId: string,
+    data: string,
+  ): Promise<void> {
+    const [, , template, productId] = data.split(':');
+    const product = (await this.catalogChat.getReadModel()).products.find(
+      (item) => item.id === productId,
+    );
+    if (product === undefined) throw new DomainConflictError('PRODUCT_NOT_FOUND');
+    const base =
+      template === 'unlimited'
+        ? { dataLimitBytes: 0n, durationDays: 30, deviceLimit: 1, priceIrr: 1_000_000n }
+        : template === 'multi'
+          ? {
+              dataLimitBytes: 50n * 1024n ** 3n,
+              durationDays: 30,
+              deviceLimit: 3,
+              priceIrr: 1_500_000n,
+            }
+          : template === 'custom'
+            ? null
+            : {
+                dataLimitBytes: 30n * 1024n ** 3n,
+                durationDays: 30,
+                deviceLimit: 1,
+                priceIrr: 900_000n,
+              };
+    if (base === null) {
+      await this.advanceStoreSession(target, adminId, (session) => ({
+        kind: 'variant',
+        step: 'variant-fields',
+        field: 'durationDays',
+        values: { ...storeValues(session.state), productCode: product.code },
+      }));
+      return;
+    }
+    await this.beginVariantDisplayCopy(target, adminId, {
+      code: generatedCatalogCode('plan'),
+      productCode: product.code,
+      ...base,
+      position: 0,
+      sellable: true,
+    });
+  }
+  private async beginVariantDisplayCopy(
+    target: MenuTarget,
+    adminId: string,
+    values: Record<string, unknown>,
+  ): Promise<void> {
+    await this.advanceStoreSession(target, adminId, (session) => {
+      if (session.state.kind === 'changeset')
+        return { kind: 'changeset', step: 'guided-fields', field: 'variantName', values };
+      return { kind: 'variant', step: 'variant-fields', field: 'name', values };
+    });
+  }
+  private async showProviderGroups(
+    target: MenuTarget,
+    adminId: string,
+    values?: Record<string, unknown>,
+    requestedPage = 0,
+  ): Promise<void> {
+    const groups = (await this.catalogAdmin.listProviderGroups()).filter(
+      (item) => item.available && !item.disabled,
+    );
+    if (groups.length === 0) throw new DomainConflictError('PROVIDER_GROUP_NOT_AVAILABLE');
+    if (values !== undefined) {
+      await this.advanceStoreSession(target, adminId, (current) =>
+        current.state.kind === 'changeset'
+          ? { kind: 'changeset', step: 'guided-fields', field: 'groupIds', values }
+          : { kind: 'variant', step: 'variant-fields', field: 'groupIds', values },
+      );
+    }
+    const session = await this.catalogChat.getPendingSession(adminId);
+    if (session?.state.kind !== 'variant' && session?.state.kind !== 'changeset')
+      throw new DomainConflictError('CATALOG_ADMIN_SESSION_NOT_FOUND');
+    const selected = new Set(session.state.values.groupIds ?? []);
+    const pageCount = Math.max(1, Math.ceil(groups.length / 8));
+    const page = Math.max(0, Math.min(requestedPage, pageCount - 1));
+    const rows = groups.slice(page * 8, page * 8 + 8);
+    await this.present(
+      target,
+      'گروه‌های فعال PasarGuard را انتخاب کن. فقط گروه‌های یک ارائه‌دهنده را می‌توانی هم‌زمان انتخاب کنی.',
+      columnKeyboard([
+        ...rows.map((group) => ({
+          text: `${selected.has(group.groupId) ? '✓ ' : ''}${buttonLabel(group.name)}`,
+          callback_data: `store:g:${String(group.groupId)}`,
+        })),
+        { text: '◀', callback_data: `store:gpage:${String(Math.max(0, page - 1))}` },
+        { text: `${String(page + 1)}/${String(pageCount)}`, callback_data: 'store:g:done' },
+        { text: '▶', callback_data: `store:gpage:${String(Math.min(pageCount - 1, page + 1))}` },
+        { text: 'تأیید گروه‌ها', callback_data: 'store:g:done' },
+        { text: 'لغو', callback_data: 'store:cancel' },
+      ]),
+    );
+  }
+
+  private async toggleProviderGroup(
+    target: MenuTarget,
+    adminId: string,
+    groupId: number,
+  ): Promise<void> {
+    const groups = (await this.catalogAdmin.listProviderGroups()).filter(
+      (item) => item.available && !item.disabled,
+    );
+    const selectedGroup = groups.find((item) => item.groupId === groupId);
+    if (selectedGroup === undefined) throw new DomainConflictError('PROVIDER_GROUP_NOT_AVAILABLE');
+    await this.advanceStoreSession(target, adminId, (session) => {
+      if (session.state.kind !== 'variant' && session.state.kind !== 'changeset')
+        throw new DomainConflictError('CATALOG_ADMIN_SESSION_INCOMPLETE');
+      const selected = new Set(session.state.values.groupIds ?? []);
+      const existing = groups.filter((item) => selected.has(item.groupId));
+      const existingProviderCode = existing[0]?.providerCode;
+      if (existingProviderCode !== undefined && existingProviderCode !== selectedGroup.providerCode)
+        throw new DomainConflictError('PROVIDER_GROUP_MIXED_PROVIDER');
+      if (selected.has(groupId)) selected.delete(groupId);
+      else selected.add(groupId);
+      const values = { ...session.state.values, groupIds: [...selected] };
+      if (selected.size === 0) delete values.providerCode;
+      else values.providerCode = selectedGroup.providerCode;
+      return session.state.kind === 'changeset'
+        ? { kind: 'changeset', step: 'guided-fields', field: 'groupIds', values }
+        : { kind: 'variant', step: 'variant-fields', field: 'groupIds', values };
+    });
+    await this.showProviderGroups(target, adminId);
+  }
+
+  private async finishProviderGroups(target: MenuTarget, adminId: string): Promise<void> {
+    const session = await this.catalogChat.getPendingSession(adminId);
+    if (session?.state.kind !== 'variant' && session?.state.kind !== 'changeset')
+      throw new DomainConflictError('PROVIDER_GROUP_NOT_AVAILABLE');
+    if (
+      typeof session.state.values.providerCode !== 'string' ||
+      session.state.values.providerCode.length === 0 ||
+      session.state.values.groupIds?.length === 0
+    )
+      throw new DomainConflictError('PROVIDER_GROUP_NOT_AVAILABLE');
+    if (session.state.kind === 'variant' && session.state.mode === 'edit') {
+      await this.returnToStoreDraftFields(target, adminId, 'variant', { ...session.state.values });
+      return;
+    }
+    await this.advanceStoreSession(target, adminId, (current) =>
+      current.state.kind === 'changeset'
+        ? this.reviewGuidedChangeset(storeValues(current.state))
+        : this.reviewVariant(storeValues(current.state)),
+    );
+  }
+  private reviewVariant(values: Record<string, unknown>): CatalogAdminWizardState {
+    const dataLimitBytes = values['dataLimitBytes'] as bigint;
+    const durationDays = values['durationDays'] as number;
+    const deviceLimit = values['deviceLimit'] as number;
+    return {
+      kind: 'review',
+      step: 'confirm',
+      delta: {
+        kind: 'variant',
+        code: values['code'] as string,
+        productCode: values['productCode'] as string,
+        name: displayVariantName(values['name'], { dataLimitBytes, durationDays, deviceLimit }),
+        description: (values['description'] as string | undefined) ?? '',
+        durationDays,
+        dataLimitBytes,
+        deviceLimit,
+        priceIrr: values['priceIrr'] as bigint,
+        position: values['position'] as number,
+        sellable: values['sellable'] as boolean,
+        providerCode: values['providerCode'] as string,
+        groupIds: values['groupIds'] as number[],
+        ...(values['displayAttributes'] === undefined
+          ? {}
+          : { displayAttributes: values['displayAttributes'] as never }),
+      },
+    };
+  }
+  private reviewGuidedChangeset(values: Record<string, unknown>): CatalogAdminWizardState {
+    const dataLimitBytes = values['dataLimitBytes'] as bigint;
+    const durationDays = values['durationDays'] as number;
+    const deviceLimit = values['deviceLimit'] as number;
+    const productName = requiredStoreString(values['productName']);
+    const productCode = requiredStoreString(values['productCode']);
+    return {
+      kind: 'review',
+      step: 'confirm',
+      delta: {
+        kind: 'changeset',
+        changes: [
+          {
+            kind: 'category',
+            code: requiredStoreString(values['categoryCode']),
+            name: requiredStoreString(values['categoryName']),
+            description: '',
+            position: 0,
+          },
+          {
+            kind: 'product',
+            code: productCode,
+            categoryCode: requiredStoreString(values['categoryCode']),
+            name: productName,
+            shortName: productName,
+            description: '',
+            badge: null,
+            iconKey: 'globe',
+            position: 0,
+            active: true,
+          },
+          {
+            kind: 'variant',
+            code: requiredStoreString(values['variantCode']),
+            productCode,
+            name: displayVariantName(values['variantName'], {
+              dataLimitBytes,
+              durationDays,
+              deviceLimit,
+            }),
+            description: (values['variantDescription'] as string | undefined) ?? '',
+            durationDays,
+            dataLimitBytes,
+            deviceLimit,
+            priceIrr: values['priceIrr'] as bigint,
+            position: 0,
+            sellable: true,
+            providerCode: requiredStoreString(values['providerCode']),
+            groupIds: values['groupIds'] as number[],
+            ...(values['displayAttributes'] === undefined
+              ? {}
+              : { displayAttributes: values['displayAttributes'] as never }),
+          },
+        ],
+      },
+    };
+  }
+  private storePrompt(state: CatalogAdminWizardState): string {
+    if (state.kind === 'category')
+      return state.field === 'name'
+        ? `نام دسته را بنویس. مقدار فعلی: ${escapeHtml(state.values.name ?? '—')}`
+        : state.field === 'description'
+          ? `توضیح کوتاه دسته را بنویس یا «-». مقدار فعلی: ${escapeHtml(state.values.description ?? '—')}`
+          : `ترتیب نمایش را با رقم فارسی یا لاتین بنویس. مقدار فعلی: ${String(state.values.position ?? 0)}`;
+    if (state.kind === 'product')
+      return state.field === 'name'
+        ? `نام محصول را بنویس. مقدار فعلی: ${escapeHtml(state.values.name ?? '—')}`
+        : state.field === 'shortName'
+          ? `نام کوتاه را بنویس. مقدار فعلی: ${escapeHtml(state.values.shortName ?? '—')}`
+          : state.field === 'description'
+            ? `توضیح محصول را بنویس یا «-». مقدار فعلی: ${escapeHtml(state.values.description ?? '—')}`
+            : `نشان کوتاه را بنویس یا «-». مقدار فعلی: ${escapeHtml(state.values.badge ?? '—')}`;
+    if (state.kind === 'settings') {
+      const current =
+        state.field === 'cardNumber' && state.values.cardNumber !== undefined
+          ? maskCard(state.values.cardNumber)
+          : (state.values[state.field] ?? '—');
+      return `مقدار «${persianSettingsField(state.field)}» را وارد کن. مقدار فعلی: ${escapeHtml(current)}`;
+    }
+    if (state.kind === 'variant' && state.field === 'name')
+      return 'نام نمایشی پلن را بنویس یا «-» تا نام استاندارد مشخصات استفاده شود.';
+    if (state.kind === 'variant' && state.field === 'description')
+      return 'توضیح کوتاه پلن را بنویس یا «-».';
+    if (state.kind === 'variant' && state.field === 'displayAttributes')
+      return 'حداکثر ۴ ویژگی را هر خط به شکل «برچسب: مقدار» بنویس؛ برای پاک‌کردن همه «-».';
+    if (state.kind === 'variant')
+      return `برای پلن سفارشی: حجم گیگ، روز، دستگاه، قیمت تومان را با ویرگول وارد کن.${
+        state.values.dataLimitBytes === undefined
+          ? ''
+          : ` مقدار فعلی: ${variantAdminLabel({ dataLimitBytes: state.values.dataLimitBytes, durationDays: state.values.durationDays ?? 0, deviceLimit: state.values.deviceLimit ?? 0 })} · ${String((state.values.priceIrr ?? 0n) / 10n)} تومان`
+      }`;
+    if (state.kind === 'changeset') {
+      if (state.field === 'categoryName') return 'نام دستهٔ جدید را بنویس.';
+      if (state.field === 'productName') return 'نام محصول را بنویس.';
+      if (state.field === 'variantSpec')
+        return 'مشخصات اولین پلن را به شکل «حجم گیگ، روز، دستگاه، قیمت تومان» بنویس.';
+      if (state.field === 'variantName') return 'نام نمایشی اولین پلن را بنویس یا «-».';
+      if (state.field === 'variantDescription') return 'توضیح کوتاه اولین پلن را بنویس یا «-».';
+      if (state.field === 'displayAttributes')
+        return 'حداکثر ۴ ویژگی را هر خط به شکل «برچسب: مقدار» بنویس؛ برای پاک‌کردن همه «-».';
+      return 'گروه سرویس را انتخاب کن.';
+    }
+    return 'هدف را انتخاب کن.';
+  }
+  private async storeReviewText(
+    state: Extract<CatalogAdminWizardState, { readonly kind: 'review' }>,
+  ): Promise<string> {
+    const delta = state.delta;
+    const model = await this.catalogChat.getReadModel();
+    const differences = reviewDifferences(delta, model);
+    const summary =
+      delta.kind === 'settings'
+        ? `تنظیمات فروشگاه · کارت ${maskCard(delta.settings.cardNumber)}`
+        : delta.kind === 'category'
+          ? `دسته‌بندی · ${delta.name}`
+          : delta.kind === 'product'
+            ? `محصول · ${delta.name}`
+            : delta.kind === 'variant'
+              ? `پلن · ${variantAdminLabel(delta)}`
+              : delta.kind === 'reorder'
+                ? `ترتیب ${delta.entity === 'category' ? 'دسته' : delta.entity === 'product' ? 'محصول' : 'پلن'} به سمت ${delta.direction === 'up' ? 'بالا' : 'پایین'}`
+                : delta.kind === 'changeset'
+                  ? `ساخت هم‌زمان دسته «${delta.changes[0].name}»، محصول «${delta.changes[1].name}» و پلن «${delta.changes[2].name}»`
+                  : delta.kind === 'archive'
+                    ? 'بایگانی مورد انتخاب‌شده'
+                    : 'بازگردانی مورد انتخاب‌شده';
+    const customerCopy =
+      delta.kind === 'variant'
+        ? `\n<b>نمای مشتری</b>\n${productPlansText({
+            productName: 'محصول انتخاب‌شده',
+            planCount: 1,
+            page: 0,
+            pageCount: 1,
+            variants: [
+              {
+                id: 'preview',
+                code: delta.code,
+                productName: 'محصول انتخاب‌شده',
+                name: delta.name,
+                description: delta.description,
+                durationDays: delta.durationDays,
+                dataLimitBytes: delta.dataLimitBytes,
+                deviceLimit: delta.deviceLimit,
+                priceIrr: delta.priceIrr,
+                ...(delta.displayAttributes === undefined
+                  ? {}
+                  : { displayAttributes: delta.displayAttributes }),
+              },
+            ],
+          })}`
+        : delta.kind === 'product'
+          ? `\n<b>نمای مشتری</b>\n<b>${escapeWithin(delta.name, 250)}</b>\n${escapeWithin(delta.description, 400)}`
+          : delta.kind === 'category'
+            ? `\n<b>نمای مشتری</b>\n<b>${escapeWithin(delta.name, 250)}</b>\n${escapeWithin(delta.description, 400)}`
+            : '';
+    return [
+      '<b>پیش‌نمایش تغییر</b>',
+      escapeHtml(summary),
+      ...(differences.length === 0
+        ? []
+        : ['<b>تغییرات</b>', ...differences.slice(0, 7).map((item) => escapeWithin(item, 200))]),
+      customerCopy,
+      'برای اعمال، انتشار نهایی را بزن.',
+    ].join('\n');
+  }
+  private async showStorePreview(target: MenuTarget, requestedPage: number): Promise<void> {
+    const [model, catalog] = await Promise.all([
+      this.catalogChat.getReadModel(),
+      this.catalogAdmin.getPublicCatalog(),
+    ]);
+    const pages = Math.max(1, Math.ceil(model.products.length / 8));
+    const page = Math.max(0, Math.min(requestedPage, pages - 1));
+    const categories = new Map(model.categories.map((category) => [category.id, category.name]));
+    const products = model.products.slice(page * 8, page * 8 + 8).map((product) => {
+      const variants = model.variants.filter((variant) => variant.productId === product.id);
+      return `${escapeHtml(categories.get(product.categoryId) ?? 'دسته‌بندی')} · ${escapeHtml(product.name)} · ${String(variants.length)} پلن`;
+    });
+    await this.present(
+      target,
+      [
+        '<b>نمای فروشگاه</b>',
+        `کارت فروش: ${maskCard(catalog.settings.cardNumber)}`,
+        ...products,
+      ].join('\n'),
+      columnKeyboard([
+        { text: '◀', callback_data: `store:preview:${String(Math.max(0, page - 1))}` },
+        { text: `${String(page + 1)}/${String(pages)}`, callback_data: ADMIN_STORE_CALLBACK },
+        { text: '▶', callback_data: `store:preview:${String(Math.min(pages - 1, page + 1))}` },
+        { text: 'مدیریت فروشگاه', callback_data: ADMIN_STORE_CALLBACK },
+      ]),
+    );
+  }
+  private async showStoreList(
+    target: MenuTarget,
+    kind: 'c' | 'p' | 'v' | 'a',
+    page: number,
+  ): Promise<void> {
+    const model = await this.catalogChat.getReadModel();
+    const rows =
+      kind === 'c'
+        ? model.categories
+        : kind === 'p'
+          ? model.products
+          : kind === 'v'
+            ? model.variants
+            : [...model.categories, ...model.products, ...model.variants];
+    const safePage = Math.max(0, Math.min(page, Math.max(0, Math.ceil(rows.length / 8) - 1)));
+    const chunk = rows.slice(safePage * 8, safePage * 8 + 8);
+    const buttons = chunk.map((row) => {
+      const id = row.id;
+      const label =
+        'sellable' in row
+          ? `${row.name} ${row.active && row.sellable ? '●' : '○'}`
+          : `${row.name} ${row.active ? '●' : '○'}`;
+      return {
+        text: buttonLabel(label),
+        callback_data:
+          kind === 'a'
+            ? `store:detail:${'categoryId' in row ? 'p' : 'productId' in row ? 'v' : 'c'}:${id}`
+            : `store:detail:${kind}:${id}`,
+      };
+    });
+    const nav = [
+      { text: '◀', callback_data: `store:list:${kind}:${String(Math.max(0, safePage - 1))}` },
+      {
+        text: `${String(safePage + 1)}/${String(Math.max(1, Math.ceil(rows.length / 8)))}`,
+        callback_data: 'store:preview',
+      },
+      {
+        text: '▶',
+        callback_data: `store:list:${kind}:${String(Math.min(Math.max(0, Math.ceil(rows.length / 8) - 1), safePage + 1))}`,
+      },
+    ];
+    await this.present(
+      target,
+      `${kind === 'c' ? 'دسته‌ها' : kind === 'p' ? 'محصولات' : kind === 'v' ? 'پلن‌ها' : 'بایگانی و بازگردانی'} — صفحه ${String(safePage + 1)}`,
+      columnKeyboard([
+        ...buttons,
+        ...nav,
+        { text: 'مدیریت فروشگاه', callback_data: ADMIN_STORE_CALLBACK },
+      ]),
+    );
+  }
+
+  private async showStoreDetail(
+    target: MenuTarget,
+    kind: 'c' | 'p' | 'v',
+    id: string,
+  ): Promise<void> {
+    const model = await this.catalogChat.getReadModel();
+    const row =
+      kind === 'c'
+        ? model.categories.find((item) => item.id === id)
+        : kind === 'p'
+          ? model.products.find((item) => item.id === id)
+          : model.variants.find((item) => item.id === id);
+    if (row === undefined) throw new DomainConflictError('CATALOG_ENTITY_NOT_FOUND');
+    const active = 'sellable' in row ? row.active && row.sellable : row.active;
+    const action = active ? 'archive' : 'restore';
+    const children =
+      kind === 'c'
+        ? model.products.filter((item) => item.categoryId === row.id).length
+        : kind === 'p'
+          ? model.variants.filter((item) => item.productId === row.id).length
+          : 0;
+    const text = `<b>${escapeHtml(row.name)}</b>\nوضعیت: ${active ? 'فعال' : 'بایگانی'}${kind === 'c' ? `\nمحصول‌های زیرمجموعه: ${String(children)}` : kind === 'p' ? `\nپلن‌های زیرمجموعه: ${String(children)}` : ''}`;
+    const variantNeedsSaleEnable = kind === 'v' && 'sellable' in row && row.active && !row.sellable;
+    await this.present(
+      target,
+      text,
+      columnKeyboard([
+        ...(variantNeedsSaleEnable
+          ? [{ text: 'فعال‌سازی فروش', callback_data: `store:enable:v:${row.id}` }]
+          : [
+              {
+                text: action === 'archive' ? 'بایگانی' : 'بازگردانی',
+                callback_data: `store:action:${action}:${kind}:${row.id}`,
+              },
+            ]),
+        { text: 'ویرایش', callback_data: `store:edit:${kind}:${row.id}` },
+        { text: 'پیش‌نمایش مشتری', callback_data: `store:customer:${kind}:${row.id}` },
+        { text: 'جابجایی به بالا', callback_data: `store:move:${kind}:${row.id}:up` },
+        { text: 'جابجایی به پایین', callback_data: `store:move:${kind}:${row.id}:down` },
+        { text: 'بازگشت', callback_data: `store:list:${kind}:0` },
+      ]),
+    );
+  }
+
+  private async showStoreCustomerPreview(
+    target: MenuTarget,
+    kind: 'c' | 'p' | 'v',
+    id: string,
+  ): Promise<void> {
+    const model = await this.catalogChat.getReadModel();
+    if (kind === 'c') {
+      const category = model.categories.find((item) => item.id === id);
+      if (category === undefined) throw new DomainConflictError('CATEGORY_NOT_FOUND');
+      const products = model.products.filter((item) => item.categoryId === id);
+      await this.present(
+        target,
+        `<b>${escapeHtml(category.name)}</b>\n${escapeHtml(category.description)}\n${String(products.length)} محصول برای نمایش مشتری آماده است.`,
+        columnKeyboard([{ text: 'بازگشت', callback_data: `store:detail:c:${id}` }]),
+      );
+      return;
+    }
+    if (kind === 'p') {
+      const product = model.products.find((item) => item.id === id);
+      if (product === undefined) throw new DomainConflictError('PRODUCT_NOT_FOUND');
+      const variants = model.variants
+        .filter((item) => item.productId === id && item.active && item.sellable)
+        .slice(0, 3)
+        .map((item) => toCustomerPreviewVariant(item, product.name));
+      await this.present(
+        target,
+        productPlansText({
+          productName: product.name,
+          planCount: variants.length,
+          page: 0,
+          pageCount: 1,
+          variants,
+        }),
+        columnKeyboard([{ text: 'بازگشت', callback_data: `store:detail:p:${id}` }]),
+      );
+      return;
+    }
+    const variant = model.variants.find((item) => item.id === id);
+    if (variant === undefined) throw new DomainConflictError('VARIANT_NOT_FOUND');
+    const productName =
+      model.products.find((item) => item.id === variant.productId)?.name ?? 'محصول';
+    await this.present(
+      target,
+      variantText(toCustomerPreviewVariant(variant, productName)),
+      columnKeyboard([{ text: 'بازگشت', callback_data: `store:detail:v:${id}` }]),
+    );
+  }
+
+  private async startStoreReviewForEntity(
+    target: MenuTarget,
+    adminId: string,
+    action: 'archive' | 'restore',
+    kind: 'c' | 'p' | 'v',
+    id: string,
+  ): Promise<void> {
+    const model = await this.catalogChat.getReadModel();
+    const row =
+      kind === 'c'
+        ? model.categories.find((item) => item.id === id)
+        : kind === 'p'
+          ? model.products.find((item) => item.id === id)
+          : model.variants.find((item) => item.id === id);
+    if (row === undefined) throw new DomainConflictError('CATALOG_ENTITY_NOT_FOUND');
+    await this.startStoreSession(target, adminId, {
+      kind: 'review',
+      step: 'confirm',
+      delta: {
+        kind: action,
+        entity: kind === 'c' ? 'category' : kind === 'p' ? 'product' : 'variant',
+        code: row.code,
+      },
+    });
+  }
+
+  private async startStoreReorder(
+    target: MenuTarget,
+    adminId: string,
+    kind: 'c' | 'p' | 'v',
+    id: string,
+    direction: 'up' | 'down',
+  ): Promise<void> {
+    const model = await this.catalogChat.getReadModel();
+    const row =
+      kind === 'c'
+        ? model.categories.find((item) => item.id === id)
+        : kind === 'p'
+          ? model.products.find((item) => item.id === id)
+          : model.variants.find((item) => item.id === id);
+    if (row === undefined) throw new DomainConflictError('CATALOG_ENTITY_NOT_FOUND');
+    await this.startStoreSession(target, adminId, {
+      kind: 'review',
+      step: 'confirm',
+      delta: {
+        kind: 'reorder',
+        entity: kind === 'c' ? 'category' : kind === 'p' ? 'product' : 'variant',
+        code: row.code,
+        direction,
+      },
+    });
+  }
+
+  private async showStoreDraftFields(
+    target: MenuTarget,
+    state: Extract<CatalogAdminWizardState, { readonly kind: 'category' | 'product' | 'variant' }>,
+  ): Promise<void> {
+    const kind = state.kind === 'category' ? 'c' : state.kind === 'product' ? 'p' : 'v';
+    const fields: readonly (readonly [string, string])[] =
+      kind === 'c'
+        ? [
+            ['نام', 'name'],
+            ['توضیح', 'description'],
+            ['ترتیب', 'position'],
+          ]
+        : kind === 'p'
+          ? [
+              ['نام', 'name'],
+              ['نام کوتاه', 'shortName'],
+              ['توضیح', 'description'],
+              ['نشان', 'badge'],
+            ]
+          : [
+              ['نام', 'name'],
+              ['توضیح', 'description'],
+              ['مشخصات و قیمت', 'durationDays'],
+              ['گروه سرویس', 'groupIds'],
+              ['ویژگی‌های نمایشی', 'displayAttributes'],
+            ];
+    await this.present(
+      target,
+      '<b>ویرایش انتخابی</b>\nفیلدها را هر تعداد که خواستی تغییر بده؛ بعد پیش‌نمایش را بزن.',
+      columnKeyboard([
+        ...fields.map(([label, field]) => ({
+          text: label,
+          callback_data: `store:field:${kind}:${field}`,
+        })),
+        { text: 'پیش‌نمایش تغییرات', callback_data: 'store:draft:review' },
+        { text: 'لغو', callback_data: 'store:cancel' },
+      ]),
+    );
+  }
+
+  private async selectStoreDraftField(
+    target: MenuTarget,
+    adminId: string,
+    kind: 'c' | 'p' | 'v',
+    field: string,
+  ): Promise<void> {
+    const stateKind = kind === 'c' ? 'category' : kind === 'p' ? 'product' : 'variant';
+    await this.advanceStoreSession(target, adminId, (session) => {
+      if (session.state.kind !== stateKind || session.state.mode !== 'edit')
+        throw new DomainConflictError('CATALOG_ADMIN_SESSION_INCOMPLETE');
+      return { ...session.state, field: field as never };
+    });
+  }
+
+  private async returnToStoreDraftFields(
+    target: MenuTarget,
+    adminId: string,
+    kind: 'category' | 'product' | 'variant',
+    values: Record<string, unknown>,
+  ): Promise<void> {
+    await this.advanceStoreSession(target, adminId, (session) => {
+      if (session.state.kind !== kind || session.state.mode !== 'edit')
+        throw new DomainConflictError('CATALOG_ADMIN_SESSION_INCOMPLETE');
+      return { ...session.state, field: 'select', values };
+    });
+  }
+
+  private async reviewStoreDraft(target: MenuTarget, adminId: string): Promise<void> {
+    await this.advanceStoreSession(target, adminId, (session) => {
+      const values = storeValues(session.state);
+      if (session.state.kind === 'category' && session.state.mode === 'edit')
+        return {
+          kind: 'review',
+          step: 'confirm',
+          delta: {
+            kind: 'category',
+            code: requiredStoreString(values['code']),
+            name: requiredStoreString(values['name']),
+            description: (values['description'] as string | undefined) ?? '',
+            position: (values['position'] as number | undefined) ?? 0,
+          },
+        };
+      if (session.state.kind === 'product' && session.state.mode === 'edit')
+        return {
+          kind: 'review',
+          step: 'confirm',
+          delta: {
+            kind: 'product',
+            code: requiredStoreString(values['code']),
+            categoryCode: requiredStoreString(values['categoryCode']),
+            name: requiredStoreString(values['name']),
+            shortName:
+              (values['shortName'] as string | undefined) ?? requiredStoreString(values['name']),
+            description: (values['description'] as string | undefined) ?? '',
+            badge: (values['badge'] as string | null | undefined) ?? null,
+            iconKey:
+              (values['iconKey'] as 'loop' | 'globe' | 'star' | 'bolt' | undefined) ?? 'globe',
+            position: (values['position'] as number | undefined) ?? 0,
+            active: (values['active'] as boolean | undefined) ?? true,
+          },
+        };
+      if (session.state.kind === 'variant' && session.state.mode === 'edit')
+        return this.reviewVariant(values);
+      throw new DomainConflictError('CATALOG_ADMIN_SESSION_INCOMPLETE');
+    });
+  }
+
+  private async startStoreEdit(
+    target: MenuTarget,
+    adminId: string,
+    kind: 'c' | 'p' | 'v',
+    id: string,
+  ): Promise<void> {
+    const model = await this.catalogChat.getReadModel();
+    if (kind === 'c') {
+      const row = model.categories.find((item) => item.id === id);
+      if (row === undefined) throw new DomainConflictError('CATEGORY_NOT_FOUND');
+      await this.startStoreSession(target, adminId, {
+        kind: 'category',
+        step: 'category-fields',
+        field: 'select',
+        mode: 'edit',
+        values: {
+          code: row.code,
+          name: row.name,
+          description: row.description,
+          position: row.position,
+        },
+      });
+      return;
+    }
+    if (kind === 'p') {
+      const row = model.products.find((item) => item.id === id);
+      if (row === undefined) throw new DomainConflictError('PRODUCT_NOT_FOUND');
+      await this.startStoreSession(target, adminId, {
+        kind: 'product',
+        step: 'product-fields',
+        field: 'select',
+        mode: 'edit',
+        values: {
+          code: row.code,
+          categoryCode: row.categoryCode,
+          name: row.name,
+          shortName: row.shortName,
+          description: row.description,
+          badge: row.badge,
+          iconKey: row.iconKey,
+          position: row.position,
+          active: row.active,
+        },
+      });
+      return;
+    }
+    const row = model.variants.find((item) => item.id === id);
+    if (row === undefined) throw new DomainConflictError('VARIANT_NOT_FOUND');
+    await this.startStoreSession(target, adminId, {
+      kind: 'variant',
+      step: 'variant-fields',
+      field: 'select',
+      mode: 'edit',
+      values: {
+        code: row.code,
+        productCode: row.productCode,
+        name: row.name,
+        description: row.description,
+        dataLimitBytes: row.dataLimitBytes,
+        durationDays: row.durationDays,
+        deviceLimit: row.deviceLimit,
+        priceIrr: row.priceIrr,
+        position: row.position,
+        sellable: row.sellable,
+        ...(row.providerCode === null ? {} : { providerCode: row.providerCode }),
+        groupIds: row.groupIds,
+        displayAttributes: row.displayAttributes,
+      },
+    });
+  }
+
+  private async startStoreEnableVariant(
+    target: MenuTarget,
+    adminId: string,
+    id: string,
+  ): Promise<void> {
+    const row = (await this.catalogChat.getReadModel()).variants.find((item) => item.id === id);
+    if (row === undefined || !row.active || row.providerCode === null || row.groupIds.length === 0)
+      throw new DomainConflictError('VARIANT_NOT_RESTORABLE');
+    await this.startStoreSession(target, adminId, {
+      kind: 'review',
+      step: 'confirm',
+      delta: {
+        kind: 'variant',
+        code: row.code,
+        productCode: row.productCode,
+        name: row.name,
+        description: row.description,
+        durationDays: row.durationDays,
+        dataLimitBytes: row.dataLimitBytes,
+        deviceLimit: row.deviceLimit,
+        priceIrr: row.priceIrr,
+        position: row.position,
+        sellable: true,
+        providerCode: row.providerCode,
+        groupIds: row.groupIds,
+      },
+    });
+  }
+
+  private async showPicker(
+    target: MenuTarget,
+    kind: 'category' | 'product',
+    page: number,
+  ): Promise<void> {
+    const model = await this.catalogChat.getReadModel();
+    const rows = kind === 'category' ? model.categories : model.products;
+    const pages = Math.max(1, Math.ceil(rows.length / 8));
+    const safe = Math.max(0, Math.min(page, pages - 1));
+    await this.present(
+      target,
+      kind === 'category' ? 'دستهٔ محصول را انتخاب کن.' : 'محصول پلن را انتخاب کن.',
+      columnKeyboard([
+        ...rows.slice(safe * 8, safe * 8 + 8).map((row) => ({
+          text: buttonLabel(row.name),
+          callback_data: `store:pick:${kind}:${row.id}:${String(safe)}`,
+        })),
+        { text: '◀', callback_data: `store:picker:${kind}:${String(Math.max(0, safe - 1))}` },
+        { text: `${String(safe + 1)}/${String(pages)}`, callback_data: 'store:cancel' },
+        {
+          text: '▶',
+          callback_data: `store:picker:${kind}:${String(Math.min(pages - 1, safe + 1))}`,
+        },
+        { text: 'لغو', callback_data: 'store:cancel' },
+      ]),
+    );
+  }
+
+  private async showProviderHealth(target: MenuTarget, page: number): Promise<void> {
+    const groups = (await this.catalogAdmin.listProviderGroups()).filter(
+      (item) => item.available && !item.disabled,
+    );
+    const pages = Math.max(1, Math.ceil(groups.length / 8));
+    const safe = Math.max(0, Math.min(page, pages - 1));
+    await this.present(
+      target,
+      `<b>سلامت گروه‌های سرویس</b>\nگروه‌های فعال: ${String(groups.length)}`,
+      columnKeyboard([
+        ...groups
+          .slice(safe * 8, safe * 8 + 8)
+          .map((group) => ({ text: buttonLabel(group.name), callback_data: 'store:groups:0' })),
+        { text: '◀', callback_data: `store:groups:${String(Math.max(0, safe - 1))}` },
+        { text: `${String(safe + 1)}/${String(pages)}`, callback_data: ADMIN_STORE_CALLBACK },
+        { text: '▶', callback_data: `store:groups:${String(Math.min(pages - 1, safe + 1))}` },
+        { text: 'مدیریت فروشگاه', callback_data: ADMIN_STORE_CALLBACK },
+      ]),
     );
   }
 
@@ -535,7 +2213,7 @@ export class TelegramCommerceBot {
   private async showCatalogHealth(target: MenuTarget): Promise<void> {
     const [categories, catalog] = await Promise.all([
       this.commerce.listCategories(null),
-      this.paymentSettings.getPublicCatalog(),
+      this.catalogAdmin.getPublicCatalog(),
     ]);
     const cardPublished =
       /^\d{16}$/u.test(catalog.settings.cardNumber) &&
@@ -612,14 +2290,10 @@ export class TelegramCommerceBot {
         throw new DomainConflictError('FULFILLED_ORDER_INCOMPLETE');
       }
       const service = await this.serviceReader.get(order.serviceId);
+      await this.sendDeliveryBrandMedia(customer.privateChatId);
       await this.present(
         { chatId: customer.privateChatId },
-        [
-          '<b>پرداخت تأیید شد</b>',
-          'سرویس آماده است. لینک اشتراک را در برنامه وارد کن.',
-          '',
-          `<code>${escapeHtml(service.remote.subscriptionUrl)}</code>`,
-        ].join('\n'),
+        serviceDeliveredText(service.remote.subscriptionUrl),
         columnKeyboard([backToMenuButton()]),
       );
       await this.messenger.sendMessage(adminChatId, 'سفارش تکمیل شد.');
@@ -642,8 +2316,11 @@ export class TelegramCommerceBot {
     if (customer !== null) {
       await this.present(
         { chatId: customer.privateChatId },
-        ['<b>رسید تأیید نشد</b>', 'یک عکس واضح‌تر از همان پرداخت را همین‌جا بفرست.'].join('\n'),
-        columnKeyboard([backToMenuButton()]),
+        receiptRejectedText(),
+        columnKeyboard([
+          { text: MENU_LABEL.order, callback_data: ORDER_CALLBACK },
+          backToMenuButton(),
+        ]),
       );
     }
     await this.messenger.sendMessage(adminChatId, 'رسید رد شد.');
@@ -661,14 +2338,10 @@ export class TelegramCommerceBot {
         throw new DomainConflictError('FULFILLED_ORDER_INCOMPLETE');
       }
       const service = await this.serviceReader.get(order.serviceId);
+      await this.sendDeliveryBrandMedia(customer.privateChatId);
       await this.present(
         { chatId: customer.privateChatId },
-        [
-          '<b>سرویس آماده شد</b>',
-          'لینک اشتراک را در برنامه وارد کن.',
-          '',
-          `<code>${escapeHtml(service.remote.subscriptionUrl)}</code>`,
-        ].join('\n'),
+        serviceDeliveredText(service.remote.subscriptionUrl),
         columnKeyboard([backToMenuButton()]),
       );
       await this.messenger.sendMessage(adminChatId, 'ساخت سرویس تکرار شد.');
@@ -706,12 +2379,7 @@ export class TelegramCommerceBot {
       const remote = await this.serviceReader.get(service.id);
       await this.present(
         target,
-        [
-          '<b>تمدید انجام شد</b>',
-          'لینک اشتراک به‌روز است.',
-          '',
-          `<code>${escapeHtml(remote.remote.subscriptionUrl)}</code>`,
-        ].join('\n'),
+        renewalCompletedText(remote.remote.subscriptionUrl),
         columnKeyboard([backToMenuButton()]),
       );
     } catch (error: unknown) {
@@ -723,11 +2391,29 @@ export class TelegramCommerceBot {
     }
   }
 
+  private async showRenewalPreview(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+  ): Promise<void> {
+    if (!(await this.commerce.hasActiveService(customer))) {
+      await this.present(target, noActiveServiceText(), columnKeyboard([backToMenuButton()]));
+      return;
+    }
+    await this.present(
+      target,
+      renewalPreviewText(),
+      columnKeyboard([
+        { text: 'تأیید تمدید سرویس', callback_data: RENEW_CONFIRM_CALLBACK },
+        backToMenuButton(),
+      ]),
+    );
+  }
+
   private async readCheckoutCard(): Promise<{
     readonly cardNumber: string;
     readonly cardHolder: string;
   }> {
-    const catalog = await this.paymentSettings.getPublicCatalog();
+    const catalog = await this.catalogAdmin.getPublicCatalog();
     if (
       !/^\d{16}$/u.test(catalog.settings.cardNumber) ||
       catalog.settings.cardHolder.trim().length < 2
@@ -758,8 +2444,60 @@ export class TelegramCommerceBot {
     await this.messenger.sendMessage(target.chatId, text, replyMarkup, { parseMode: 'HTML' });
   }
 
+  private async sendDeliveryBrandMedia(chatId: string): Promise<void> {
+    await this.sendBrandPhoto(
+      chatId,
+      this.config.brandMedia.deliveryPhotoFileId,
+      brandDeliveryCaption(),
+    );
+  }
+
+  private async sendBrandPhoto(
+    chatId: string,
+    fileId: string | null,
+    caption: string,
+    replyMarkup?: TelegramInlineKeyboardMarkup,
+  ): Promise<boolean> {
+    if (fileId === null) {
+      return false;
+    }
+    try {
+      await this.messenger.sendPhoto(chatId, fileId, caption, replyMarkup, { parseMode: 'HTML' });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private isAdmin(telegramUserId: string): boolean {
     return this.config.adminTelegramUserIds.has(telegramUserId);
+  }
+
+  private orderKeyboard(order: SalesOrder | null): TelegramInlineKeyboardMarkup {
+    if (order === null) {
+      return columnKeyboard([
+        { text: MENU_LABEL.shop, callback_data: SHOP_CALLBACK },
+        backToMenuButton(),
+      ]);
+    }
+    if (order.status === 'awaiting_receipt' || order.status === 'rejected') {
+      return columnKeyboard([
+        { text: MENU_LABEL.order, callback_data: ORDER_CALLBACK },
+        { text: MENU_LABEL.shop, callback_data: SHOP_CALLBACK },
+        backToMenuButton(),
+      ]);
+    }
+    if (order.status === 'fulfilled' || order.status === 'cancelled') {
+      return columnKeyboard([
+        { text: MENU_LABEL.renew, callback_data: RENEW_CALLBACK },
+        { text: MENU_LABEL.shop, callback_data: SHOP_CALLBACK },
+        backToMenuButton(),
+      ]);
+    }
+    return columnKeyboard([
+      { text: MENU_LABEL.order, callback_data: ORDER_CALLBACK },
+      backToMenuButton(),
+    ]);
   }
 
   private requireAdmin(telegramUserId: string): void {
@@ -767,6 +2505,10 @@ export class TelegramCommerceBot {
       throw new DomainConflictError('ADMIN_ACCESS_DENIED');
     }
   }
+}
+
+function isFreshStartCommand(text: string | undefined): boolean {
+  return /^\/start(?:@[A-Za-z0-9_]+)?$/u.test(text?.trim() ?? '');
 }
 
 function customerFrom(
@@ -832,9 +2574,222 @@ function customerSafeError(error: unknown): string {
         return 'اجازهٔ این عملیات را نداری.';
       case 'PRODUCT_VARIANT_NOT_SELLABLE':
         return 'این محصول دیگر قابل خرید نیست.';
+      case 'INVALID_SERVICE_USERNAME_BASE':
+        return 'نام کاربری نامعتبر است؛ فقط a-z و 0-9 و _ و -.';
+      case 'SERVICE_USERNAME_EXHAUSTED':
+        return 'نام کاربری آزاد پیدا نشد؛ نام دیگری بفرست.';
       default:
         return 'عملیات انجام نشد؛ دوباره تلاش کن.';
     }
   }
   return 'خطای موقت؛ دوباره تلاش کن.';
+}
+
+function normalizeNumericText(value: string): string {
+  const persianDigits = '۰۱۲۳۴۵۶۷۸۹';
+  const arabicDigits = '٠١٢٣٤٥٦٧٨٩';
+  return value
+    .trim()
+    .replace(/[۰-۹]/gu, (digit) => String(persianDigits.indexOf(digit)))
+    .replace(/[٠-٩]/gu, (digit) => String(arabicDigits.indexOf(digit)))
+    .replace(/[^\d-]/gu, '');
+}
+
+function maskCard(value: string): string {
+  const digits = normalizeNumericText(value);
+  return digits.length < 4 ? '••••' : `•••• •••• •••• ${digits.slice(-4)}`;
+}
+
+function persianSettingsField(field: string): string {
+  return (
+    {
+      brandName: 'نام برند',
+      heroTitle: 'تیتر فروشگاه',
+      heroSubtitle: 'توضیح فروشگاه',
+      deliveryNote: 'پیام تحویل',
+      supportNote: 'متن پشتیبانی',
+      volumeHelper: 'راهنمای حجم',
+      cardNumber: 'شماره کارت',
+      cardHolder: 'نام دارندهٔ کارت',
+    }[field] ?? 'تنظیمات'
+  );
+}
+
+function variantAdminLabel(input: {
+  readonly dataLimitBytes: bigint;
+  readonly durationDays: number;
+  readonly deviceLimit: number;
+}): string {
+  const volume =
+    input.dataLimitBytes === 0n ? 'نامحدود' : `${String(input.dataLimitBytes / 1024n ** 3n)} گیگ`;
+  const devices = input.deviceLimit === 0 ? 'نامحدود' : `${String(input.deviceLimit)} اتصال`;
+  return `${volume} · ${String(input.durationDays)} روزه · ${devices}`;
+}
+
+function displayVariantName(
+  value: unknown,
+  dimensions: {
+    readonly dataLimitBytes: bigint;
+    readonly durationDays: number;
+    readonly deviceLimit: number;
+  },
+): string {
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : variantAdminLabel(dimensions);
+}
+
+function generatedCatalogCode(prefix: string): string {
+  return `${prefix}-${randomBytes(6).toString('hex')}`;
+}
+
+function parsePersianInteger(value: string): number {
+  const parsed = Number(normalizeNumericText(value));
+  if (!Number.isInteger(parsed)) throw new DomainConflictError('INVALID_POSITION');
+  return parsed;
+}
+
+function parseCustomVariant(value: string): Record<string, unknown> {
+  const fields = value.split(/[،,]/u).map((field) => Number(normalizeNumericText(field)));
+  if (fields.length !== 4 || fields.some((field) => !Number.isSafeInteger(field))) {
+    throw new DomainConflictError('INVALID_CATALOG_TEXT');
+  }
+  const [gigabytes, durationDays, deviceLimit, toman] = fields;
+  if (
+    gigabytes === undefined ||
+    durationDays === undefined ||
+    deviceLimit === undefined ||
+    toman === undefined
+  ) {
+    throw new DomainConflictError('INVALID_CATALOG_TEXT');
+  }
+  return {
+    dataLimitBytes: BigInt(gigabytes) * 1024n ** 3n,
+    durationDays,
+    deviceLimit,
+    priceIrr: BigInt(toman) * 10n,
+  };
+}
+
+function parseDisplayAttributes(value: string): readonly {
+  position: number;
+  label: string;
+  value: string;
+}[] {
+  const text = value.trim();
+  if (text === '-' || text.length === 0) return [];
+  const lines = text.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+  if (lines.length > 4) throw new DomainConflictError('INVALID_DISPLAY_ATTRIBUTES');
+  return lines.map((line, position) => {
+    const separator = line.indexOf(':');
+    if (separator <= 0) throw new DomainConflictError('INVALID_DISPLAY_ATTRIBUTES');
+    const label = line.slice(0, separator).trim();
+    const attributeValue = line.slice(separator + 1).trim();
+    if (
+      label.length === 0 ||
+      label.length > 40 ||
+      attributeValue.length === 0 ||
+      attributeValue.length > 120
+    )
+      throw new DomainConflictError('INVALID_DISPLAY_ATTRIBUTES');
+    return { position, label, value: attributeValue };
+  });
+}
+
+function toCustomerPreviewVariant(
+  variant: {
+    readonly id: string;
+    readonly code: string;
+    readonly name: string;
+    readonly description: string;
+    readonly durationDays: number;
+    readonly dataLimitBytes: bigint;
+    readonly deviceLimit: number;
+    readonly priceIrr: bigint;
+    readonly displayAttributes: readonly {
+      readonly position: number;
+      readonly label: string;
+      readonly value: string;
+    }[];
+  },
+  productName: string,
+): SellableProductVariant {
+  return {
+    id: variant.id,
+    code: variant.code,
+    productName,
+    name: variant.name,
+    description: variant.description,
+    durationDays: variant.durationDays,
+    dataLimitBytes: variant.dataLimitBytes,
+    deviceLimit: variant.deviceLimit,
+    priceIrr: variant.priceIrr,
+    displayAttributes: variant.displayAttributes,
+  };
+}
+
+function reviewDifferences(
+  delta: CatalogAdminDelta,
+  model: CatalogAdminReadModel,
+): readonly string[] {
+  if (delta.kind === 'category') {
+    const current = model.categories.find((item) => item.code === delta.code);
+    return current === undefined
+      ? ['دستهٔ جدید ساخته می‌شود.']
+      : changedFields([
+          ['نام', current.name, delta.name],
+          ['توضیح', current.description, delta.description],
+          ['ترتیب', current.position, delta.position],
+        ]);
+  }
+  if (delta.kind === 'product') {
+    const current = model.products.find((item) => item.code === delta.code);
+    return current === undefined
+      ? ['محصول جدید ساخته می‌شود.']
+      : changedFields([
+          ['نام', current.name, delta.name],
+          ['نام کوتاه', current.shortName, delta.shortName],
+          ['توضیح', current.description, delta.description],
+          ['نشان', current.badge ?? '', delta.badge ?? ''],
+          ['ترتیب', current.position, delta.position],
+        ]);
+  }
+  if (delta.kind === 'variant') {
+    const current = model.variants.find((item) => item.code === delta.code);
+    return current === undefined
+      ? ['پلن جدید ساخته می‌شود.']
+      : changedFields([
+          ['نام', current.name, delta.name],
+          ['توضیح', current.description, delta.description],
+          ['مدت', current.durationDays, delta.durationDays],
+          ['حجم', current.dataLimitBytes, delta.dataLimitBytes],
+          ['اتصال', current.deviceLimit, delta.deviceLimit],
+          ['قیمت', current.priceIrr, delta.priceIrr],
+          [
+            'ویژگی‌ها',
+            JSON.stringify(current.displayAttributes),
+            JSON.stringify(delta.displayAttributes ?? []),
+          ],
+        ]);
+  }
+  return [];
+}
+
+function changedFields(
+  fields: readonly (readonly [string, string | number | bigint, string | number | bigint])[],
+): readonly string[] {
+  return fields.flatMap(([label, before, after]) =>
+    before === after ? [] : [`${label}: ${String(before)} ← ${String(after)}`],
+  );
+}
+
+function storeValues(state: CatalogAdminWizardState): Record<string, unknown> {
+  return 'values' in state ? { ...state.values } : {};
+}
+
+function requiredStoreString(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new DomainConflictError('CATALOG_ADMIN_SESSION_INCOMPLETE');
+  }
+  return value;
 }

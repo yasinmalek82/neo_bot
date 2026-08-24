@@ -1,11 +1,16 @@
-import { DomainConflictError } from '@neo-bot/domain';
-import type {
-  CatalogCategory,
-  SalesOrder,
-  SellableProductVariant,
-  TelegramCustomer,
-  TelegramCustomerInput,
-  TelegramPaymentProof,
+import {
+  DomainConflictError,
+  isRepresentativePricingSource,
+  resolveRepresentativePrice,
+  validateServiceUsernameBase,
+  type CatalogCategory,
+  type RepresentativePricingSource,
+  type RepresentativeProfile,
+  type SalesOrder,
+  type SellableProductVariant,
+  type TelegramCustomer,
+  type TelegramCustomerInput,
+  type TelegramPaymentProof,
 } from '@neo-bot/domain';
 import type { CommerceRepository } from '@neo-bot/application';
 import type { Pool, PoolClient } from 'pg';
@@ -22,6 +27,7 @@ interface CategoryRow {
 interface VariantRow {
   id: string;
   code: string;
+  product_id?: string;
   product_name: string;
   name: string;
   description: string;
@@ -29,6 +35,18 @@ interface VariantRow {
   data_limit_bytes: string;
   device_limit: number;
   price_irr: string;
+  base_price_irr?: string | null;
+  override_price_irr?: string | null;
+  display_attributes?: unknown;
+  fulfilled_sales_last_30_days?: number;
+}
+
+interface RepresentativeRow {
+  id: string;
+  code: string;
+  telegram_user_id: string;
+  display_name: string;
+  active: boolean;
 }
 
 interface CustomerRow {
@@ -48,6 +66,10 @@ interface OrderRow {
   amount_irr: string;
   status: SalesOrder['status'];
   service_id: string | null;
+  representative_id: string | null;
+  representative_code: string | null;
+  pricing_source: string;
+  service_username_base: string | null;
   failure_code: string | null;
   created_at: Date;
   updated_at: Date;
@@ -90,8 +112,10 @@ export class PostgresCommerceRepository implements CommerceRepository {
     categoryId: string,
   ): Promise<readonly SellableProductVariant[]> {
     const result = await this.pool.query<VariantRow>(
-      `select v.id::text, v.code, product.name as product_name, v.name, v.description,
-              v.duration_days, v.data_limit_bytes::text, v.device_limit, v.price_irr::text
+      `select v.id::text, v.code, product.id::text as product_id, product.name as product_name, v.name, v.description,
+              v.duration_days, v.data_limit_bytes::text, v.device_limit, v.price_irr::text,
+              ${fulfilledSalesColumns},
+              ${variantDisplayAttributeColumns}
        from product_category_assignments assignment
        join products product on product.id = assignment.product_id
        join product_variants v on v.product_id = product.id
@@ -105,8 +129,10 @@ export class PostgresCommerceRepository implements CommerceRepository {
 
   public async getSellableVariant(id: string): Promise<SellableProductVariant | null> {
     const result = await this.pool.query<VariantRow>(
-      `select v.id::text, v.code, product.name as product_name, v.name, v.description,
-              v.duration_days, v.data_limit_bytes::text, v.device_limit, v.price_irr::text
+      `select v.id::text, v.code, product.id::text as product_id, product.name as product_name, v.name, v.description,
+              v.duration_days, v.data_limit_bytes::text, v.device_limit, v.price_irr::text,
+              ${fulfilledSalesColumns},
+              ${variantDisplayAttributeColumns}
        from product_variants v
        join products product on product.id = v.product_id
        where v.id = $1 and product.active = true
@@ -115,6 +141,224 @@ export class PostgresCommerceRepository implements CommerceRepository {
     );
     const row = result.rows[0];
     return row === undefined ? null : mapSellableVariant(row);
+  }
+
+  public async findRepresentativeByTelegramUserId(
+    telegramUserId: string,
+  ): Promise<{ id: string; code: string } | null> {
+    const result = await this.pool.query<{ id: string; code: string }>(
+      `select id::text, code
+       from representatives
+       where telegram_user_id = $1 and active = true`,
+      [telegramUserId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  public async listSellableVariantsForRepresentative(
+    categoryId: string,
+    representativeId: string,
+  ): Promise<readonly SellableProductVariant[]> {
+    const result = await this.pool.query<VariantRow>(
+      `select ${pricedVariantColumns}
+       from product_category_assignments assignment
+       join products product on product.id = assignment.product_id
+       join product_variants v on v.product_id = product.id
+       join representative_variant_access access
+         on access.product_variant_id = v.id
+        and access.representative_id = $2
+        and access.active = true
+       ${representativePriceJoins}
+       where assignment.category_id = $1 and product.active = true
+         and v.active = true and v.sellable = true and v.price_irr > 0
+       order by assignment.position, v.duration_days, v.id`,
+      [categoryId, representativeId],
+    );
+    return result.rows.map(mapSellableVariant);
+  }
+
+  public async getSellableVariantForRepresentative(
+    variantId: string,
+    representativeId: string,
+  ): Promise<SellableProductVariant | null> {
+    const result = await this.pool.query<VariantRow>(
+      `select ${pricedVariantColumns}
+       from product_variants v
+       join products product on product.id = v.product_id
+       join representative_variant_access access
+         on access.product_variant_id = v.id
+        and access.representative_id = $2
+        and access.active = true
+       ${representativePriceJoins}
+       where v.id = $1 and product.active = true
+         and v.active = true and v.sellable = true and v.price_irr > 0`,
+      [variantId, representativeId],
+    );
+    const row = result.rows[0];
+    return row === undefined ? null : mapSellableVariant(row);
+  }
+
+  public async upsertRepresentative(input: {
+    readonly code: string;
+    readonly telegramUserId: string;
+    readonly displayName: string;
+    readonly active: boolean;
+  }): Promise<string> {
+    const result = await this.pool.query<{ id: string }>(
+      `insert into representatives(code, telegram_user_id, display_name, active)
+       values ($1, $2, $3, $4)
+       on conflict (telegram_user_id) do update set
+         code = excluded.code,
+         display_name = excluded.display_name,
+         active = excluded.active,
+         updated_at = now()
+       returning id::text`,
+      [input.code, input.telegramUserId, input.displayName, input.active],
+    );
+    return requiredRow(result.rows).id;
+  }
+
+  public async listRepresentatives(): Promise<readonly RepresentativeProfile[]> {
+    const result = await this.pool.query<RepresentativeRow>(
+      `select id::text, code, telegram_user_id::text, display_name, active
+       from representatives
+       order by code, id`,
+    );
+    return result.rows.map(mapRepresentative);
+  }
+
+  public async assignRepresentativeToCustomerByTelegramId(
+    customerTelegramUserId: string,
+    representativeId: string,
+  ): Promise<void> {
+    const representative = await this.pool.query<{ id: string }>(
+      'select id::text from representatives where id = $1',
+      [representativeId],
+    );
+    if (representative.rows[0] === undefined) {
+      throw new DomainConflictError('REPRESENTATIVE_NOT_FOUND');
+    }
+    const updated = await this.pool.query<{ id: string }>(
+      `update customers
+       set representative_id = $2, updated_at = now()
+       where telegram_user_id = $1
+       returning id::text`,
+      [customerTelegramUserId, representativeId],
+    );
+    if (updated.rows[0] === undefined) {
+      throw new DomainConflictError('CUSTOMER_NOT_FOUND');
+    }
+  }
+
+  public async setRepresentativeVariantAccess(input: {
+    readonly representativeId: string;
+    readonly variantId: string;
+    readonly active: boolean;
+  }): Promise<void> {
+    await this.pool.query(
+      `insert into representative_variant_access(
+         representative_id, product_variant_id, active
+       ) values ($1, $2, $3)
+       on conflict (representative_id, product_variant_id) do update set
+         active = excluded.active,
+         updated_at = now()`,
+      [input.representativeId, input.variantId, input.active],
+    );
+  }
+
+  public async setRepresentativeBasePrice(input: {
+    readonly variantId: string;
+    readonly priceIrr: bigint;
+  }): Promise<void> {
+    await this.pool.query(
+      `insert into representative_variant_base_prices(product_variant_id, price_irr)
+       values ($1, $2)
+       on conflict (product_variant_id) do update set
+         price_irr = excluded.price_irr,
+         updated_at = now()`,
+      [input.variantId, input.priceIrr.toString()],
+    );
+  }
+
+  public async setRepresentativeOverridePrice(input: {
+    readonly representativeId: string;
+    readonly variantId: string;
+    readonly priceIrr: bigint;
+  }): Promise<void> {
+    await this.pool.query(
+      `insert into representative_variant_price_overrides(
+         representative_id, product_variant_id, price_irr
+       ) values ($1, $2, $3)
+       on conflict (representative_id, product_variant_id) do update set
+         price_irr = excluded.price_irr,
+         updated_at = now()`,
+      [input.representativeId, input.variantId, input.priceIrr.toString()],
+    );
+  }
+
+  public async clearRepresentativeOverridePrice(input: {
+    readonly representativeId: string;
+    readonly variantId: string;
+  }): Promise<void> {
+    await this.pool.query(
+      `delete from representative_variant_price_overrides
+       where representative_id = $1 and product_variant_id = $2`,
+      [input.representativeId, input.variantId],
+    );
+  }
+
+  public async listRepresentativePriceAudit(): Promise<
+    readonly {
+      representativeCode: string;
+      variantCode: string;
+      priceIrr: bigint;
+      pricingSource: RepresentativePricingSource;
+    }[]
+  > {
+    const result = await this.pool.query<{
+      representative_code: string;
+      variant_code: string;
+      price_irr: string;
+      base_price_irr: string | null;
+      override_price_irr: string | null;
+    }>(
+      `select representative.code as representative_code,
+              v.code as variant_code,
+              v.price_irr::text as price_irr,
+              base.price_irr::text as base_price_irr,
+              override.price_irr::text as override_price_irr
+       from representatives representative
+       join representative_variant_access access
+         on access.representative_id = representative.id
+        and access.active = true
+       join product_variants v on v.id = access.product_variant_id
+       join products product on product.id = v.product_id
+       left join representative_variant_base_prices base
+         on base.product_variant_id = v.id
+       left join representative_variant_price_overrides override
+         on override.product_variant_id = v.id
+        and override.representative_id = representative.id
+       where representative.active = true
+         and product.active = true
+         and v.active = true
+         and v.sellable = true
+         and v.price_irr > 0
+       order by representative.code, v.code`,
+    );
+    return result.rows.map((row) => {
+      const resolved = resolveRepresentativePrice({
+        publicPriceIrr: BigInt(row.price_irr),
+        representativeBasePriceIrr: row.base_price_irr === null ? null : BigInt(row.base_price_irr),
+        representativeOverridePriceIrr:
+          row.override_price_irr === null ? null : BigInt(row.override_price_irr),
+      });
+      return {
+        representativeCode: row.representative_code,
+        variantCode: row.variant_code,
+        priceIrr: resolved.priceIrr,
+        pricingSource: resolved.pricingSource,
+      };
+    });
   }
 
   public async upsertTelegramCustomer(
@@ -142,6 +386,8 @@ export class PostgresCommerceRepository implements CommerceRepository {
     customerId: string,
     productVariantId: string,
     idempotencyKey: string,
+    representativeId?: string,
+    serviceUsernameBase?: string,
   ): Promise<SalesOrder> {
     return this.withTransaction(async (client) => {
       const customer = await client.query<{ id: string }>(
@@ -150,26 +396,23 @@ export class PostgresCommerceRepository implements CommerceRepository {
       );
       requiredRow(customer.rows);
 
+      if (serviceUsernameBase !== undefined) {
+        validateServiceUsernameBase(serviceUsernameBase);
+      }
+
       const existing = await this.findOrderByIdempotencyKey(client, idempotencyKey);
       if (existing !== null) {
-        if (existing.customerId !== customerId || existing.productVariantId !== productVariantId) {
+        if (
+          existing.customerId !== customerId ||
+          existing.productVariantId !== productVariantId ||
+          (existing.serviceUsernameBase ?? null) !== (serviceUsernameBase ?? null)
+        ) {
           throw new DomainConflictError('IDEMPOTENCY_KEY_REUSED');
         }
         return existing;
       }
 
-      const variant = await client.query<{ price_irr: string }>(
-        `select price_irr::text
-         from product_variants v
-         join products product on product.id = v.product_id
-         where v.id = $1 and v.active = true and v.sellable = true
-           and v.price_irr > 0 and product.active = true`,
-        [productVariantId],
-      );
-      const selected = variant.rows[0];
-      if (selected === undefined) {
-        throw new DomainConflictError('PRODUCT_VARIANT_NOT_SELLABLE');
-      }
+      const selected = await resolveCheckoutPrice(client, productVariantId, representativeId);
 
       const blocking = await client.query<{ exists: boolean }>(
         `select exists(
@@ -191,10 +434,19 @@ export class PostgresCommerceRepository implements CommerceRepository {
       );
       const inserted = await client.query<{ id: string }>(
         `insert into sales_orders(
-           customer_id, product_variant_id, idempotency_key, amount_irr
-         ) values ($1, $2, $3, $4)
+           customer_id, product_variant_id, idempotency_key, amount_irr,
+           representative_id, pricing_source, service_username_base
+         ) values ($1, $2, $3, $4, $5, $6, $7)
          returning id::text`,
-        [customerId, productVariantId, idempotencyKey, selected.price_irr],
+        [
+          customerId,
+          productVariantId,
+          idempotencyKey,
+          selected.priceIrr.toString(),
+          representativeId ?? null,
+          selected.pricingSource,
+          serviceUsernameBase ?? null,
+        ],
       );
       return this.requiredOrderWithClient(client, requiredRow(inserted.rows).id);
     });
@@ -596,13 +848,117 @@ function orderQuery(predicate: string): string {
     orders.amount_irr::text,
     orders.status,
     orders.service_id::text,
+    orders.representative_id::text,
+    representative.code as representative_code,
+    orders.pricing_source,
+    orders.service_username_base,
     orders.failure_code,
     orders.created_at,
     orders.updated_at
   from sales_orders orders
   join product_variants variant on variant.id = orders.product_variant_id
   join products product on product.id = variant.product_id
+  left join representatives representative on representative.id = orders.representative_id
   where ${predicate}`;
+}
+
+const variantDisplayAttributeColumns = `
+  coalesce((
+    select jsonb_agg(jsonb_build_object('position', attribute.position, 'label', attribute.label, 'value', attribute.value) order by attribute.position)
+    from product_variant_display_attributes attribute
+    where attribute.product_variant_id = v.id
+  ), '[]'::jsonb) as display_attributes
+`;
+
+const fulfilledSalesColumns = `
+  (
+    select count(*)::int
+    from sales_orders fulfilled_order
+    where fulfilled_order.product_variant_id = v.id
+      and fulfilled_order.status = 'fulfilled'
+      and fulfilled_order.created_at >= now() - interval '30 days'
+  ) as fulfilled_sales_last_30_days
+`;
+
+const pricedVariantColumns = `
+  v.id::text, v.code, product.id::text as product_id, product.name as product_name, v.name, v.description,
+  v.duration_days, v.data_limit_bytes::text, v.device_limit,
+  v.price_irr::text as price_irr,
+  base.price_irr::text as base_price_irr,
+  override.price_irr::text as override_price_irr,
+  ${fulfilledSalesColumns},
+  ${variantDisplayAttributeColumns}
+`;
+
+const representativePriceJoins = `
+  left join representative_variant_base_prices base
+    on base.product_variant_id = v.id
+  left join representative_variant_price_overrides override
+    on override.product_variant_id = v.id
+   and override.representative_id = $2
+`;
+
+async function resolveCheckoutPrice(
+  client: PoolClient,
+  productVariantId: string,
+  representativeId: string | undefined,
+): Promise<{ priceIrr: bigint; pricingSource: RepresentativePricingSource }> {
+  if (representativeId === undefined) {
+    const variant = await client.query<{ price_irr: string }>(
+      `select v.price_irr::text as price_irr
+       from product_variants v
+       join products product on product.id = v.product_id
+       where v.id = $1 and v.active = true and v.sellable = true
+         and v.price_irr > 0 and product.active = true`,
+      [productVariantId],
+    );
+    const selected = variant.rows[0];
+    if (selected === undefined) {
+      throw new DomainConflictError('PRODUCT_VARIANT_NOT_SELLABLE');
+    }
+    return resolveRepresentativePrice({
+      publicPriceIrr: BigInt(selected.price_irr),
+      representativeBasePriceIrr: null,
+      representativeOverridePriceIrr: null,
+    });
+  }
+
+  const variant = await client.query<{
+    price_irr: string;
+    base_price_irr: string | null;
+    override_price_irr: string | null;
+  }>(
+    `select v.price_irr::text as price_irr,
+            base.price_irr::text as base_price_irr,
+            override.price_irr::text as override_price_irr
+     from product_variants v
+     join products product on product.id = v.product_id
+     join representatives representative
+       on representative.id = $2 and representative.active = true
+     join representative_variant_access access
+       on access.product_variant_id = v.id
+      and access.representative_id = representative.id
+      and access.active = true
+     left join representative_variant_base_prices base
+       on base.product_variant_id = v.id
+     left join representative_variant_price_overrides override
+       on override.product_variant_id = v.id
+      and override.representative_id = representative.id
+     where v.id = $1 and v.active = true and v.sellable = true
+       and v.price_irr > 0 and product.active = true`,
+    [productVariantId, representativeId],
+  );
+  const selected = variant.rows[0];
+  if (selected === undefined) {
+    throw new DomainConflictError('PRODUCT_VARIANT_NOT_SELLABLE');
+  }
+  return resolveRepresentativePrice({
+    publicPriceIrr: BigInt(selected.price_irr),
+    representativeBasePriceIrr:
+      selected.base_price_irr === null ? null : BigInt(selected.base_price_irr),
+    representativeOverridePriceIrr:
+      selected.override_price_irr === null ? null : BigInt(selected.override_price_irr),
+  });
 }
 
 function requiredRow<T>(rows: readonly T[]): T {
@@ -611,6 +967,16 @@ function requiredRow<T>(rows: readonly T[]): T {
     throw new DomainConflictError('DATABASE_ROW_NOT_FOUND');
   }
   return row;
+}
+
+function mapRepresentative(row: RepresentativeRow): RepresentativeProfile {
+  return {
+    id: row.id,
+    code: row.code,
+    telegramUserId: row.telegram_user_id,
+    displayName: row.display_name,
+    active: row.active,
+  };
 }
 
 function mapCategory(row: CategoryRow): CatalogCategory {
@@ -625,17 +991,56 @@ function mapCategory(row: CategoryRow): CatalogCategory {
 }
 
 function mapSellableVariant(row: VariantRow): SellableProductVariant {
+  const resolved = resolveRepresentativePrice({
+    publicPriceIrr: BigInt(row.price_irr),
+    representativeBasePriceIrr:
+      row.base_price_irr === undefined || row.base_price_irr === null
+        ? null
+        : BigInt(row.base_price_irr),
+    representativeOverridePriceIrr:
+      row.override_price_irr === undefined || row.override_price_irr === null
+        ? null
+        : BigInt(row.override_price_irr),
+  });
   return {
     id: row.id,
     code: row.code,
+    ...(row.product_id === undefined ? {} : { productId: row.product_id }),
     productName: row.product_name,
     name: row.name,
     description: row.description,
     durationDays: row.duration_days,
     dataLimitBytes: BigInt(row.data_limit_bytes),
     deviceLimit: row.device_limit,
-    priceIrr: BigInt(row.price_irr),
+    priceIrr: resolved.priceIrr,
+    displayAttributes: mapDisplayAttributes(row.display_attributes),
+    fulfilledSalesLast30Days: row.fulfilled_sales_last_30_days ?? 0,
+    pricingSource: resolved.pricingSource,
   };
+}
+
+function mapDisplayAttributes(
+  value: unknown,
+): readonly { position: number; label: string; value: string }[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const record = item as Record<string, unknown>;
+    if (
+      typeof item !== 'object' ||
+      item === null ||
+      !('position' in record) ||
+      !('label' in record) ||
+      !('value' in record) ||
+      !Number.isInteger(record['position']) ||
+      typeof record['label'] !== 'string' ||
+      typeof record['value'] !== 'string'
+    ) {
+      return [];
+    }
+    return [
+      { position: record['position'] as number, label: record['label'], value: record['value'] },
+    ];
+  });
 }
 
 function mapCustomer(row: CustomerRow): TelegramCustomer {
@@ -658,10 +1063,21 @@ function mapOrder(row: OrderRow): SalesOrder {
     amountIrr: BigInt(row.amount_irr),
     status: row.status,
     serviceId: row.service_id,
+    representativeId: row.representative_id,
+    representativeCode: row.representative_code,
+    pricingSource: mapPricingSource(row.pricing_source),
+    serviceUsernameBase: row.service_username_base,
     failureCode: row.failure_code,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function mapPricingSource(value: string): RepresentativePricingSource {
+  if (!isRepresentativePricingSource(value)) {
+    throw new DomainConflictError('INVALID_PRICING_SOURCE');
+  }
+  return value;
 }
 
 function mapProof(row: ProofRow): TelegramPaymentProof {

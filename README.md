@@ -21,11 +21,10 @@ The repository now contains two tested vertical slices:
 - A card-to-card commerce flow with hierarchical categories, sellable variants, Telegram customers,
   idempotent orders, payment-proof review and provisioning after administrator approval.
 
-The repository also contains a customer Mini App and a separate catalog administration console. The
-Mini App is data-driven: products, arbitrary volume/duration/device combinations, prices, ordering
-and copy come from the public catalog API. Card-to-card details live only in the published storefront
-catalog and are shown after checkout, not on `GET /catalog`. Reseller wallets, legacy import and
-cutover are still out of scope.
+The customer store and administrator catalog management both run in Telegram chat. Products,
+volume/duration/device combinations, prices, ordering and copy come from the published catalog.
+Card-to-card details live only in published storefront settings and are shown in chat after checkout,
+not on `GET /catalog`. Reseller wallets, legacy import and cutover are still out of scope.
 
 ## Local prerequisites
 
@@ -35,7 +34,7 @@ cutover are still out of scope.
 
 Copy `.env.example` to `.env`, change only local values, then start PostgreSQL and run migrations.
 
-## First VPS (TLS, Mini App, webhook)
+## First VPS (TLS and webhook)
 
 Do not invent a hostname. Point DNS A at the server, then on the VPS:
 
@@ -46,8 +45,8 @@ bash deploy/install.sh
 ```
 
 Type the public hostname, BotFather token, numeric admin IDs, and optional report group on the
-server. The script writes a gitignored `.env`, keeps `PILOT_ENABLED=false`, builds the Mini App and
-catalog console, and starts Caddy with automatic HTTPS. Details: `docs/runbooks/first-host.md`.
+server. The script writes a gitignored `.env`, keeps `PILOT_ENABLED=false`, builds customer static
+assets, and starts Caddy with automatic HTTPS. Details: `docs/runbooks/first-host.md`.
 Never commit `.env` or paste tokens into chat.
 
 ## Local verification
@@ -72,33 +71,24 @@ Optional in-process app container (secrets come from `.env`, not the compose fil
 docker compose --profile app up --build
 ```
 
-Start the two local interfaces in separate terminals:
+Start the optional customer static interface:
 
 ```bash
 pnpm --filter admin-web dev -- --host 127.0.0.1 --port 4173
-pnpm --filter @neo-bot/catalog-admin dev
 ```
 
-- Customer Mini App: `http://127.0.0.1:4173/` (talks to `http://127.0.0.1:3100` unless `VITE_API_BASE_URL` is set)
-- Catalog administration: `http://127.0.0.1:4174/`
+- Customer static interface: `http://127.0.0.1:4173/` (talks to `http://127.0.0.1:3100` unless `VITE_API_BASE_URL` is set)
 - Public catalog API: `GET /catalog`
-- Authenticated administration: `GET|PUT /admin/catalog`
-
-In production the catalog console authenticates with administrator Telegram `initData`, not the
-development Bearer token.
-
-Set a base64url-compatible `ADMIN_API_TOKEN` of at least 32 characters before using the administration
-API. The local demo token is test-only and must never be reused for deployment.
 
 ## Managing products without code changes
 
-1. Open the catalog administration console.
+1. Open «مدیریت فروشگاه» in the private administrator chat.
 2. Edit customer-facing copy or a product.
 3. Add one matrix row for each valid combination of volume, duration, simultaneous connections and
    price.
 4. Select one or more available PasarGuard groups. Keep experimental products on an isolated group.
 5. Mark valid rows sellable, keep the product visible, then use **Save and publish**.
-6. Reload the customer Mini App. Its selectors and exact prices are derived from the published rows.
+6. In Telegram tap `/start` and use «خرید سرویس». Selectors and exact prices come from the published rows.
 
 The publish is atomic. Invalid prices, duplicate codes or unavailable groups reject the entire change
 instead of exposing a partially edited catalog.
@@ -108,13 +98,11 @@ instead of exposing a partially edited catalog.
 The webhook endpoint is `POST /telegram/webhook`. It accepts updates only when
 `TELEGRAM_ENABLED=true` and the `X-Telegram-Bot-Api-Secret-Token` header matches the configured
 secret. Keep it disabled until the BotFather token and administrator Telegram IDs are present in the
-local `.env`. Card numbers are published from the catalog console, not from Telegram env vars.
+local `.env`. Card numbers are published from private administrator chat, not from Telegram env vars.
 
 Leave `TELEGRAM_WEBHOOK_URL` unset for local use: the process deletes any webhook and long-polls
-`getUpdates`. Set an `https` URL only when Telegram can POST to this process. Optionally set
-`TELEGRAM_MINI_APP_URL` to an `https` Mini App origin so the chat menu button opens the storefront.
-A Mini App order also sends the same checkout copy to the private bot chat; the receipt photo still
-goes there, not into the Mini App.
+`getUpdates`. Set an `https` URL only when Telegram can POST to this process. Buy, pay, and send the
+receipt photo in the private bot chat.
 
 The first purchase journey is:
 

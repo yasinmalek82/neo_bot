@@ -7,7 +7,6 @@ dist/
 coverage/
 graphify-out/
 .git/
-.cursor/
 var/
 tmp/
 
@@ -38,7 +37,6 @@ apps/admin-web/vite.config.ts
 apps/admin-web/AGENTS.md
 apps/admin-web/design-qa.md
 apps/admin-web/tests/
-apps/catalog-admin/vite.config.ts
 
 # Binary and stylesheet assets
 *.woff

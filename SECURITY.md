@@ -5,7 +5,7 @@ not a claim that production is ready.
 
 ## Assets
 
-- Telegram bot token, webhook secret, PasarGuard API key, catalog admin token
+- Telegram bot token, webhook secret and PasarGuard API key
 - Card-to-card number and holder name
 - Customer Telegram numeric IDs, orders, and receipt file identifiers
 - PasarGuard subscription URLs after provisioning
@@ -14,8 +14,7 @@ not a claim that production is ready.
 
 - Public: `GET /health`, `GET /catalog` (no card numbers, no provider codes)
 - Telegram: webhook or local `getUpdates`, verified by secret or Bot API
-- Mini App: `X-Telegram-Init-Data` HMAC (`WebAppData`) and numeric `user.id`
-- Catalog admin: development Bearer token, or verified Mini App init data for administrators
+- Administrator catalog management: private Telegram chat and allowlisted numeric administrator IDs
 - Operator forum: redacted text only; no subscription URLs, tokens, card numbers, or file IDs
 
 ## Controls
@@ -23,7 +22,8 @@ not a claim that production is ready.
 - No logging of tokens, subscription URLs, raw initData, receipt file IDs, or card numbers.
   `SafeLogger` redacts those shapes from stdout. HTTP exceptions return allowlisted codes only.
 - Published catalog is the only card source; public catalog responses omit payment details
-- Mini App checkout shares `CommerceUseCase` with the chat bot; receipt photos stay in the private bot chat
+- Customer checkout shares `CommerceUseCase` in the private chat; receipt photos stay Telegram files.
+  `POST /customer/orders` and `POST /customer/renew` are gone.
 - Rate limit and 1 MiB body limit on the HTTP adapter; CORS limited to `WEB_ORIGINS`.
   Health and `POST /telegram/webhook` are excluded from the IP rate limit so Telegram retries are
   not dropped.
@@ -41,4 +41,3 @@ not a claim that production is ready.
   `docs/runbooks/secret-rotation.md`; they are not a completed live rotation.
 - CI fails on high-severity `pnpm audit` findings. One moderate `uuid` advisory remains in the
   Testcontainers development tree and is not a runtime dependency of `bot-api`
-- The development admin Bearer token must never be reused in deployment

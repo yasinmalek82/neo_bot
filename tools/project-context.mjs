@@ -71,9 +71,16 @@ async function calculateSourceFingerprint() {
 
   const hash = createHash('sha256');
   for (const relativePath of materialFiles) {
+    let contents;
+    try {
+      contents = await readFile(resolve(repositoryRoot, relativePath));
+    } catch (error) {
+      if (error !== null && typeof error === 'object' && error.code === 'ENOENT') continue;
+      throw error;
+    }
     hash.update(relativePath);
     hash.update('\0');
-    hash.update(await readFile(resolve(repositoryRoot, relativePath)));
+    hash.update(contents);
     hash.update('\0');
   }
   return hash.digest('hex');

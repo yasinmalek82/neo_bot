@@ -3,19 +3,18 @@ export interface TelegramCallbackButton {
   readonly callback_data: string;
 }
 
-export interface TelegramWebAppButton {
-  readonly text: string;
-  readonly web_app: { readonly url: string };
-}
-
-export type TelegramInlineButton = TelegramCallbackButton | TelegramWebAppButton;
+export type TelegramInlineButton = TelegramCallbackButton;
 
 export interface TelegramInlineKeyboardMarkup {
   readonly inline_keyboard: readonly (readonly TelegramInlineButton[])[];
 }
 
+export interface TelegramReplyKeyboardButton {
+  readonly text: string;
+}
+
 export interface TelegramPersistentKeyboardMarkup {
-  readonly keyboard: readonly (readonly { readonly text: string }[])[];
+  readonly keyboard: readonly (readonly TelegramReplyKeyboardButton[])[];
   readonly resize_keyboard: true;
   readonly is_persistent: true;
   readonly input_field_placeholder: string;
@@ -59,6 +58,7 @@ export interface TelegramMessenger {
     text: string,
     replyMarkup?: TelegramInlineKeyboardMarkup,
   ): Promise<void>;
+  deleteMessage?(chatId: string, messageId: string): Promise<void>;
   answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void>;
 }
 
@@ -121,13 +121,9 @@ export class TelegramApiClient implements TelegramMessenger {
     });
   }
 
-  public setChatMenuButton(url: string): Promise<void> {
+  public setCommandsMenuButton(): Promise<void> {
     return this.requestOk('setChatMenuButton', {
-      menu_button: {
-        type: 'web_app',
-        text: 'فروشگاه',
-        web_app: { url },
-      },
+      menu_button: { type: 'commands' },
     });
   }
 
@@ -154,6 +150,10 @@ export class TelegramApiClient implements TelegramMessenger {
       parse_mode: 'HTML',
       ...(replyMarkup === undefined ? {} : { reply_markup: replyMarkup }),
     });
+  }
+
+  public deleteMessage(chatId: string, messageId: string): Promise<void> {
+    return this.requestOk('deleteMessage', { chat_id: chatId, message_id: Number(messageId) });
   }
 
   public setMyCommands(

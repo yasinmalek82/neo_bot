@@ -1,5 +1,7 @@
 import type {
   CatalogCategory,
+  RepresentativeProfile,
+  RepresentativePricingSource,
   SalesOrder,
   SellableProductVariant,
   ServiceBinding,
@@ -21,6 +23,8 @@ export interface CommerceRepository {
     customerId: string,
     productVariantId: string,
     idempotencyKey: string,
+    representativeId?: string,
+    serviceUsernameBase?: string,
   ): Promise<SalesOrder>;
   getOrder(id: string): Promise<SalesOrder | null>;
   getCustomerForOrder(orderId: string): Promise<TelegramCustomer | null>;
@@ -53,12 +57,63 @@ export interface CommerceRepository {
   reserveTelegramUpdate(updateId: string): Promise<boolean>;
   completeTelegramUpdate(updateId: string): Promise<void>;
   failTelegramUpdate(updateId: string, errorCode: string): Promise<void>;
+
+  findRepresentativeByTelegramUserId?(
+    telegramUserId: string,
+  ): Promise<Pick<RepresentativeProfile, 'id' | 'code'> | null>;
+  listSellableVariantsForRepresentative?(
+    categoryId: string,
+    representativeId: string,
+  ): Promise<readonly SellableProductVariant[]>;
+  getSellableVariantForRepresentative?(
+    variantId: string,
+    representativeId: string,
+  ): Promise<SellableProductVariant | null>;
+  upsertRepresentative?(input: {
+    readonly code: string;
+    readonly telegramUserId: string;
+    readonly displayName: string;
+    readonly active: boolean;
+  }): Promise<string>;
+  listRepresentatives?(): Promise<readonly RepresentativeProfile[]>;
+  assignRepresentativeToCustomerByTelegramId?(
+    customerTelegramUserId: string,
+    representativeId: string,
+  ): Promise<void>;
+  setRepresentativeVariantAccess?(input: {
+    readonly representativeId: string;
+    readonly variantId: string;
+    readonly active: boolean;
+  }): Promise<void>;
+  setRepresentativeBasePrice?(input: {
+    readonly variantId: string;
+    readonly priceIrr: bigint;
+  }): Promise<void>;
+  setRepresentativeOverridePrice?(input: {
+    readonly representativeId: string;
+    readonly variantId: string;
+    readonly priceIrr: bigint;
+  }): Promise<void>;
+  clearRepresentativeOverridePrice?(input: {
+    readonly representativeId: string;
+    readonly variantId: string;
+  }): Promise<void>;
+  listRepresentativePriceAudit?(): Promise<
+    readonly {
+      representativeCode: string;
+      variantCode: string;
+      priceIrr: bigint;
+      pricingSource: RepresentativePricingSource;
+    }[]
+  >;
 }
 
 export interface ServiceProvisioner {
   create(command: {
     readonly productVariantId: string;
     readonly idempotencyKey: string;
+    readonly serviceUsernameBase?: string;
+    readonly requestedUsername?: string;
   }): Promise<ServiceBinding>;
   renew(command: {
     readonly serviceId: string;

@@ -27,7 +27,7 @@ The script asks for:
 - report group chat ID (empty skips forum topics)
 - PasarGuard URL and API key (empty keeps placeholders; checkout provisioning will wait until you edit host `.env`)
 
-It writes a gitignored `.env`, keeps `PILOT_ENABLED=false`, builds Mini App `dist/client` and catalog-admin at `/console/`, then starts `docker-compose.production.yml` (Postgres unpublished, API on loopback, Caddy on 80/443 with automatic HTTPS).
+It writes a gitignored `.env`, keeps `PILOT_ENABLED=false`, builds customer static assets, then starts `docker-compose.production.yml` (Postgres unpublished, API on loopback, Caddy on 80/443 with automatic HTTPS).
 
 When HTTPS answers, restart once:
 
@@ -35,8 +35,10 @@ When HTTPS answers, restart once:
 docker compose -f docker-compose.production.yml restart bot-api
 ```
 
-Then in Telegram tap `/start`. Customer Mini App is `/`. Catalog console is `/console/` opened from the admin hub Mini App button (verified admin `initData`). Do not publish catalog from Telegram keyboards.
+Then in Telegram tap `/start`. The customer store is the chat. Use «مدیریت فروشگاه» only from the
+private administrator chat to publish catalog changes.
 
-Confirm `GET /health` over HTTPS yourself (status only). Leave `PILOT_ENABLED=false` until an isolated PasarGuard group is configured.
+Confirm `GET /health` over HTTPS yourself (status only; integer `reports.pending`, `reports.failed`,
+`reports.retrying`, and `reports.due` counts with no identifiers). Leave `PILOT_ENABLED=false` until an isolated PasarGuard group is configured.
 
 See `docs/runbooks/production.md` for backup, webhook, and rollback detail.

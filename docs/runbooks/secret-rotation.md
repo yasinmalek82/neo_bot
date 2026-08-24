@@ -38,11 +38,6 @@ live rotation; it is the in-repo checklist for the first single-owner host.
 3. Restart Postgres then `bot-api`.
 4. Run `pnpm db:backup` and copy the dump off-host.
 
-## Catalog admin development token
-
-The Bearer catalog token is development-only. Do not reuse it on a public host. Production catalog
-edits use verified Mini App `initData` for administrators.
-
 ## After rotation
 
 Watch `GET /health` `telegramReady` and `reports.failed`. A competing `getUpdates` session surfaces

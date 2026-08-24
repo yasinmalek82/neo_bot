@@ -29,6 +29,25 @@ export interface StorefrontVariant {
   readonly sellable: boolean;
   readonly providerCode: string;
   readonly groupIds: readonly number[];
+  readonly displayAttributes?: readonly StorefrontDisplayAttribute[];
+}
+
+export interface StorefrontDisplayAttribute {
+  readonly position: number;
+  readonly label: string;
+  readonly value: string;
+}
+
+export type StorefrontEvidenceBadge =
+  | { readonly kind: 'popular'; readonly label: 'پرفروش' }
+  | { readonly kind: 'value'; readonly label: 'کمترین قیمت' }
+  | { readonly kind: 'capacity'; readonly label: 'بیشترین حجم' };
+
+export interface StorefrontEvidenceCandidate {
+  readonly id: string;
+  readonly fulfilledSalesLast30Days: number;
+  readonly effectivePriceIrr: bigint;
+  readonly dataLimitBytes: bigint;
 }
 
 export interface StorefrontProduct {
@@ -71,6 +90,7 @@ export interface CatalogVariantDraft {
   readonly sellable: boolean;
   readonly providerCode: string;
   readonly groupIds: readonly number[];
+  readonly displayAttributes?: readonly StorefrontDisplayAttribute[];
 }
 
 export interface CatalogProductDraft {
@@ -102,6 +122,17 @@ export interface ProviderGroupChoice {
   readonly name: string;
   readonly available: boolean;
   readonly disabled: boolean;
+}
+
+export interface RepresentativeVariantBasePriceDraft {
+  readonly variantCode: string;
+  readonly priceIrr: bigint;
+}
+
+export interface RepresentativeVariantOverrideDraft {
+  readonly representativeCode: string;
+  readonly variantCode: string;
+  readonly priceIrr: bigint;
 }
 
 export function validateStorefrontCatalogDraft(command: ReplaceStorefrontCatalogCommand): void {
@@ -177,6 +208,7 @@ export function validateStorefrontCatalogDraft(command: ReplaceStorefrontCatalog
       if (variant.groupIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
         throw new DomainConflictError('INVALID_GROUPS');
       }
+      validateStorefrontDisplayAttributes(variant.displayAttributes ?? []);
       if (variant.sellable) {
         sellableCount += 1;
         if (variant.priceIrr <= 0n)
@@ -187,6 +219,65 @@ export function validateStorefrontCatalogDraft(command: ReplaceStorefrontCatalog
       throw new DomainConflictError('ACTIVE_PRODUCT_REQUIRES_SELLABLE_VARIANT');
     }
   }
+}
+
+export function validateStorefrontDisplayAttributes(
+  attributes: readonly StorefrontDisplayAttribute[],
+): void {
+  if (attributes.length > 4) throw new DomainConflictError('INVALID_DISPLAY_ATTRIBUTES');
+  const positions = new Set<number>();
+  for (const attribute of attributes) {
+    if (!Number.isInteger(attribute.position) || attribute.position < 0 || attribute.position > 3) {
+      throw new DomainConflictError('INVALID_DISPLAY_ATTRIBUTES');
+    }
+    if (positions.has(attribute.position))
+      throw new DomainConflictError('INVALID_DISPLAY_ATTRIBUTES');
+    positions.add(attribute.position);
+    requireText(attribute.label, 1, 40, 'INVALID_DISPLAY_ATTRIBUTES');
+    requireText(attribute.value, 1, 120, 'INVALID_DISPLAY_ATTRIBUTES');
+  }
+}
+
+export function selectStorefrontEvidenceBadges(
+  candidates: readonly StorefrontEvidenceCandidate[],
+): ReadonlyMap<string, StorefrontEvidenceBadge> {
+  const badges = new Map<string, StorefrontEvidenceBadge>();
+  const popular = uniqueCandidate(candidates, (item) => item.fulfilledSalesLast30Days, 'max');
+  if (popular !== null && popular.fulfilledSalesLast30Days >= 3) {
+    badges.set(popular.id, { kind: 'popular', label: 'پرفروش' });
+  }
+  const value = uniqueCandidate(candidates, (item) => item.effectivePriceIrr, 'min');
+  if (value !== null && !badges.has(value.id)) {
+    badges.set(value.id, { kind: 'value', label: 'کمترین قیمت' });
+  }
+  const finite = candidates.filter((item) => item.dataLimitBytes > 0n);
+  const capacity = uniqueCandidate(finite, (item) => item.dataLimitBytes, 'max');
+  if (capacity !== null && !badges.has(capacity.id)) {
+    badges.set(capacity.id, { kind: 'capacity', label: 'بیشترین حجم' });
+  }
+  return badges;
+}
+
+function uniqueCandidate(
+  candidates: readonly StorefrontEvidenceCandidate[],
+  metric: (item: StorefrontEvidenceCandidate) => number | bigint,
+  direction: 'min' | 'max',
+): StorefrontEvidenceCandidate | null {
+  if (candidates.length === 0) return null;
+  let selected = candidates[0];
+  if (selected === undefined) return null;
+  let count = 1;
+  for (const candidate of candidates.slice(1)) {
+    const value = metric(candidate);
+    const current = metric(selected);
+    if ((direction === 'min' && value < current) || (direction === 'max' && value > current)) {
+      selected = candidate;
+      count = 1;
+    } else if (value === current) {
+      count += 1;
+    }
+  }
+  return count === 1 ? selected : null;
 }
 
 function requireCode(value: string, errorCode: string): void {
@@ -201,5 +292,36 @@ function requireText(value: string, minimum: number, maximum: number, errorCode:
 function requirePosition(value: number): void {
   if (!Number.isInteger(value) || value < -10_000 || value > 10_000) {
     throw new DomainConflictError('INVALID_POSITION');
+  }
+}
+
+export function validateRepresentativePricingDraft(input: {
+  readonly basePrices: readonly RepresentativeVariantBasePriceDraft[];
+  readonly overrides: readonly RepresentativeVariantOverrideDraft[];
+}): void {
+  const baseKeys = new Set<string>();
+  for (const item of input.basePrices) {
+    requireCode(item.variantCode, 'INVALID_VARIANT_CODE');
+    if (item.priceIrr <= 0n) {
+      throw new DomainConflictError('INVALID_PRICE');
+    }
+    if (baseKeys.has(item.variantCode)) {
+      throw new DomainConflictError('DUPLICATE_VARIANT_CODE');
+    }
+    baseKeys.add(item.variantCode);
+  }
+
+  const overrideKeys = new Set<string>();
+  for (const item of input.overrides) {
+    requireCode(item.representativeCode, 'INVALID_PROVIDER_CODE');
+    requireCode(item.variantCode, 'INVALID_VARIANT_CODE');
+    if (item.priceIrr <= 0n) {
+      throw new DomainConflictError('INVALID_PRICE');
+    }
+    const key = `${item.representativeCode}:${item.variantCode}`;
+    if (overrideKeys.has(key)) {
+      throw new DomainConflictError('DUPLICATE_VARIANT_CODE');
+    }
+    overrideKeys.add(key);
   }
 }

@@ -1,6 +1,8 @@
 import {
   DomainConflictError,
+  selectStorefrontEvidenceBadges,
   validatePaymentProofReference,
+  validateServiceUsernameBase,
   validateTelegramCustomerInput,
   type CatalogCategory,
   type SalesOrder,
@@ -33,8 +35,68 @@ export class CommerceUseCase {
     return this.repository.listSellableVariants(categoryId);
   }
 
+  public async listVariantsForCustomer(
+    categoryId: string,
+    customerInput: TelegramCustomerInput,
+  ): Promise<readonly SellableProductVariant[]> {
+    const representative = await this.resolveRepresentativeByTelegramUserId(
+      customerInput.telegramUserId,
+    );
+    if (
+      representative !== null &&
+      this.repository.listSellableVariantsForRepresentative !== undefined
+    ) {
+      return this.withEvidenceBadges(
+        await this.repository.listSellableVariantsForRepresentative(categoryId, representative.id),
+      );
+    }
+    return this.withEvidenceBadges(await this.repository.listSellableVariants(categoryId));
+  }
+
+  private withEvidenceBadges(
+    variants: readonly SellableProductVariant[],
+  ): readonly SellableProductVariant[] {
+    const byProduct = new Map<string, SellableProductVariant[]>();
+    for (const variant of variants) {
+      const key = variant.productId ?? variant.productName;
+      const productVariants = byProduct.get(key) ?? [];
+      productVariants.push(variant);
+      byProduct.set(key, productVariants);
+    }
+    return variants.map((variant) => {
+      const productVariants = byProduct.get(variant.productId ?? variant.productName) ?? [];
+      const badges = selectStorefrontEvidenceBadges(
+        productVariants.map((candidate) => ({
+          id: candidate.id,
+          fulfilledSalesLast30Days: candidate.fulfilledSalesLast30Days ?? 0,
+          effectivePriceIrr: candidate.priceIrr,
+          dataLimitBytes: candidate.dataLimitBytes,
+        })),
+      );
+      const evidenceBadge = badges.get(variant.id);
+      return evidenceBadge === undefined ? variant : { ...variant, evidenceBadge };
+    });
+  }
+
   public async getVariant(id: string): Promise<SellableProductVariant> {
     const variant = await this.repository.getSellableVariant(id);
+    if (variant === null) {
+      throw new DomainConflictError('PRODUCT_VARIANT_NOT_SELLABLE');
+    }
+    return variant;
+  }
+
+  public async getVariantForCustomer(
+    id: string,
+    customerInput: TelegramCustomerInput,
+  ): Promise<SellableProductVariant> {
+    const representative = await this.resolveRepresentativeByTelegramUserId(
+      customerInput.telegramUserId,
+    );
+    const variant =
+      representative !== null && this.repository.getSellableVariantForRepresentative !== undefined
+        ? await this.repository.getSellableVariantForRepresentative(id, representative.id)
+        : await this.repository.getSellableVariant(id);
     if (variant === null) {
       throw new DomainConflictError('PRODUCT_VARIANT_NOT_SELLABLE');
     }
@@ -83,8 +145,10 @@ export class CommerceUseCase {
     readonly customer: TelegramCustomerInput;
     readonly productVariantId: string;
     readonly idempotencyKey: string;
+    readonly serviceUsernameBase: string;
   }): Promise<SalesOrder> {
     validateTelegramCustomerInput(command.customer);
+    validateServiceUsernameBase(command.serviceUsernameBase);
     requireIdempotencyKey(command.idempotencyKey);
     const { customer, created } = await this.repository.upsertTelegramCustomer(command.customer);
     if (created) {
@@ -94,10 +158,15 @@ export class CommerceUseCase {
         payload: { telegramUserId: customer.telegramUserId },
       });
     }
+    const representative = await this.resolveRepresentativeByTelegramUserId(
+      command.customer.telegramUserId,
+    );
     const order = await this.repository.createOrder(
       customer.id,
       command.productVariantId,
       command.idempotencyKey,
+      representative?.id,
+      command.serviceUsernameBase,
     );
     await this.publish({
       type: 'order.created',
@@ -108,8 +177,24 @@ export class CommerceUseCase {
         productName: order.productName,
         variantName: order.variantName,
         amountIrr: order.amountIrr.toString(),
+        ...(representative === null ? {} : { representativeCode: representative.code }),
       },
     });
+    if (order.representativeCode != null) {
+      await this.publish({
+        type: 'reseller.order_created',
+        occurrenceKey: `reseller:order:${order.id}:created`,
+        payload: {
+          orderId: order.id,
+          representativeCode: order.representativeCode,
+          telegramUserId: customer.telegramUserId,
+          productName: order.productName,
+          variantName: order.variantName,
+          amountIrr: order.amountIrr.toString(),
+          pricingSource: order.pricingSource ?? 'public',
+        },
+      });
+    }
     return order;
   }
 
@@ -175,6 +260,13 @@ export class CommerceUseCase {
       throw new DomainConflictError('ORDER_NOT_READY_FOR_RETRY');
     }
     return this.fulfillReservedOrder(order);
+  }
+
+  public async hasActiveService(customerInput: TelegramCustomerInput): Promise<boolean> {
+    validateTelegramCustomerInput(customerInput);
+    const { customer } = await this.repository.upsertTelegramCustomer(customerInput);
+    const serviceId = await this.repository.getLatestFulfilledServiceId(customer.id);
+    return serviceId !== null;
   }
 
   public async renewForCustomer(customerInput: TelegramCustomerInput): Promise<ServiceBinding> {
@@ -245,6 +337,9 @@ export class CommerceUseCase {
       const service = await this.serviceProvisioner.create({
         productVariantId: order.productVariantId,
         idempotencyKey: `order:${order.id}:provision`,
+        ...(order.serviceUsernameBase === null
+          ? {}
+          : { serviceUsernameBase: order.serviceUsernameBase }),
       });
       const fulfilled = await this.repository.completeOrder(order.id, service.id);
       await this.publish({
@@ -279,6 +374,15 @@ export class CommerceUseCase {
       return;
     }
     await this.reporting.record(input);
+  }
+
+  private async resolveRepresentativeByTelegramUserId(
+    telegramUserId: string,
+  ): Promise<{ id: string; code: string } | null> {
+    if (this.repository.findRepresentativeByTelegramUserId === undefined) {
+      return null;
+    }
+    return this.repository.findRepresentativeByTelegramUserId(telegramUserId);
   }
 }
 
