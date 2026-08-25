@@ -1,11 +1,11 @@
 import './load-local-env.js';
 
-import { DirectServiceUseCase } from '@neo-bot/application';
+import { DirectServiceUseCase, ProvisioningModeGate } from '@neo-bot/application';
 import { createDatabasePool, migrate, PostgresProvisioningRepository } from '@neo-bot/database';
 import type { ServiceBinding } from '@neo-bot/domain';
 import { PasarGuardClient, PasarGuardError } from '@neo-bot/pasarguard';
 
-import { loadPilotConfig } from './config.js';
+import { loadPilotConfig, type PilotConfig } from './config.js';
 
 type PilotCommand = 'provider-health' | 'sync-groups' | 'seed-variant' | 'create' | 'get' | 'renew';
 
@@ -18,7 +18,15 @@ const config = loadPilotConfig();
 const pool = createDatabasePool({ connectionString: config.databaseUrl });
 const repository = new PostgresProvisioningRepository(pool);
 const provider = new PasarGuardClient({ baseUrl: config.baseUrl, apiKey: config.apiKey });
-const useCase = new DirectServiceUseCase(repository, provider);
+const useCase = new DirectServiceUseCase(
+  repository,
+  provider,
+  () => new Date(),
+  new ProvisioningModeGate({
+    mode: config.provisioningMode,
+    isolatedGroupId: config.isolatedGroupId,
+  }),
+);
 
 try {
   await migrate(pool);
@@ -45,6 +53,7 @@ try {
     case 'seed-variant': {
       requirePilotEnabled(config.pilotEnabled);
       requirePilotGroup(config.groupId);
+      requirePilotGroupMatchesMode(config);
       const variantId = await repository.upsertPilotVariant({
         providerInstanceId,
         code: config.variantCode,
@@ -113,6 +122,12 @@ function requirePilotEnabled(enabled: boolean): void {
 function requirePilotGroup(groupId: number): void {
   if (groupId <= 0) {
     throw new Error('PILOT_GROUP_NOT_SELECTED');
+  }
+}
+
+function requirePilotGroupMatchesMode(config: PilotConfig): void {
+  if (config.provisioningMode === 'isolated' && config.groupId !== config.isolatedGroupId) {
+    throw new Error('PILOT_GROUP_MODE_MISMATCH');
   }
 }
 

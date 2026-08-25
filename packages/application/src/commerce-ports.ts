@@ -1,5 +1,8 @@
 import type {
   CatalogCategory,
+  ClaimedDeliveryJob,
+  CustomerDeliveryJob,
+  PaymentProofMediaKind,
   RepresentativeProfile,
   RepresentativePricingSource,
   SalesOrder,
@@ -26,6 +29,11 @@ export interface CommerceRepository {
     representativeId?: string,
     serviceUsernameBase?: string,
   ): Promise<SalesOrder>;
+  createRenewalOrder(
+    customerId: string,
+    idempotencyKey: string,
+    representativeId?: string,
+  ): Promise<SalesOrder>;
   getOrder(id: string): Promise<SalesOrder | null>;
   getCustomerForOrder(orderId: string): Promise<TelegramCustomer | null>;
   getOpenOrderForCustomer(customerId: string): Promise<SalesOrder | null>;
@@ -45,7 +53,22 @@ export interface CommerceRepository {
     customerId: string,
     telegramFileId: string,
     telegramFileUniqueId: string,
+    mediaKind?: PaymentProofMediaKind | null,
   ): Promise<{ readonly order: SalesOrder; readonly proof: TelegramPaymentProof }>;
+  getPaymentProof(orderId: string): Promise<TelegramPaymentProof | null>;
+  claimDueDeliveryJobs(limit: number, now: Date): Promise<readonly ClaimedDeliveryJob[]>;
+  markDeliveryJobBrandSent(jobId: string, now: Date): Promise<void>;
+  markDeliveryJobAnchor(jobId: string, telegramMessageId: string, now: Date): Promise<void>;
+  markDeliveryJobDelivered(jobId: string, now: Date): Promise<void>;
+  retryDeliveryJob(jobId: string, errorCode: string, nextAttemptAt: Date, now: Date): Promise<void>;
+  failDeliveryJob(jobId: string, errorCode: string, now: Date): Promise<void>;
+  getDeliveryJobForOrder(orderId: string): Promise<CustomerDeliveryJob | null>;
+  resetDeliveryJob(orderId: string, now: Date): Promise<CustomerDeliveryJob>;
+  backfillMissingDeliveryJobs(now: Date): Promise<number>;
+  getOrderDeliveryTarget(orderId: string): Promise<{
+    readonly chatId: string;
+    readonly subscriptionUrl: string;
+  } | null>;
   reserveProvisioning(orderId: string, adminTelegramUserId: string): Promise<SalesOrder>;
   completeOrder(orderId: string, serviceId: string): Promise<SalesOrder>;
   markProvisioningFailed(orderId: string, errorCode: string): Promise<SalesOrder>;

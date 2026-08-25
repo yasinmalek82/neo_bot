@@ -3,12 +3,7 @@ import { DomainConflictError, type SalesOrder, type TelegramCustomerInput } from
 
 import type { TelegramMessenger } from './telegram-api.js';
 import { verifyTelegramInitData } from './telegram-init-data.js';
-import {
-  backToMenuButton,
-  checkoutText,
-  columnKeyboard,
-  renewalCompletedText,
-} from './telegram-menu.js';
+import { backToMenuButton, checkoutText, columnKeyboard } from './telegram-menu.js';
 
 interface ShopCategorySummary {
   readonly id: string;
@@ -36,12 +31,6 @@ interface ShopCategoryDetail {
   readonly variants: readonly ShopVariantSummary[];
 }
 
-interface ServiceReader {
-  get(serviceId: string): Promise<{
-    readonly remote: { readonly subscriptionUrl: string };
-  }>;
-}
-
 export class CustomerOrderService {
   public constructor(
     private readonly commerce: CommerceUseCase,
@@ -49,7 +38,6 @@ export class CustomerOrderService {
     private readonly botToken: string,
     private readonly messenger: TelegramMessenger | null = null,
     private readonly adminTelegramUserIds: ReadonlySet<string> = new Set(),
-    private readonly serviceReader: ServiceReader | null = null,
   ) {}
 
   public async listShopCategories(
@@ -133,13 +121,6 @@ export class CustomerOrderService {
     return { hasActiveService: await this.commerce.hasActiveService(customer) };
   }
 
-  public async renew(initData: string): Promise<{ readonly status: 'renewed' }> {
-    const customer = this.customerFrom(initData);
-    const service = await this.commerce.renewForCustomer(customer);
-    await this.notifyPrivateRenewal(customer.privateChatId, service.id);
-    return { status: 'renewed' };
-  }
-
   private customerFrom(initData: string): TelegramCustomerInput {
     const user = verifyTelegramInitData(initData, this.botToken);
     return {
@@ -181,23 +162,6 @@ export class CustomerOrderService {
       );
     } catch {
       // Mini App checkout still succeeds; the customer can send the receipt from the bot menu.
-    }
-  }
-
-  private async notifyPrivateRenewal(chatId: string, serviceId: string): Promise<void> {
-    if (this.messenger === null || this.serviceReader === null) {
-      return;
-    }
-    try {
-      const remote = await this.serviceReader.get(serviceId);
-      await this.messenger.sendMessage(
-        chatId,
-        renewalCompletedText(remote.remote.subscriptionUrl),
-        columnKeyboard([backToMenuButton()]),
-        { parseMode: 'HTML' },
-      );
-    } catch {
-      // Mini App renew still succeeds; the customer can open the bot chat for the link.
     }
   }
 }

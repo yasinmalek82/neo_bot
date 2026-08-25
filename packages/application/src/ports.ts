@@ -24,6 +24,25 @@ export interface ProvisioningRepository {
     requestHash: string,
     serviceId?: string,
   ): Promise<ReservedOperation>;
+  persistCreateCandidate(
+    operationId: string,
+    username: string,
+    requestedExpiresAt: Date,
+    requestedDataLimitBytes: bigint,
+    requestedStatus: ServiceBinding['status'],
+  ): Promise<ProvisioningOperation>;
+  replaceCreateCandidateAfterCollision(
+    operationId: string,
+    expectedUsername: string,
+    username: string,
+  ): Promise<ProvisioningOperation>;
+  beginCreateAttempt(operationId: string): Promise<ReservedOperation>;
+  beginRenewAttempt(
+    operationId: string,
+    requestedExpiresAt: Date,
+    requestedDataLimitBytes: bigint,
+    requestedStatus: ServiceBinding['status'],
+  ): Promise<ReservedOperation>;
   completeCreate(
     operationId: string,
     variant: DirectProductVariant,
@@ -32,6 +51,8 @@ export interface ProvisioningRepository {
       readonly username: string;
       readonly status: ServiceBinding['status'];
       readonly expiresAt: Date | null;
+      readonly dataLimitBytes: bigint;
+      readonly groupIds: readonly number[];
       readonly subscriptionUrl: string;
     },
   ): Promise<ServiceBinding>;
@@ -41,6 +62,7 @@ export interface ProvisioningRepository {
     remote: {
       readonly status: ServiceBinding['status'];
       readonly expiresAt: Date | null;
+      readonly dataLimitBytes: bigint;
       readonly subscriptionUrl: string;
     },
   ): Promise<ServiceBinding>;

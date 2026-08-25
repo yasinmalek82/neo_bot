@@ -131,7 +131,7 @@ describe('telegram menu copy', () => {
     expect(matchMenuAction('وضعیت سیستم')).toBe('status');
     expect(receiptConflictText('OPEN_ORDER_UNDER_REVIEW')).toContain('در حال بررسی');
     expect(receiptConflictText('NO_ORDER_AWAITING_PAYMENT')).toContain('سفارش باز پیدا نشد');
-    expect(renewalFailedText()).toContain('تمدید الان تمام نشد');
+    expect(renewalFailedText()).toContain('ثبت سفارش تمدید انجام نشد');
     expect(
       adminStatusText({
         categoryCount: 2,
@@ -230,7 +230,7 @@ describe('telegram menu copy', () => {
       'هنوز منتشر نشده',
     );
     expect(renewalCompletedText('https://panel.example/sub/x')).toContain('تمدید انجام شد');
-    expect(renewalPreviewText()).toContain('لینک اشتراک ثابت می‌ماند');
+    expect(renewalPreviewText()).toContain('تمدید فقط پس از تأیید رسید انجام می‌شود');
     expect(serviceDeliveredText('https://panel.example/sub/x')).toContain('سرویس آماده است');
     expect(guideInlineKeyboard()).toEqual({
       inline_keyboard: [

@@ -8,6 +8,7 @@ import type {
   ProviderUserStatus,
   ServiceBinding,
 } from '@neo-bot/domain';
+import { DomainConflictError } from '@neo-bot/domain';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 interface VariantRow extends QueryResultRow {
@@ -28,6 +29,12 @@ interface OperationRow extends QueryResultRow {
   idempotency_key: string;
   request_hash: string;
   status: ProvisioningOperationStatus;
+  candidate_username: string | null;
+  attempt_count: number;
+  reconciliation_state: ProvisioningOperation['reconciliationState'];
+  requested_expires_at: Date | null;
+  requested_data_limit_bytes: string | null;
+  requested_status: ProviderUserStatus | null;
   service_id: string | null;
   remote_user_id: string | null;
   error_code: string | null;
@@ -242,6 +249,8 @@ export class PostgresProvisioningRepository implements ProvisioningRepository {
       readonly username: string;
       readonly status: ProviderUserStatus;
       readonly expiresAt: Date | null;
+      readonly dataLimitBytes: bigint;
+      readonly groupIds: readonly number[];
       readonly subscriptionUrl: string;
     },
   ): Promise<ServiceBinding> {
@@ -249,6 +258,21 @@ export class PostgresProvisioningRepository implements ProvisioningRepository {
       const operation = await this.lockOperation(client, operationId);
       if (operation.status === 'completed' && operation.service_id !== null) {
         return this.requiredServiceWithClient(client, operation.service_id);
+      }
+      if (
+        operation.candidate_username !== null &&
+        operation.candidate_username !== remote.username
+      ) {
+        throw new DomainConflictError('CREATE_CANDIDATE_MISMATCH');
+      }
+      if (
+        operation.requested_expires_at !== null &&
+        (operation.requested_expires_at.getTime() !== (remote.expiresAt?.getTime() ?? NaN) ||
+          operation.requested_data_limit_bytes !== remote.dataLimitBytes.toString() ||
+          operation.requested_status !== remote.status ||
+          !sameGroupIds(remote.groupIds, variant.groupIds))
+      ) {
+        throw new DomainConflictError('CREATE_REMOTE_POSTCONDITION_FAILED');
       }
       const service = await client.query<ServiceRow>(
         `insert into services(
@@ -275,7 +299,7 @@ export class PostgresProvisioningRepository implements ProvisioningRepository {
       await client.query(
         `update provisioning_operations
          set status = 'completed', service_id = $2, remote_user_id = $3,
-             error_code = null, updated_at = now()
+             reconciliation_state = 'reconciled', error_code = null, updated_at = now()
          where id = $1`,
         [operationId, binding.id, remote.id],
       );
@@ -289,6 +313,7 @@ export class PostgresProvisioningRepository implements ProvisioningRepository {
     remote: {
       readonly status: ProviderUserStatus;
       readonly expiresAt: Date | null;
+      readonly dataLimitBytes: bigint;
       readonly subscriptionUrl: string;
     },
   ): Promise<ServiceBinding> {
@@ -296,6 +321,14 @@ export class PostgresProvisioningRepository implements ProvisioningRepository {
       const operation = await this.lockOperation(client, operationId);
       if (operation.status === 'completed') {
         return this.requiredServiceWithClient(client, serviceId);
+      }
+      if (
+        operation.requested_expires_at !== null &&
+        (operation.requested_expires_at.getTime() !== (remote.expiresAt?.getTime() ?? NaN) ||
+          operation.requested_data_limit_bytes !== remote.dataLimitBytes.toString() ||
+          operation.requested_status !== remote.status)
+      ) {
+        throw new DomainConflictError('RENEW_REMOTE_POSTCONDITION_FAILED');
       }
       const service = await client.query<ServiceRow>(
         `update services
@@ -308,7 +341,7 @@ export class PostgresProvisioningRepository implements ProvisioningRepository {
       await client.query(
         `update provisioning_operations
          set status = 'completed', service_id = $2, remote_user_id = $3,
-             error_code = null, updated_at = now()
+             reconciliation_state = 'reconciled', error_code = null, updated_at = now()
          where id = $1`,
         [operationId, serviceId, binding.targetUserId],
       );
@@ -319,7 +352,7 @@ export class PostgresProvisioningRepository implements ProvisioningRepository {
   public async markOperationFailed(operationId: string, errorCode: string): Promise<void> {
     await this.pool.query(
       `update provisioning_operations
-       set status = 'failed', error_code = $2, updated_at = now()
+       set status = 'failed', reconciliation_state = 'not_required', error_code = $2, updated_at = now()
        where id = $1 and status <> 'completed'`,
       [operationId, errorCode],
     );
@@ -328,7 +361,8 @@ export class PostgresProvisioningRepository implements ProvisioningRepository {
   public async markOperationPending(operationId: string, errorCode: string): Promise<void> {
     await this.pool.query(
       `update provisioning_operations
-       set status = 'pending', error_code = $2, updated_at = now()
+       set status = 'pending', reconciliation_state = 'reconciliation_required',
+           error_code = $2, updated_at = now()
        where id = $1 and status <> 'completed'`,
       [operationId, errorCode],
     );
@@ -343,12 +377,117 @@ export class PostgresProvisioningRepository implements ProvisioningRepository {
     return row === undefined ? null : mapService(row);
   }
 
+  public async persistCreateCandidate(
+    operationId: string,
+    username: string,
+    requestedExpiresAt: Date,
+    requestedDataLimitBytes: bigint,
+    requestedStatus: ProviderUserStatus,
+  ): Promise<ProvisioningOperation> {
+    const result = await this.pool.query<OperationRow>(
+      `update provisioning_operations
+       set candidate_username = $2, reconciliation_state = 'candidate_persisted',
+           requested_expires_at = $3, requested_data_limit_bytes = $4,
+           requested_status = $5, error_code = null, updated_at = now()
+       where id = $1
+         and operation_type = 'create'
+         and status = 'pending'
+         and candidate_username is null
+         and attempt_count = 0
+         and reconciliation_state = 'not_required'
+       returning ${operationColumns}`,
+      [
+        operationId,
+        username,
+        requestedExpiresAt,
+        requestedDataLimitBytes.toString(),
+        requestedStatus,
+      ],
+    );
+    const row = result.rows[0];
+    return row === undefined ? this.requiredOperation(operationId) : mapOperation(row);
+  }
+
+  public async replaceCreateCandidateAfterCollision(
+    operationId: string,
+    expectedUsername: string,
+    username: string,
+  ): Promise<ProvisioningOperation> {
+    const result = await this.pool.query<OperationRow>(
+      `update provisioning_operations
+       set candidate_username = $3, reconciliation_state = 'candidate_persisted',
+           error_code = null, updated_at = now()
+       where id = $1
+         and operation_type = 'create'
+         and status = 'pending'
+         and candidate_username = $2
+         and reconciliation_state in ('candidate_persisted', 'attempting')
+       returning ${operationColumns}`,
+      [operationId, expectedUsername, username],
+    );
+    const row = result.rows[0];
+    return row === undefined ? this.requiredOperation(operationId) : mapOperation(row);
+  }
+
+  public async beginCreateAttempt(operationId: string): Promise<ReservedOperation> {
+    const started = await this.pool.query<OperationRow>(
+      `update provisioning_operations
+       set attempt_count = attempt_count + 1, reconciliation_state = 'attempting',
+           error_code = null, updated_at = now()
+       where id = $1
+         and operation_type = 'create'
+         and status = 'pending'
+         and candidate_username is not null
+         and reconciliation_state = 'candidate_persisted'
+       returning ${operationColumns}`,
+      [operationId],
+    );
+    const row = started.rows[0];
+    if (row !== undefined) {
+      return { outcome: 'reserved', operation: mapOperation(row) };
+    }
+    return { outcome: 'existing', operation: await this.requiredOperation(operationId) };
+  }
+
+  public async beginRenewAttempt(
+    operationId: string,
+    requestedExpiresAt: Date,
+    requestedDataLimitBytes: bigint,
+    requestedStatus: ProviderUserStatus,
+  ): Promise<ReservedOperation> {
+    const started = await this.pool.query<OperationRow>(
+      `update provisioning_operations
+       set attempt_count = attempt_count + 1, reconciliation_state = 'attempting',
+           requested_expires_at = $2, requested_data_limit_bytes = $3,
+           requested_status = $4, error_code = null, updated_at = now()
+       where id = $1
+         and operation_type = 'renew'
+         and status = 'pending'
+         and reconciliation_state = 'not_required'
+       returning ${operationColumns}`,
+      [operationId, requestedExpiresAt, requestedDataLimitBytes.toString(), requestedStatus],
+    );
+    const row = started.rows[0];
+    if (row !== undefined) {
+      return { outcome: 'reserved', operation: mapOperation(row) };
+    }
+    return { outcome: 'existing', operation: await this.requiredOperation(operationId) };
+  }
+
   private async lockOperation(client: PoolClient, id: string): Promise<OperationRow> {
     const result = await client.query<OperationRow>(
       `select ${operationColumns} from provisioning_operations where id = $1 for update`,
       [id],
     );
     return requiredRow(result.rows);
+  }
+
+  private async requiredOperation(id: string): Promise<ProvisioningOperation> {
+    const result = await this.pool.query<OperationRow>(
+      `select ${operationColumns} from provisioning_operations where id = $1`,
+      [id],
+    );
+    return mapOperation(requiredRow(result.rows));
   }
 
   private async requiredServiceWithClient(client: PoolClient, id: string): Promise<ServiceBinding> {
@@ -381,6 +520,12 @@ const operationColumns = `
   idempotency_key,
   request_hash,
   status,
+  candidate_username,
+  attempt_count,
+  reconciliation_state,
+  requested_expires_at,
+  requested_data_limit_bytes::text,
+  requested_status,
   service_id::text,
   remote_user_id::text,
   error_code
@@ -426,6 +571,13 @@ function mapOperation(row: OperationRow): ProvisioningOperation {
     idempotencyKey: row.idempotency_key,
     requestHash: row.request_hash,
     status: row.status,
+    candidateUsername: row.candidate_username,
+    attemptCount: row.attempt_count,
+    reconciliationState: row.reconciliation_state,
+    requestedExpiresAt: row.requested_expires_at,
+    requestedDataLimitBytes:
+      row.requested_data_limit_bytes === null ? null : BigInt(row.requested_data_limit_bytes),
+    requestedStatus: row.requested_status,
     serviceId: row.service_id,
     remoteUserId: row.remote_user_id === null ? null : Number(row.remote_user_id),
     errorCode: row.error_code,
@@ -443,4 +595,12 @@ function mapService(row: ServiceRow): ServiceBinding {
     expiresAt: row.expires_at,
     subscriptionUrl: row.subscription_url,
   };
+}
+
+function sameGroupIds(left: readonly number[], right: readonly number[]): boolean {
+  const actual = [...left].sort((first, second) => first - second);
+  const expected = [...right].sort((first, second) => first - second);
+  return (
+    actual.length === expected.length && actual.every((value, index) => value === expected[index])
+  );
 }

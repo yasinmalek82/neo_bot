@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ProvisioningMode } from '@neo-bot/application';
 
 const databaseEnvironmentSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -33,6 +34,8 @@ const telegramEnvironmentSchema = z.object({
 const pilotEnvironmentSchema = databaseEnvironmentSchema.extend({
   PASARGUARD_BASE_URL: z.url(),
   PASARGUARD_API_KEY: z.string().min(8),
+  PROVISIONING_MODE: z.enum(['disabled', 'isolated', 'live']).default('disabled'),
+  PROVISIONING_ISOLATED_GROUP_ID: z.coerce.number().int().positive().optional(),
   PILOT_ENABLED: z.enum(['true', 'false']).default('false'),
   PILOT_PROVIDER_CODE: z
     .string()
@@ -59,10 +62,12 @@ interface HttpConfig {
   readonly webOrigins: readonly string[];
 }
 
-interface PilotConfig extends DatabaseConfig {
+export interface PilotConfig extends DatabaseConfig {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly pilotEnabled: boolean;
+  readonly provisioningMode: ProvisioningMode;
+  readonly isolatedGroupId: number | null;
   readonly providerCode: string;
   readonly variantCode: string;
   readonly variantName: string;
@@ -125,11 +130,19 @@ export function loadPilotConfig(environment: NodeJS.ProcessEnv = process.env): P
   if (!parsed.success) {
     throw new Error('INVALID_PILOT_CONFIGURATION');
   }
+  if (
+    parsed.data.PROVISIONING_MODE === 'isolated' &&
+    parsed.data.PROVISIONING_ISOLATED_GROUP_ID === undefined
+  ) {
+    throw new Error('INVALID_PILOT_CONFIGURATION');
+  }
   return {
     databaseUrl: parsed.data.DATABASE_URL,
     baseUrl: parsed.data.PASARGUARD_BASE_URL,
     apiKey: parsed.data.PASARGUARD_API_KEY,
     pilotEnabled: parsed.data.PILOT_ENABLED === 'true',
+    provisioningMode: parsed.data.PROVISIONING_MODE,
+    isolatedGroupId: parsed.data.PROVISIONING_ISOLATED_GROUP_ID ?? null,
     providerCode: parsed.data.PILOT_PROVIDER_CODE,
     variantCode: parsed.data.PILOT_VARIANT_CODE,
     variantName: parsed.data.PILOT_VARIANT_NAME,

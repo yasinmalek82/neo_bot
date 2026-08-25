@@ -320,8 +320,8 @@ export function renewalCompletedText(subscriptionUrl: string): string {
 export function renewalPreviewText(): string {
   return [
     '<b>تمدید سرویس</b>',
-    'آخرین سرویس فعال با همان مشخصات دورهٔ اصلی تمدید می‌شود و لینک اشتراک ثابت می‌ماند.',
-    'برای ثبت تمدید، تأیید را بزن.',
+    'آخرین سرویس فعال با مشخصات و قیمت فعلی همان پلن تمدید می‌شود.',
+    'پس از تأیید، اطلاعات پرداخت نمایش داده می‌شود؛ تمدید فقط پس از تأیید رسید انجام می‌شود.',
   ].join('\n');
 }
 
@@ -532,10 +532,32 @@ export function provisioningDelayedText(): string {
   ].join('\n');
 }
 
+export function deliveryAnchorText(): string {
+  return [
+    '<b>سرویس شما آماده شد</b>',
+    'لینک اشتراک در همین پیام ثبت می‌شود؛ چند لحظه صبر کن.',
+  ].join('\n');
+}
+
+export function deliveryStageLabel(stage: string): string {
+  switch (stage) {
+    case 'pending_brand_media':
+      return 'در انتظار ارسال';
+    case 'pending_link':
+      return 'در انتظار ثبت لینک';
+    case 'delivered':
+      return 'تحویل داده شد';
+    case 'failed':
+      return 'ارسال ناموفق — قابل تلاش مجدد';
+    default:
+      return 'نامشخص';
+  }
+}
+
 export function renewalFailedText(): string {
   return [
-    '<b>تمدید الان تمام نشد</b>',
-    'سرویس قبلی هنوز پابرجاست. کمی بعد از منوی تمدید دوباره تلاش کن.',
+    '<b>ثبت سفارش تمدید انجام نشد</b>',
+    'سرویس قبلی تغییری نکرده است. کمی بعد دوباره تلاش کن.',
   ].join('\n');
 }
 

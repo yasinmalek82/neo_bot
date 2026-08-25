@@ -31,8 +31,10 @@ const order: SalesOrder = {
   productName: 'اقتصادی',
   variantName: 'یک‌ماهه',
   amountIrr: 1_500_000n,
+  kind: 'purchase',
   status: 'awaiting_receipt',
   serviceId: null,
+  targetServiceId: null,
   serviceUsernameBase: null,
   failureCode: null,
   createdAt: new Date('2026-08-21T00:00:00.000Z'),
@@ -255,43 +257,5 @@ describe('CustomerOrderService', () => {
         },
       ],
     });
-  });
-
-  it('renews without putting the subscription URL in the HTTP result', async () => {
-    const commerce = {
-      renewForCustomer: vi.fn().mockResolvedValue({ id: '40' }),
-      hasActiveService: vi.fn().mockResolvedValue(true),
-    } as unknown as CommerceUseCase;
-    const messenger = {
-      sendMessage: vi.fn().mockResolvedValue({ messageId: '8' }),
-    };
-    const serviceReader = {
-      get: vi.fn().mockResolvedValue({
-        remote: { subscriptionUrl: 'https://panel.example/sub/secret' },
-      }),
-    };
-    const service = new CustomerOrderService(
-      commerce,
-      { getPublicCatalog: vi.fn() } as unknown as CatalogAdminUseCase,
-      botToken,
-      messenger as never,
-      new Set(),
-      serviceReader,
-    );
-    await expect(service.hasActiveService(signInitData(10001, 'خریدار'))).resolves.toEqual({
-      hasActiveService: true,
-    });
-    await expect(service.renew(signInitData(10001, 'خریدار'))).resolves.toEqual({
-      status: 'renewed',
-    });
-    expect(JSON.stringify(await service.renew(signInitData(10001, 'خریدار')))).not.toContain(
-      'https://',
-    );
-    expect(messenger.sendMessage).toHaveBeenCalledWith(
-      '10001',
-      expect.stringContaining('تمدید انجام شد'),
-      expect.any(Object),
-      { parseMode: 'HTML' },
-    );
   });
 });

@@ -23,6 +23,11 @@ export interface ProviderUser {
   readonly usedTrafficBytes: bigint;
   readonly groupIds: readonly number[];
   readonly subscriptionUrl: string;
+  /**
+   * Provider-side operation marker. It is used only to reconcile a create safely,
+   * never exposed to customers or persisted with the service.
+   */
+  readonly provisioningNote?: string | null;
 }
 
 export interface CreateProviderUser {

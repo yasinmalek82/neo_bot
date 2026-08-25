@@ -101,15 +101,160 @@ describe('PasarGuardClient', () => {
     });
     await expect(client.getUserById(1)).rejects.toMatchObject({ code: 'UNSAFE_SUBSCRIPTION_URL' });
   });
+
+  it('classifies a mutation 4xx as definite and 5xx or malformed success as ambiguous', async () => {
+    const definite = createClient(
+      baseUrl,
+      async () => new Response(JSON.stringify({ detail: 'invalid' }), { status: 400 }),
+    );
+    await expect(createUser(definite)).rejects.toMatchObject({
+      code: 'PASARGUARD_HTTP_400',
+      mayHaveApplied: false,
+    });
+
+    const serverFailure = createClient(
+      baseUrl,
+      async () => new Response(JSON.stringify({ detail: 'unavailable' }), { status: 503 }),
+    );
+    await expect(createUser(serverFailure)).rejects.toMatchObject({
+      code: 'PASARGUARD_HTTP_503',
+      mayHaveApplied: true,
+    });
+
+    const malformedSuccess = createClient(
+      baseUrl,
+      async () => new Response(JSON.stringify({ id: 'not-a-number' }), { status: 201 }),
+    );
+    await expect(createUser(malformedSuccess)).rejects.toMatchObject({
+      code: 'PASARGUARD_INVALID_RESPONSE',
+      mayHaveApplied: true,
+    });
+  });
+
+  for (const scenario of successfulBodyFailures) {
+    it(`keeps ${scenario.name} mutation responses ambiguous after create and renew dispatch`, async () => {
+      const create = createClient(baseUrl, async () => scenario.response());
+      await expect(createUser(create)).rejects.toMatchObject({ mayHaveApplied: true });
+
+      let requests = 0;
+      const renew = createClient(baseUrl, async () => {
+        requests += 1;
+        return requests === 1 ? validUserResponse(baseUrl) : scenario.response();
+      });
+      await expect(renew.renewUser(renewCommand)).rejects.toMatchObject({ mayHaveApplied: true });
+      expect(requests).toBe(2);
+    });
+  }
+
+  it('keeps mutation 4xx and the renew pre-mutation GET definite', async () => {
+    const create = createClient(
+      baseUrl,
+      async () => new Response(JSON.stringify({ detail: 'invalid' }), { status: 400 }),
+    );
+    await expect(createUser(create)).rejects.toMatchObject({
+      code: 'PASARGUARD_HTTP_400',
+      mayHaveApplied: false,
+    });
+
+    let mutationRequests = 0;
+    const renew4xx = createClient(baseUrl, async () => {
+      mutationRequests += 1;
+      return mutationRequests === 1
+        ? validUserResponse(baseUrl)
+        : new Response(JSON.stringify({ detail: 'invalid' }), { status: 400 });
+    });
+    await expect(renew4xx.renewUser(renewCommand)).rejects.toMatchObject({
+      code: 'PASARGUARD_HTTP_400',
+      mayHaveApplied: false,
+    });
+
+    let preMutationRequests = 0;
+    const invalidPreMutation = createClient(baseUrl, async () => {
+      preMutationRequests += 1;
+      return new Response(JSON.stringify({ id: 'not-a-number' }), { status: 200 });
+    });
+    await expect(invalidPreMutation.renewUser(renewCommand)).rejects.toMatchObject({
+      code: 'PASARGUARD_INVALID_RESPONSE',
+      mayHaveApplied: false,
+    });
+    expect(preMutationRequests).toBe(1);
+  });
 });
 
-function createClient(baseUrl: string): PasarGuardClient {
+const renewCommand = {
+  userId: 7,
+  expiresAt: new Date('2026-10-01T00:00:00.000Z'),
+  dataLimitBytes: 10n,
+} as const;
+
+const successfulBodyFailures = [
+  {
+    name: 'empty 2xx body',
+    response: () => new Response(null, { status: 200 }),
+  },
+  {
+    name: 'invalid JSON 2xx body',
+    response: () => new Response('{', { status: 200 }),
+  },
+  {
+    name: 'truncated 2xx body',
+    response: () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"id":'));
+            controller.error(new Error('truncated'));
+          },
+        }),
+        { status: 200 },
+      ),
+  },
+  {
+    name: 'oversized 2xx body',
+    response: () =>
+      new Response('{}', {
+        status: 200,
+        headers: { 'content-length': String(2 * 1024 * 1024 + 1) },
+      }),
+  },
+] as const;
+
+function createClient(baseUrl: string, fetchImplementation?: typeof fetch): PasarGuardClient {
   return new PasarGuardClient({
     baseUrl,
     apiKey: 'test-api-key',
     maxRetries: 0,
     allowInsecureLocalhostForTests: true,
+    ...(fetchImplementation === undefined ? {} : { fetchImplementation }),
   });
+}
+
+async function createUser(client: PasarGuardClient) {
+  return client.createUser({
+    username: 'classification_user',
+    expiresAt: new Date('2026-09-01T00:00:00.000Z'),
+    dataLimitBytes: 0n,
+    groupIds: [7],
+    deviceLimit: 1,
+    note: 'classification',
+  });
+}
+
+function validUserResponse(baseUrl: string): Response {
+  return new Response(
+    JSON.stringify({
+      id: 7,
+      username: 'renew_user',
+      status: 'active',
+      expire: '2026-09-01T00:00:00.000Z',
+      data_limit: '0',
+      used_traffic: '0',
+      group_ids: [7],
+      subscription_url: `${baseUrl}/sub/test-7`,
+      proxy_settings: {},
+    }),
+    { status: 200 },
+  );
 }
 
 async function handleRequest(

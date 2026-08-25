@@ -1,15 +1,18 @@
 import {
   DomainConflictError,
+  PAYMENT_PROOF_MEDIA_KINDS,
   selectStorefrontEvidenceBadges,
   validatePaymentProofReference,
   validateServiceUsernameBase,
   validateTelegramCustomerInput,
   type CatalogCategory,
+  type PaymentProofMediaKind,
   type SalesOrder,
   type SellableProductVariant,
   type ServiceBinding,
   type TelegramCustomer,
   type TelegramCustomerInput,
+  type TelegramPaymentProof,
 } from '@neo-bot/domain';
 
 import type { CommerceRepository, ServiceProvisioner } from './commerce-ports.js';
@@ -107,6 +110,10 @@ export class CommerceUseCase {
     return this.repository.getCustomerForOrder(orderId);
   }
 
+  public getPaymentProof(orderId: string): Promise<TelegramPaymentProof | null> {
+    return this.repository.getPaymentProof(orderId);
+  }
+
   public listReviewQueue(): Promise<readonly SalesOrder[]> {
     return this.repository.listReviewQueue(10);
   }
@@ -198,18 +205,62 @@ export class CommerceUseCase {
     return order;
   }
 
+  public async beginRenewal(command: {
+    readonly customer: TelegramCustomerInput;
+    readonly idempotencyKey: string;
+  }): Promise<SalesOrder> {
+    validateTelegramCustomerInput(command.customer);
+    requireIdempotencyKey(command.idempotencyKey);
+    const { customer, created } = await this.repository.upsertTelegramCustomer(command.customer);
+    if (created) {
+      await this.publish({
+        type: 'customer.first_contact',
+        occurrenceKey: `customer:${customer.telegramUserId}:first-contact`,
+        payload: { telegramUserId: customer.telegramUserId },
+      });
+    }
+    const representative = await this.resolveRepresentativeByTelegramUserId(
+      command.customer.telegramUserId,
+    );
+    const order = await this.repository.createRenewalOrder(
+      customer.id,
+      command.idempotencyKey,
+      representative?.id,
+    );
+    await this.publish({
+      type: 'renewal.requested',
+      occurrenceKey: `order:${order.id}:renewal-requested`,
+      payload: {
+        orderId: order.id,
+        targetServiceId: order.targetServiceId ?? 'unknown',
+        telegramUserId: customer.telegramUserId,
+        amountIrr: order.amountIrr.toString(),
+      },
+    });
+    return order;
+  }
+
   public async submitPaymentProof(command: {
     readonly customer: TelegramCustomerInput;
     readonly telegramFileId: string;
     readonly telegramFileUniqueId: string;
+    readonly mediaKind?: PaymentProofMediaKind | null;
   }): Promise<SalesOrder> {
     validateTelegramCustomerInput(command.customer);
     validatePaymentProofReference(command.telegramFileId, command.telegramFileUniqueId);
+    if (
+      command.mediaKind !== undefined &&
+      command.mediaKind !== null &&
+      !PAYMENT_PROOF_MEDIA_KINDS.includes(command.mediaKind)
+    ) {
+      throw new DomainConflictError('INVALID_PAYMENT_PROOF');
+    }
     const { customer } = await this.repository.upsertTelegramCustomer(command.customer);
     const result = await this.repository.submitTelegramProof(
       customer.id,
       command.telegramFileId,
       command.telegramFileUniqueId,
+      command.mediaKind ?? null,
     );
     await this.publish({
       type: 'payment.proof_submitted',
@@ -269,43 +320,6 @@ export class CommerceUseCase {
     return serviceId !== null;
   }
 
-  public async renewForCustomer(customerInput: TelegramCustomerInput): Promise<ServiceBinding> {
-    validateTelegramCustomerInput(customerInput);
-    const { customer } = await this.repository.upsertTelegramCustomer(customerInput);
-    const serviceId = await this.repository.getLatestFulfilledServiceId(customer.id);
-    if (serviceId === null) {
-      throw new DomainConflictError('NO_ACTIVE_SERVICE');
-    }
-    await this.publish({
-      type: 'renewal.requested',
-      occurrenceKey: `renewal:${serviceId}:requested:${utcDateStamp(new Date())}`,
-      payload: { aggregateId: serviceId },
-    });
-    try {
-      const service = await this.serviceProvisioner.renew({
-        serviceId,
-        idempotencyKey: `renew:${serviceId}:${utcDateStamp(new Date())}`,
-      });
-      await this.publish({
-        type: 'renewal.completed',
-        occurrenceKey: `renewal:${serviceId}:completed:${utcDateStamp(new Date())}`,
-        payload: { serviceId: service.id },
-      });
-      return service;
-    } catch (error: unknown) {
-      const errorCode =
-        error instanceof Error && /^[A-Z0-9_]+$/u.test(error.message)
-          ? error.message
-          : 'RENEW_FAILED';
-      await this.publish({
-        type: 'renewal.failed',
-        occurrenceKey: `renewal:${serviceId}:failed:${utcDateStamp(new Date())}`,
-        payload: { errorCode },
-      });
-      throw error;
-    }
-  }
-
   public async rejectOrder(
     orderId: string,
     adminTelegramUserId: string,
@@ -333,26 +347,20 @@ export class CommerceUseCase {
       throw new DomainConflictError('ORDER_NOT_READY_FOR_PROVISIONING');
     }
     const customer = await this.repository.getCustomerForOrder(order.id);
+    let service: ServiceBinding;
     try {
-      const service = await this.serviceProvisioner.create({
-        productVariantId: order.productVariantId,
-        idempotencyKey: `order:${order.id}:provision`,
-        ...(order.serviceUsernameBase === null
-          ? {}
-          : { serviceUsernameBase: order.serviceUsernameBase }),
-      });
-      const fulfilled = await this.repository.completeOrder(order.id, service.id);
-      await this.publish({
-        type: 'provisioning.succeeded',
-        occurrenceKey: `order:${order.id}:provisioned`,
-        payload: {
-          orderId: order.id,
-          serviceId: service.id,
-          telegramUserId: customer?.telegramUserId ?? 'unknown',
-        },
-      });
-      return fulfilled;
+      service =
+        order.kind === 'renewal'
+          ? await this.renewReservedOrder(order)
+          : await this.serviceProvisioner.create({
+              productVariantId: order.productVariantId,
+              idempotencyKey: `order:${order.id}:provision`,
+              ...(order.serviceUsernameBase === null
+                ? {}
+                : { serviceUsernameBase: order.serviceUsernameBase }),
+            });
     } catch (error: unknown) {
+      // Only a provider failure before completion may mark provisioning failed.
       const errorCode =
         error instanceof Error && /^[A-Z0-9_]+$/u.test(error.message)
           ? error.message
@@ -365,6 +373,29 @@ export class CommerceUseCase {
       });
       throw error;
     }
+    const fulfilled = await this.repository.completeOrder(order.id, service.id);
+    // Failures after completeOrder must not rewrite the fulfilled order into a
+    // provisioning failure; the durable delivery job owns customer notification.
+    await this.publish({
+      type: 'provisioning.succeeded',
+      occurrenceKey: `order:${order.id}:provisioned`,
+      payload: {
+        orderId: order.id,
+        serviceId: service.id,
+        telegramUserId: customer?.telegramUserId ?? 'unknown',
+      },
+    });
+    return fulfilled;
+  }
+
+  private async renewReservedOrder(order: SalesOrder): Promise<ServiceBinding> {
+    if (order.targetServiceId === null) {
+      throw new DomainConflictError('RENEWAL_TARGET_MISSING');
+    }
+    return this.serviceProvisioner.renew({
+      serviceId: order.targetServiceId,
+      idempotencyKey: `order:${order.id}:provision`,
+    });
   }
 
   private async publish(

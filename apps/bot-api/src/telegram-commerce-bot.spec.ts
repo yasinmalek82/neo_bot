@@ -1,5 +1,6 @@
 import {
   CommerceUseCase,
+  CustomerDeliveryUseCase,
   type CommerceRepository,
   type OpsDailySummaryUseCase,
   type ReportingUseCase,
@@ -18,8 +19,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { TelegramConfig } from './config.js';
 import type { TelegramMessenger } from './telegram-api.js';
-import { TelegramCommerceBot } from './telegram-commerce-bot.js';
-import { MENU_LABEL } from './telegram-menu.js';
+import { createTelegramDeliveryTransport, TelegramCommerceBot } from './telegram-commerce-bot.js';
+import { MENU_LABEL, serviceDeliveredText } from './telegram-menu.js';
 
 const customer: TelegramCustomer = {
   id: '1',
@@ -48,8 +49,10 @@ const order: SalesOrder = {
   productName: variant.productName,
   variantName: variant.name,
   amountIrr: variant.priceIrr,
+  kind: 'purchase',
   status: 'receipt_submitted',
   serviceId: null,
+  targetServiceId: null,
   serviceUsernameBase: null,
   failureCode: null,
   createdAt: new Date('2026-08-21T00:00:00.000Z'),
@@ -1540,7 +1543,7 @@ describe('TelegramCommerceBot', () => {
     );
   });
 
-  it('sends delivery media before the private subscription text and continues when media fails', async () => {
+  it('delegates approval delivery to the durable job and edits the link into one anchor', async () => {
     const repository = createRepository();
     vi.mocked(repository.reserveProvisioning).mockResolvedValue({
       ...order,
@@ -1551,10 +1554,36 @@ describe('TelegramCommerceBot', () => {
       status: 'fulfilled',
       serviceId: service.id,
     });
-    const messenger = createMessenger();
-    const bot = createBot(repository, messenger, null, undefined, null, {
-      brandMedia: { welcomePhotoFileId: null, deliveryPhotoFileId: 'delivery-file-id' },
+    vi.mocked(repository.claimDueDeliveryJobs).mockResolvedValue([
+      {
+        id: '9',
+        orderId: order.id,
+        customerId: customer.id,
+        serviceId: service.id,
+        stage: 'pending_brand_media',
+        attemptCount: 1,
+        telegramMessageId: null,
+      },
+    ]);
+    vi.mocked(repository.getOrderDeliveryTarget).mockResolvedValue({
+      chatId: customer.privateChatId,
+      subscriptionUrl: service.subscriptionUrl,
     });
+    const messenger = createMessenger();
+    const delivery = createDelivery(repository, messenger, 'delivery-file-id');
+    const bot = createBot(
+      repository,
+      messenger,
+      null,
+      undefined,
+      null,
+      {
+        brandMedia: { welcomePhotoFileId: null, deliveryPhotoFileId: 'delivery-file-id' },
+      },
+      {},
+      {},
+      delivery,
+    );
 
     await bot.handleUpdate({
       update_id: 1231,
@@ -1569,35 +1598,115 @@ describe('TelegramCommerceBot', () => {
     expect(messenger.sendPhoto).toHaveBeenCalledWith(
       '10001',
       'delivery-file-id',
-      expect.stringContaining('اطلاعات دسترسی در پیام بعدی'),
+      expect.any(String),
       undefined,
       { parseMode: 'HTML' },
     );
-    const deliveredTextCall = vi
-      .mocked(messenger.sendMessage)
-      .mock.calls.find(
-        (call) => call[0] === '10001' && call[1].includes('https://panel.example/sub/order'),
-      );
-    expect(deliveredTextCall).toBeDefined();
-    expect(deliveredTextCall?.[1]).not.toContain('delivery-file-id');
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('در همین پیام ثبت می‌شود'),
+      undefined,
+      { parseMode: 'HTML' },
+    );
+    expect(messenger.editMessageText).toHaveBeenCalledWith(
+      '10001',
+      '1',
+      expect.stringContaining(service.subscriptionUrl),
+    );
+    for (const call of vi.mocked(messenger.sendMessage).mock.calls) {
+      expect(call[1]).not.toContain(service.subscriptionUrl);
+    }
+    expect(repository.markDeliveryJobBrandSent).toHaveBeenCalledWith('9', expect.any(Date));
+    expect(repository.markDeliveryJobAnchor).toHaveBeenCalledWith('9', '1', expect.any(Date));
+    expect(repository.markDeliveryJobDelivered).toHaveBeenCalledWith('9', expect.any(Date));
+    expect(messenger.sendMessage).toHaveBeenCalledWith('70001', 'سفارش تکمیل شد.');
+  });
 
-    vi.mocked(messenger.sendPhoto).mockRejectedValueOnce(new Error('TELEGRAM_UNAVAILABLE'));
-    vi.mocked(repository.getOrder).mockResolvedValue({ ...order, status: 'provisioning_failed' });
+  it('keeps the order fulfilled when only the delivery edit fails and retries stay provider-free', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.completeOrder).mockResolvedValue({
+      ...order,
+      status: 'fulfilled',
+      serviceId: service.id,
+    });
+    vi.mocked(repository.getDeliveryJobForOrder).mockResolvedValue({
+      id: '9',
+      orderId: order.id,
+      customerId: customer.id,
+      serviceId: service.id,
+      stage: 'failed',
+      attemptCount: 3,
+      nextAttemptAt: new Date('2026-08-21T00:00:00.000Z'),
+      lastErrorCode: 'TELEGRAM_HTTP_500',
+      telegramMessageId: '77',
+      createdAt: new Date('2026-08-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-08-21T00:00:00.000Z'),
+    });
+    vi.mocked(repository.resetDeliveryJob).mockResolvedValue({
+      id: '9',
+      orderId: order.id,
+      customerId: customer.id,
+      serviceId: service.id,
+      stage: 'pending_link',
+      attemptCount: 0,
+      nextAttemptAt: new Date('2026-08-21T00:05:00.000Z'),
+      lastErrorCode: null,
+      telegramMessageId: '77',
+      createdAt: new Date('2026-08-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-08-21T00:05:00.000Z'),
+    });
+    vi.mocked(repository.getOrderDeliveryTarget).mockResolvedValue({
+      chatId: customer.privateChatId,
+      subscriptionUrl: service.subscriptionUrl,
+    });
+    vi.mocked(repository.claimDueDeliveryJobs).mockResolvedValue([
+      {
+        id: '9',
+        orderId: order.id,
+        customerId: customer.id,
+        serviceId: service.id,
+        stage: 'pending_link',
+        attemptCount: 4,
+        telegramMessageId: '77',
+      },
+    ]);
+    const messenger = createMessenger();
+    const serviceReaderGet = vi.fn();
+    const delivery = createDelivery(repository, messenger);
+    const bot = createBot(
+      repository,
+      messenger,
+      null,
+      {
+        create: vi.fn(),
+        renew: vi.fn(),
+      },
+      null,
+      {},
+      {},
+      { get: serviceReaderGet },
+      delivery,
+    );
+
     await bot.handleUpdate({
       update_id: 1232,
       callback_query: {
-        id: 'cb-retry-success',
+        id: 'cb-redeliver',
         from: { id: 70001, first_name: 'ادمین' },
         message: { message_id: 14, chat: { id: 70001, type: 'private' }, text: 'صف' },
-        data: 'admin:retry:3',
+        data: `admin:redeliver:${order.id}`,
       },
     });
-    expect(messenger.sendMessage).toHaveBeenCalledWith(
+
+    expect(serviceReaderGet).not.toHaveBeenCalled();
+    expect(repository.resetDeliveryJob).toHaveBeenCalledWith(order.id, expect.any(Date));
+    expect(messenger.editMessageText).toHaveBeenCalledWith(
       '10001',
-      expect.stringContaining('https://panel.example/sub/order'),
-      expect.any(Object),
-      { parseMode: 'HTML' },
+      '77',
+      expect.stringContaining(service.subscriptionUrl),
     );
+    expect(repository.markDeliveryJobDelivered).toHaveBeenCalledWith('9', expect.any(Date));
+    expect(vi.mocked(messenger.editMessageText).mock.calls[0]?.[2]).toContain('ارسال دوباره');
   });
 
   it('completes an approval update after provisioning fails so Telegram does not retry the button', async () => {
@@ -1680,7 +1789,7 @@ describe('TelegramCommerceBot', () => {
     expect(messenger.editMessageText).toHaveBeenCalledWith(
       '10001',
       '14',
-      expect.stringContaining('لینک اشتراک ثابت می‌ماند'),
+      expect.stringContaining('تمدید فقط پس از تأیید رسید انجام می‌شود'),
       expect.objectContaining({
         inline_keyboard: expect.arrayContaining([
           [expect.objectContaining({ callback_data: 'renew:confirm' })],
@@ -1690,7 +1799,7 @@ describe('TelegramCommerceBot', () => {
     expect(provisioner.renew).not.toHaveBeenCalled();
   });
 
-  it('renews only after confirmation and does not renew when the customer goes back', async () => {
+  it('creates a paid renewal order only after confirmation and never renews directly', async () => {
     const repository = createRepository();
     const messenger = createMessenger();
     const provisioner = {
@@ -1712,18 +1821,24 @@ describe('TelegramCommerceBot', () => {
     await callback(126, 'cb-renew-preview', 'renew');
     await callback(127, 'cb-renew-back', 'menu');
     expect(provisioner.renew).not.toHaveBeenCalled();
+    expect(repository.createRenewalOrder).not.toHaveBeenCalled();
 
     await callback(128, 'cb-renew-confirm', 'renew:confirm');
-    expect(provisioner.renew).toHaveBeenCalledTimes(1);
+    expect(repository.createRenewalOrder).toHaveBeenCalledWith(
+      customer.id,
+      'telegram:renew:10001:128',
+      undefined,
+    );
+    expect(provisioner.renew).not.toHaveBeenCalled();
     expect(messenger.editMessageText).toHaveBeenCalledWith(
       '10001',
       '128',
-      expect.stringContaining('تمدید انجام شد'),
+      expect.stringContaining('سفارش ثبت شد؛ نوبت پرداخت است'),
       expect.any(Object),
     );
   });
 
-  it('stores a photo proof and sends it to the administrator for review', async () => {
+  it('stores a photo proof with its media kind and never forwards it directly to administrators', async () => {
     const repository = createRepository();
     const messenger = createMessenger();
     const bot = createBot(repository, messenger);
@@ -1749,15 +1864,101 @@ describe('TelegramCommerceBot', () => {
       customer.id,
       'receipt-file-id',
       'receipt-unique',
+      'photo',
     );
+    expect(messenger.sendPhoto).not.toHaveBeenCalled();
+    expect(messenger.sendDocument).not.toHaveBeenCalled();
+    expect(repository.completeTelegramUpdate).toHaveBeenCalledWith('101');
+  });
+
+  it('lets an administrator retrieve the stored photo proof on demand without exposing its file id', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.getPaymentProof).mockResolvedValue({
+      id: '20',
+      orderId: order.id,
+      telegramFileId: 'receipt-file-id',
+      telegramFileUniqueId: 'receipt-unique',
+      mediaKind: 'photo',
+      submittedAt: new Date('2026-08-21T00:00:00.000Z'),
+    });
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+
+    await bot.handleUpdate({
+      update_id: 140,
+      callback_query: {
+        id: 'cb-proof-photo',
+        from: { id: 70001, first_name: 'ادمین' },
+        message: { message_id: 21, chat: { id: 70001, type: 'private' }, text: 'سفارش' },
+        data: `admin:proof:${order.id}`,
+      },
+    });
+
+    expect(repository.getPaymentProof).toHaveBeenCalledWith(order.id);
     expect(messenger.sendPhoto).toHaveBeenCalledWith(
       '70001',
       'receipt-file-id',
-      expect.stringContaining('سفارش: 3'),
+      expect.stringContaining(order.id),
       expect.objectContaining({ inline_keyboard: expect.any(Array) }),
       { parseMode: 'HTML' },
     );
-    expect(repository.completeTelegramUpdate).toHaveBeenCalledWith('101');
+  });
+
+  it('sends a document-kind proof with sendDocument and rejects non-administrators', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.getPaymentProof).mockResolvedValue({
+      id: '20',
+      orderId: order.id,
+      telegramFileId: 'receipt-doc-id',
+      telegramFileUniqueId: 'receipt-doc-unique',
+      mediaKind: 'document',
+      submittedAt: new Date('2026-08-21T00:00:00.000Z'),
+    });
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+
+    await bot.handleUpdate({
+      update_id: 141,
+      callback_query: {
+        id: 'cb-proof-document',
+        from: { id: 70001, first_name: 'ادمین' },
+        message: { message_id: 22, chat: { id: 70001, type: 'private' }, text: 'سفارش' },
+        data: `admin:proof:${order.id}`,
+      },
+    });
+    expect(messenger.sendDocument).toHaveBeenCalledWith(
+      '70001',
+      'receipt-doc-id',
+      expect.any(String),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
+
+    const outsiderMessenger = createMessenger();
+    const outsiderBot = createBot(repository, outsiderMessenger);
+    await outsiderBot.handleUpdate({
+      update_id: 142,
+      callback_query: {
+        id: 'cb-proof-outsider',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: { message_id: 23, chat: { id: 10001, type: 'private' }, text: 'سفارش' },
+        data: `admin:proof:${order.id}`,
+      },
+    });
+    expect(outsiderMessenger.sendPhoto).not.toHaveBeenCalled();
+    expect(outsiderMessenger.sendDocument).not.toHaveBeenCalled();
+
+    vi.mocked(repository.getPaymentProof).mockResolvedValue(null);
+    await bot.handleUpdate({
+      update_id: 143,
+      callback_query: {
+        id: 'cb-proof-missing',
+        from: { id: 70001, first_name: 'ادمین' },
+        message: { message_id: 24, chat: { id: 70001, type: 'private' }, text: 'سفارش' },
+        data: `admin:proof:${order.id}`,
+      },
+    });
+    expect(vi.mocked(messenger.editMessageText).mock.calls.at(-1)?.[2]).toContain('رسیدی ثبت نشده');
   });
 
   it('tells the customer when a receipt is already under review', async () => {
@@ -1862,7 +2063,7 @@ describe('TelegramCommerceBot', () => {
     expect(repository.completeTelegramUpdate).not.toHaveBeenCalled();
   });
 
-  it('accepts an image document as a receipt and forwards it to the administrator', async () => {
+  it('accepts an image document as a receipt, persists its kind, and skips direct forwarding', async () => {
     const repository = createRepository();
     const messenger = createMessenger();
     const bot = createBot(repository, messenger);
@@ -1886,14 +2087,9 @@ describe('TelegramCommerceBot', () => {
       customer.id,
       'receipt-doc-id',
       'receipt-doc-unique',
+      'document',
     );
-    expect(messenger.sendDocument).toHaveBeenCalledWith(
-      '70001',
-      'receipt-doc-id',
-      expect.stringContaining('سفارش: 3'),
-      expect.objectContaining({ inline_keyboard: expect.any(Array) }),
-      { parseMode: 'HTML' },
-    );
+    expect(messenger.sendDocument).not.toHaveBeenCalled();
   });
 
   it('completes a malformed update without throwing so webhook intake is not stalled', async () => {
@@ -2068,6 +2264,7 @@ function createBot(
   configOverrides: Partial<Extract<TelegramConfig, { readonly enabled: true }>> = {},
   catalogChatOverrides: Record<string, unknown> = {},
   catalogAdminOverrides: Record<string, unknown> = {},
+  delivery: CustomerDeliveryUseCase | null = null,
 ) {
   const config: Extract<TelegramConfig, { readonly enabled: true }> = {
     enabled: true,
@@ -2105,6 +2302,20 @@ function createBot(
     } as never,
     reporting,
     dailySummary,
+    delivery,
+  );
+}
+
+function createDelivery(
+  repository: CommerceRepository,
+  messenger: TelegramMessenger,
+  brandPhotoFileId: string | null = null,
+): CustomerDeliveryUseCase {
+  return new CustomerDeliveryUseCase(
+    repository,
+    createTelegramDeliveryTransport(messenger, brandPhotoFileId),
+    serviceDeliveredText,
+    () => new Date('2026-08-21T00:00:00.000Z'),
   );
 }
 
@@ -2135,6 +2346,12 @@ function createRepository(): CommerceRepository {
     getSellableVariantForRepresentative: vi.fn().mockResolvedValue(variant),
     upsertTelegramCustomer: vi.fn().mockResolvedValue({ customer, created: true }),
     createOrder: vi.fn().mockResolvedValue(order),
+    createRenewalOrder: vi.fn().mockResolvedValue({
+      ...order,
+      kind: 'renewal' as const,
+      targetServiceId: service.id,
+      status: 'awaiting_receipt' as const,
+    }),
     getOrder: vi.fn().mockResolvedValue(order),
     getCustomerForOrder: vi.fn().mockResolvedValue(customer),
     getOpenOrderForCustomer: vi.fn().mockResolvedValue(order),
@@ -2148,6 +2365,19 @@ function createRepository(): CommerceRepository {
     listReviewQueue: vi.fn().mockResolvedValue([]),
     listFailedProvisioning: vi.fn().mockResolvedValue([]),
     submitTelegramProof: vi.fn().mockResolvedValue({ order, proof }),
+    getPaymentProof: vi.fn().mockResolvedValue(proof),
+    claimDueDeliveryJobs: vi.fn().mockResolvedValue([]),
+    markDeliveryJobBrandSent: vi.fn().mockResolvedValue(undefined),
+    markDeliveryJobAnchor: vi.fn().mockResolvedValue(undefined),
+    markDeliveryJobDelivered: vi.fn().mockResolvedValue(undefined),
+    retryDeliveryJob: vi.fn().mockResolvedValue(undefined),
+    failDeliveryJob: vi.fn().mockResolvedValue(undefined),
+    getDeliveryJobForOrder: vi.fn().mockResolvedValue(null),
+    resetDeliveryJob: vi.fn().mockImplementation(() => {
+      throw new Error('DELIVERY_JOB_NOT_RETRYABLE');
+    }),
+    backfillMissingDeliveryJobs: vi.fn().mockResolvedValue(0),
+    getOrderDeliveryTarget: vi.fn().mockResolvedValue(null),
     reserveProvisioning: vi.fn().mockResolvedValue(order),
     completeOrder: vi.fn().mockResolvedValue(order),
     markProvisioningFailed: vi.fn().mockResolvedValue(order),

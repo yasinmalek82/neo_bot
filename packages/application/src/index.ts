@@ -7,4 +7,6 @@ export * from './ports.js';
 export * from './reporting-ports.js';
 export * from './reporting.js';
 export * from './ops-summary.js';
+export * from './provisioning-mutation-gate.js';
+export * from './customer-delivery.js';
 export * from './service-username.js';

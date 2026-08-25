@@ -4,8 +4,11 @@ import {
   resolveRepresentativePrice,
   validateServiceUsernameBase,
   type CatalogCategory,
-  type RepresentativePricingSource,
+  type ClaimedDeliveryJob,
+  type CustomerDeliveryJob,
+  type PaymentProofMediaKind,
   type RepresentativeProfile,
+  type RepresentativePricingSource,
   type SalesOrder,
   type SellableProductVariant,
   type TelegramCustomer,
@@ -64,8 +67,10 @@ interface OrderRow {
   product_name: string;
   variant_name: string;
   amount_irr: string;
+  order_kind: SalesOrder['kind'];
   status: SalesOrder['status'];
   service_id: string | null;
+  target_service_id: string | null;
   representative_id: string | null;
   representative_code: string | null;
   pricing_source: string;
@@ -80,7 +85,32 @@ interface ProofRow {
   order_id: string;
   telegram_file_id: string;
   telegram_file_unique_id: string;
+  media_kind: PaymentProofMediaKind | null;
   submitted_at: Date;
+}
+
+interface DeliveryJobRow {
+  id: string;
+  order_id: string;
+  customer_id: string;
+  service_id: string;
+  stage: CustomerDeliveryJob['stage'];
+  attempt_count: number;
+  next_attempt_at: Date;
+  last_error_code: string | null;
+  telegram_message_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+interface DeliveryJobClaimRow {
+  id: string;
+  order_id: string;
+  customer_id: string;
+  service_id: string;
+  stage: string;
+  attempt_count: number;
+  telegram_message_id: string | null;
 }
 
 export class PostgresCommerceRepository implements CommerceRepository {
@@ -404,6 +434,7 @@ export class PostgresCommerceRepository implements CommerceRepository {
       if (existing !== null) {
         if (
           existing.customerId !== customerId ||
+          existing.kind !== 'purchase' ||
           existing.productVariantId !== productVariantId ||
           (existing.serviceUsernameBase ?? null) !== (serviceUsernameBase ?? null)
         ) {
@@ -412,43 +443,62 @@ export class PostgresCommerceRepository implements CommerceRepository {
         return existing;
       }
 
-      const selected = await resolveCheckoutPrice(client, productVariantId, representativeId);
+      return this.createPendingCheckoutOrder(client, {
+        customerId,
+        productVariantId,
+        idempotencyKey,
+        representativeId,
+        serviceUsernameBase,
+        kind: 'purchase',
+        targetServiceId: null,
+      });
+    });
+  }
 
-      const blocking = await client.query<{ exists: boolean }>(
-        `select exists(
-           select 1 from sales_orders
-           where customer_id = $1 and status in (
-             'receipt_submitted', 'provisioning', 'provisioning_failed'
-           )
-         ) as exists`,
+  public createRenewalOrder(
+    customerId: string,
+    idempotencyKey: string,
+    representativeId?: string,
+  ): Promise<SalesOrder> {
+    return this.withTransaction(async (client) => {
+      const customer = await client.query<{ id: string }>(
+        'select id::text from customers where id = $1 for update',
         [customerId],
       );
-      if (requiredRow(blocking.rows).exists) {
-        throw new DomainConflictError('OPEN_ORDER_UNDER_REVIEW');
+      requiredRow(customer.rows);
+
+      const existing = await this.findOrderByIdempotencyKey(client, idempotencyKey);
+      if (existing !== null) {
+        if (existing.customerId !== customerId || existing.kind !== 'renewal') {
+          throw new DomainConflictError('IDEMPOTENCY_KEY_REUSED');
+        }
+        return existing;
       }
 
-      await client.query(
-        `update sales_orders set status = 'cancelled', updated_at = now()
-         where customer_id = $1 and status in ('awaiting_receipt', 'rejected')`,
+      const target = await client.query<{ service_id: string; product_variant_id: string }>(
+        `select service.id::text as service_id, service.product_variant_id::text as product_variant_id
+         from sales_orders fulfilled_order
+         join services service on service.id = fulfilled_order.service_id
+         where fulfilled_order.customer_id = $1
+           and fulfilled_order.status = 'fulfilled'
+         order by fulfilled_order.updated_at desc, fulfilled_order.id desc
+         limit 1
+         for key share of service`,
         [customerId],
       );
-      const inserted = await client.query<{ id: string }>(
-        `insert into sales_orders(
-           customer_id, product_variant_id, idempotency_key, amount_irr,
-           representative_id, pricing_source, service_username_base
-         ) values ($1, $2, $3, $4, $5, $6, $7)
-         returning id::text`,
-        [
-          customerId,
-          productVariantId,
-          idempotencyKey,
-          selected.priceIrr.toString(),
-          representativeId ?? null,
-          selected.pricingSource,
-          serviceUsernameBase ?? null,
-        ],
-      );
-      return this.requiredOrderWithClient(client, requiredRow(inserted.rows).id);
+      const service = target.rows[0];
+      if (service === undefined) {
+        throw new DomainConflictError('NO_ACTIVE_SERVICE');
+      }
+      return this.createPendingCheckoutOrder(client, {
+        customerId,
+        productVariantId: service.product_variant_id,
+        idempotencyKey,
+        representativeId,
+        kind: 'renewal',
+        serviceUsernameBase: undefined,
+        targetServiceId: service.service_id,
+      });
     });
   }
 
@@ -561,6 +611,7 @@ export class PostgresCommerceRepository implements CommerceRepository {
     customerId: string,
     telegramFileId: string,
     telegramFileUniqueId: string,
+    mediaKind?: PaymentProofMediaKind | null,
   ): Promise<{ readonly order: SalesOrder; readonly proof: TelegramPaymentProof }> {
     return this.withTransaction(async (client) => {
       const orderResult = await client.query<{ id: string }>(
@@ -580,11 +631,11 @@ export class PostgresCommerceRepository implements CommerceRepository {
 
       const inserted = await client.query<ProofRow>(
         `insert into telegram_payment_proofs(
-           order_id, telegram_file_id, telegram_file_unique_id
-         ) values ($1, $2, $3)
+           order_id, telegram_file_id, telegram_file_unique_id, media_kind
+         ) values ($1, $2, $3, $4)
          on conflict (order_id, telegram_file_unique_id) do nothing
          returning ${proofColumns}`,
-        [orderId, telegramFileId, telegramFileUniqueId],
+        [orderId, telegramFileId, telegramFileUniqueId, mediaKind ?? null],
       );
       const existing =
         inserted.rows[0] ??
@@ -609,6 +660,19 @@ export class PostgresCommerceRepository implements CommerceRepository {
         proof: mapProof(existing),
       };
     });
+  }
+
+  public async getPaymentProof(orderId: string): Promise<TelegramPaymentProof | null> {
+    const result = await this.pool.query<ProofRow>(
+      `select ${proofColumns}
+       from telegram_payment_proofs
+       where order_id = $1
+       order by submitted_at desc, id desc
+       limit 1`,
+      [orderId],
+    );
+    const row = result.rows[0];
+    return row === undefined ? null : mapProof(row);
   }
 
   public reserveProvisioning(orderId: string, adminTelegramUserId: string): Promise<SalesOrder> {
@@ -640,7 +704,9 @@ export class PostgresCommerceRepository implements CommerceRepository {
       const result = await client.query(
         `update sales_orders
          set status = 'fulfilled', service_id = $2, failure_code = null, updated_at = now()
-         where id = $1 and status in ('provisioning', 'provisioning_failed')`,
+         where id = $1
+           and status in ('provisioning', 'provisioning_failed')
+           and (order_kind <> 'renewal' or target_service_id = $2)`,
         [orderId, serviceId],
       );
       if (result.rowCount === 0) {
@@ -650,8 +716,180 @@ export class PostgresCommerceRepository implements CommerceRepository {
         }
         return current;
       }
+      // Exactly one durable delivery job per fulfilled order, enqueued in the same
+      // transaction that completes the order.
+      await client.query(
+        `insert into customer_delivery_jobs(order_id, customer_id, service_id)
+         select id, customer_id, $2 from sales_orders where id = $1
+         on conflict (order_id) do nothing`,
+        [orderId, serviceId],
+      );
       return this.requiredOrderWithClient(client, orderId);
     });
+  }
+
+  public async claimDueDeliveryJobs(
+    limit: number,
+    now: Date,
+  ): Promise<readonly ClaimedDeliveryJob[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new DomainConflictError('INVALID_DELIVERY_CLAIM_LIMIT');
+    }
+    const result = await this.pool.query<DeliveryJobClaimRow>(
+      `with claimed as (
+         select job.id
+         from customer_delivery_jobs job
+         where job.stage in ('pending_brand_media', 'pending_link')
+           and job.next_attempt_at <= $2
+         order by job.id
+         for update skip locked
+         limit $1
+       ),
+       updated as (
+         update customer_delivery_jobs job
+         set attempt_count = job.attempt_count + 1,
+             next_attempt_at = $2 + interval '2 minutes',
+             updated_at = $2
+         from claimed
+         where job.id = claimed.id
+         returning
+           job.id::text as id,
+           job.order_id::text as order_id,
+           job.customer_id::text as customer_id,
+           job.service_id::text as service_id,
+           job.stage,
+           job.attempt_count,
+           job.telegram_message_id::text as telegram_message_id
+       )
+       select * from updated order by id`,
+      [limit, now],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      orderId: row.order_id,
+      customerId: row.customer_id,
+      serviceId: row.service_id,
+      stage: row.stage as CustomerDeliveryJob['stage'],
+      attemptCount: row.attempt_count,
+      telegramMessageId: row.telegram_message_id,
+    }));
+  }
+
+  public async markDeliveryJobBrandSent(jobId: string, now: Date): Promise<void> {
+    await this.pool.query(
+      `update customer_delivery_jobs
+       set stage = 'pending_link', updated_at = $2
+       where id = $1 and stage = 'pending_brand_media'`,
+      [jobId, now],
+    );
+  }
+
+  public async markDeliveryJobAnchor(
+    jobId: string,
+    telegramMessageId: string,
+    now: Date,
+  ): Promise<void> {
+    await this.pool.query(
+      `update customer_delivery_jobs
+       set telegram_message_id = $2, updated_at = $3
+       where id = $1 and stage = 'pending_link'`,
+      [jobId, BigInt(telegramMessageId), now],
+    );
+  }
+
+  public async markDeliveryJobDelivered(jobId: string, now: Date): Promise<void> {
+    await this.pool.query(
+      `update customer_delivery_jobs
+       set stage = 'delivered', last_error_code = null, updated_at = $2
+       where id = $1 and stage <> 'delivered'`,
+      [jobId, now],
+    );
+  }
+
+  public async retryDeliveryJob(
+    jobId: string,
+    errorCode: string,
+    nextAttemptAt: Date,
+    now: Date,
+  ): Promise<void> {
+    await this.pool.query(
+      `update customer_delivery_jobs
+       set last_error_code = $2, next_attempt_at = $3, updated_at = $4
+       where id = $1 and stage in ('pending_brand_media', 'pending_link')`,
+      [jobId, errorCode, nextAttemptAt, now],
+    );
+  }
+
+  public async failDeliveryJob(jobId: string, errorCode: string, now: Date): Promise<void> {
+    await this.pool.query(
+      `update customer_delivery_jobs
+       set stage = 'failed', last_error_code = $2, updated_at = $3
+       where id = $1 and stage <> 'delivered'`,
+      [jobId, errorCode, now],
+    );
+  }
+
+  public async getDeliveryJobForOrder(orderId: string): Promise<CustomerDeliveryJob | null> {
+    const result = await this.pool.query<DeliveryJobRow>(
+      `select ${deliveryJobColumns}
+       from customer_delivery_jobs
+       where order_id = $1`,
+      [orderId],
+    );
+    const row = result.rows[0];
+    return row === undefined ? null : mapDeliveryJob(row);
+  }
+
+  public async resetDeliveryJob(orderId: string, now: Date): Promise<CustomerDeliveryJob> {
+    const result = await this.pool.query<DeliveryJobRow>(
+      `update customer_delivery_jobs
+       set stage = case when telegram_message_id is null then 'pending_brand_media'
+                        else 'pending_link' end,
+           attempt_count = 0,
+           next_attempt_at = $2,
+           last_error_code = null,
+           updated_at = $2
+       where order_id = $1 and stage <> 'delivered'
+       returning ${deliveryJobColumns}`,
+      [orderId, now],
+    );
+    const row = result.rows[0];
+    if (row === undefined) {
+      throw new DomainConflictError('DELIVERY_JOB_NOT_RETRYABLE');
+    }
+    return mapDeliveryJob(row);
+  }
+
+  public async backfillMissingDeliveryJobs(now: Date): Promise<number> {
+    const result = await this.pool.query(
+      `insert into customer_delivery_jobs(order_id, customer_id, service_id, created_at, updated_at)
+       select orders.id, orders.customer_id, orders.service_id, $1, $1
+       from sales_orders orders
+       where orders.status = 'fulfilled'
+         and orders.service_id is not null
+       on conflict (order_id) do nothing`,
+      [now],
+    );
+    return result.rowCount ?? 0;
+  }
+
+  public async getOrderDeliveryTarget(
+    orderId: string,
+  ): Promise<{ readonly chatId: string; readonly subscriptionUrl: string } | null> {
+    const result = await this.pool.query<{ chat_id: string; subscription_url: string }>(
+      `select customer.private_chat_id::text as chat_id, service.subscription_url
+       from sales_orders orders
+       join services service on service.id = orders.service_id
+       join customers customer on customer.id = orders.customer_id
+       where orders.id = $1 and orders.status = 'fulfilled'
+         and orders.service_id is not null
+       limit 1`,
+      [orderId],
+    );
+    const row = result.rows[0];
+    return row === undefined
+      ? null
+      : { chatId: row.chat_id, subscriptionUrl: row.subscription_url };
   }
 
   public async markProvisioningFailed(orderId: string, errorCode: string): Promise<SalesOrder> {
@@ -790,6 +1028,62 @@ export class PostgresCommerceRepository implements CommerceRepository {
     return row === undefined ? null : mapOrder(row);
   }
 
+  private async createPendingCheckoutOrder(
+    client: PoolClient,
+    input: {
+      readonly customerId: string;
+      readonly productVariantId: string;
+      readonly idempotencyKey: string;
+      readonly representativeId: string | undefined;
+      readonly serviceUsernameBase: string | undefined;
+      readonly kind: SalesOrder['kind'];
+      readonly targetServiceId: string | null;
+    },
+  ): Promise<SalesOrder> {
+    const selected = await resolveCheckoutPrice(
+      client,
+      input.productVariantId,
+      input.representativeId,
+    );
+    const blocking = await client.query<{ exists: boolean }>(
+      `select exists(
+         select 1 from sales_orders
+         where customer_id = $1 and status in (
+           'receipt_submitted', 'provisioning', 'provisioning_failed'
+         )
+       ) as exists`,
+      [input.customerId],
+    );
+    if (requiredRow(blocking.rows).exists) {
+      throw new DomainConflictError('OPEN_ORDER_UNDER_REVIEW');
+    }
+    await client.query(
+      `update sales_orders set status = 'cancelled', updated_at = now()
+       where customer_id = $1 and status in ('awaiting_receipt', 'rejected')`,
+      [input.customerId],
+    );
+    const inserted = await client.query<{ id: string }>(
+      `insert into sales_orders(
+         customer_id, product_variant_id, idempotency_key, amount_irr,
+         representative_id, pricing_source, service_username_base,
+         order_kind, target_service_id
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       returning id::text`,
+      [
+        input.customerId,
+        input.productVariantId,
+        input.idempotencyKey,
+        selected.priceIrr.toString(),
+        input.representativeId ?? null,
+        selected.pricingSource,
+        input.serviceUsernameBase ?? null,
+        input.kind,
+        input.targetServiceId,
+      ],
+    );
+    return this.requiredOrderWithClient(client, requiredRow(inserted.rows).id);
+  }
+
   private async requiredOrder(id: string): Promise<SalesOrder> {
     const order = await this.getOrder(id);
     if (order === null) {
@@ -835,8 +1129,39 @@ const proofColumns = `
   order_id::text,
   telegram_file_id,
   telegram_file_unique_id,
+  media_kind,
   submitted_at
 `;
+
+const deliveryJobColumns = `
+  id::text,
+  order_id::text,
+  customer_id::text,
+  service_id::text,
+  stage,
+  attempt_count,
+  next_attempt_at,
+  last_error_code,
+  telegram_message_id::text,
+  created_at,
+  updated_at
+`;
+
+function mapDeliveryJob(row: DeliveryJobRow): CustomerDeliveryJob {
+  return {
+    id: row.id,
+    orderId: row.order_id,
+    customerId: row.customer_id,
+    serviceId: row.service_id,
+    stage: row.stage,
+    attemptCount: row.attempt_count,
+    nextAttemptAt: row.next_attempt_at,
+    lastErrorCode: row.last_error_code,
+    telegramMessageId: row.telegram_message_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
 
 function orderQuery(predicate: string): string {
   return `select
@@ -846,8 +1171,10 @@ function orderQuery(predicate: string): string {
     product.name as product_name,
     variant.name as variant_name,
     orders.amount_irr::text,
+    orders.order_kind,
     orders.status,
     orders.service_id::text,
+    orders.target_service_id::text,
     orders.representative_id::text,
     representative.code as representative_code,
     orders.pricing_source,
@@ -1061,8 +1388,10 @@ function mapOrder(row: OrderRow): SalesOrder {
     productName: row.product_name,
     variantName: row.variant_name,
     amountIrr: BigInt(row.amount_irr),
+    kind: row.order_kind,
     status: row.status,
     serviceId: row.service_id,
+    targetServiceId: row.target_service_id,
     representativeId: row.representative_id,
     representativeCode: row.representative_code,
     pricingSource: mapPricingSource(row.pricing_source),
@@ -1086,6 +1415,7 @@ function mapProof(row: ProofRow): TelegramPaymentProof {
     orderId: row.order_id,
     telegramFileId: row.telegram_file_id,
     telegramFileUniqueId: row.telegram_file_unique_id,
+    mediaKind: row.media_kind,
     submittedAt: row.submitted_at,
   };
 }

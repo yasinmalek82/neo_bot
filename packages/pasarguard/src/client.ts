@@ -143,8 +143,13 @@ export class PasarGuardClient implements ProvisioningProvider {
   }
 
   public async renewUser(input: RenewProviderUser): Promise<ProviderUser> {
+    let current: RawPasarGuardUser;
     try {
-      const current = await this.getRawUserById(input.userId);
+      current = await this.getRawUserById(input.userId);
+    } catch (error: unknown) {
+      throw this.normalizeError(error, false);
+    }
+    try {
       const payload: Record<string, unknown> = {
         status: 'active',
         expire: input.expiresAt === null ? 0 : input.expiresAt.toISOString(),
@@ -183,6 +188,7 @@ export class PasarGuardClient implements ProvisioningProvider {
       usedTrafficBytes: raw.used_traffic,
       groupIds: raw.group_ids,
       subscriptionUrl: normalizeSubscriptionUrl(this.baseUrl, raw.subscription_url),
+      provisioningNote: raw.note ?? null,
     };
   }
 
@@ -220,7 +226,11 @@ export class PasarGuardClient implements ProvisioningProvider {
             method !== 'GET' && response.status >= 500,
           );
         }
-        return await readBoundedJson(response);
+        try {
+          return await readBoundedJson(response);
+        } catch (error: unknown) {
+          throw this.normalizeSuccessfulResponseError(error, method !== 'GET');
+        }
       } catch (error: unknown) {
         lastError = this.normalizeError(error, method !== 'GET');
         if (!retryableMethod || !lastError.retryable || attempt >= this.maxRetries) {
@@ -243,6 +253,14 @@ export class PasarGuardClient implements ProvisioningProvider {
       return new PasarGuardError('PASARGUARD_TIMEOUT', true, mayHaveApplied);
     }
     return new PasarGuardError('PASARGUARD_NETWORK_ERROR', true, mayHaveApplied);
+  }
+
+  private normalizeSuccessfulResponseError(
+    error: unknown,
+    mayHaveApplied: boolean,
+  ): PasarGuardError {
+    const normalized = this.normalizeError(error, mayHaveApplied);
+    return new PasarGuardError(normalized.code, normalized.retryable, mayHaveApplied);
   }
 }
 

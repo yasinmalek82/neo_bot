@@ -4,6 +4,8 @@ import type {
   CommerceRepository,
   CommerceUseCase,
   CatalogChatAdminUseCase,
+  CustomerDeliveryTransport,
+  CustomerDeliveryUseCase,
   OpsDailySummaryUseCase,
   ReportingUseCase,
 } from '@neo-bot/application';
@@ -53,10 +55,11 @@ import {
   serviceUsernamePromptText,
   columnKeyboard,
   dailySummaryQueuedText,
+  deliveryAnchorText,
+  deliveryStageLabel,
   emptyShopText,
   escapeHtml,
   escapeWithin,
-  formatMoney,
   GUIDE_CALLBACK,
   guideInlineKeyboard,
   guideText,
@@ -82,10 +85,8 @@ import {
   receiptRejectedText,
   RENEW_CALLBACK,
   RENEW_CONFIRM_CALLBACK,
-  renewalCompletedText,
   renewalFailedText,
   renewalPreviewText,
-  serviceDeliveredText,
   SHOP_CALLBACK,
   shopBackButton,
   shopText,
@@ -137,6 +138,7 @@ export class TelegramCommerceBot {
     private readonly catalogChat: CatalogChatAdminUseCase,
     private readonly reporting: ReportingUseCase | null = null,
     private readonly dailySummary: OpsDailySummaryUseCase | null = null,
+    private readonly delivery: CustomerDeliveryUseCase | null = null,
   ) {
     this.config = config;
   }
@@ -174,6 +176,7 @@ export class TelegramCommerceBot {
     try {
       await this.dispatch(update);
       await this.dispatchDueReports();
+      await this.dispatchDueDeliveries();
       await this.repository.completeTelegramUpdate(updateId);
     } catch (error: unknown) {
       await this.repository.failTelegramUpdate(updateId, safeErrorCode(error));
@@ -288,12 +291,12 @@ export class TelegramCommerceBot {
     receipt: ReceiptFile,
   ): Promise<void> {
     await this.commerce.recordCustomerActivity(customer);
-    let order: SalesOrder;
     try {
-      order = await this.commerce.submitPaymentProof({
+      await this.commerce.submitPaymentProof({
         customer,
         telegramFileId: receipt.fileId,
         telegramFileUniqueId: receipt.fileUniqueId,
+        mediaKind: receipt.kind === 'document' ? 'document' : 'photo',
       });
     } catch (error: unknown) {
       if (error instanceof DomainConflictError) {
@@ -307,27 +310,8 @@ export class TelegramCommerceBot {
       throw error;
     }
     await this.present(target, receiptAcceptedText(), columnKeyboard([backToMenuButton()]));
-    const caption = [
-      '<b>رسید جدید</b>',
-      `سفارش: ${escapeHtml(order.id)}`,
-      `محصول: ${escapeHtml(order.productName)} — ${escapeHtml(order.variantName)}`,
-      `مبلغ: ${escapeHtml(formatMoney(order.amountIrr))}`,
-    ].join('\n');
-    const keyboard = pairedKeyboard([
-      { text: 'تأیید و ساخت سرویس ✅', callback_data: `approve:${order.id}` },
-      { text: 'رد رسید ❌', callback_data: `reject:${order.id}` },
-    ]);
-    await Promise.all(
-      [...this.config.adminTelegramUserIds].map((adminId) =>
-        receipt.kind === 'photo'
-          ? this.messenger.sendPhoto(adminId, receipt.fileId, caption, keyboard, {
-              parseMode: 'HTML',
-            })
-          : this.messenger.sendDocument(adminId, receipt.fileId, caption, keyboard, {
-              parseMode: 'HTML',
-            }),
-      ),
-    );
+    // The durable, deduplicated, redacted reporting outbox owns administrator receipt
+    // notices. A direct Telegram fanout here could lose or repeat a financial action.
   }
 
   private async handleCallback(
@@ -411,6 +395,12 @@ export class TelegramCommerceBot {
       } else if (/^admin:retry:\d+$/u.test(data)) {
         this.requireAdmin(actorId);
         await this.completeRetry(data.slice('admin:retry:'.length), actorId, String(chatId));
+      } else if (/^admin:proof:\d+$/u.test(data)) {
+        this.requireAdmin(actorId);
+        await this.completeProofRetrieval(target, data.slice('admin:proof:'.length));
+      } else if (/^admin:redeliver:\d+$/u.test(data)) {
+        this.requireAdmin(actorId);
+        await this.completeDeliveryRetry(target, data.slice('admin:redeliver:'.length), actorId);
       } else if (/^approve:\d+$/u.test(data)) {
         this.requireAdmin(actorId);
         await this.completeApproval(data.slice(8), actorId, String(chatId));
@@ -440,6 +430,19 @@ export class TelegramCommerceBot {
       return;
     }
     await this.reporting.dispatchDue();
+  }
+
+  public async dispatchDueDeliveries(): Promise<void> {
+    if (this.delivery === null) {
+      return;
+    }
+    try {
+      await this.delivery.dispatchDue();
+    } catch (error: unknown) {
+      if (!(error instanceof DomainConflictError)) {
+        throw error;
+      }
+    }
   }
 
   public async publishDailySummary(): Promise<boolean> {
@@ -2245,16 +2248,20 @@ export class TelegramCommerceBot {
       );
       return;
     }
-    await this.present(
-      target,
-      adminOrderText(order),
-      pairedKeyboard([
-        { text: 'تأیید و ساخت سرویس ✅', callback_data: `approve:${order.id}` },
-        { text: 'رد رسید ❌', callback_data: `reject:${order.id}` },
-        { text: MENU_LABEL.queue, callback_data: ADMIN_QUEUE_CALLBACK },
-        backToMenuButton(),
-      ]),
+    const deliveryJob = this.delivery === null ? null : await this.delivery.getJobForOrder(orderId);
+    const buttons = [
+      { text: 'تأیید و ساخت سرویس ✅', callback_data: `approve:${order.id}` },
+      { text: 'رد رسید ❌', callback_data: `reject:${order.id}` },
+      { text: 'مشاهده رسید 🧾', callback_data: `admin:proof:${order.id}` },
+    ];
+    if (deliveryJob !== null && deliveryJob.stage !== 'delivered') {
+      buttons.push({ text: 'ارسال دوباره لینک 📩', callback_data: `admin:redeliver:${order.id}` });
+    }
+    buttons.push(
+      { text: MENU_LABEL.queue, callback_data: ADMIN_QUEUE_CALLBACK },
+      backToMenuButton(),
     );
+    await this.present(target, adminOrderText(order), pairedKeyboard(buttons));
   }
 
   private async publishAdminDailySummary(target: MenuTarget): Promise<void> {
@@ -2284,26 +2291,19 @@ export class TelegramCommerceBot {
     adminChatId: string,
   ): Promise<void> {
     try {
-      const order = await this.commerce.approveOrder(orderId, actorId);
-      const customer = await this.commerce.getCustomerForOrder(order.id);
-      if (customer === null || order.serviceId === null) {
-        throw new DomainConflictError('FULFILLED_ORDER_INCOMPLETE');
-      }
-      const service = await this.serviceReader.get(order.serviceId);
-      await this.sendDeliveryBrandMedia(customer.privateChatId);
-      await this.present(
-        { chatId: customer.privateChatId },
-        serviceDeliveredText(service.remote.subscriptionUrl),
-        columnKeyboard([backToMenuButton()]),
-      );
-      await this.messenger.sendMessage(adminChatId, 'سفارش تکمیل شد.');
+      await this.commerce.approveOrder(orderId, actorId);
     } catch {
+      // Only a genuine provisioning failure reaches this branch; delivery failures
+      // stay inside the durable delivery job and never mislabel the order.
       await this.notifyProvisioningDelay(orderId);
       await this.messenger.sendMessage(
         adminChatId,
         'ساخت سرویس الان تمام نشد. از صف سفارش‌های باز دوباره تلاش کن.',
       );
+      return;
     }
+    await this.messenger.sendMessage(adminChatId, 'سفارش تکمیل شد.');
+    await this.dispatchDueDeliveries();
   }
 
   private async completeRejection(
@@ -2332,26 +2332,89 @@ export class TelegramCommerceBot {
     adminChatId: string,
   ): Promise<void> {
     try {
-      const order = await this.commerce.retryProvisioning(orderId, actorId);
-      const customer = await this.commerce.getCustomerForOrder(order.id);
-      if (customer === null || order.serviceId === null) {
-        throw new DomainConflictError('FULFILLED_ORDER_INCOMPLETE');
-      }
-      const service = await this.serviceReader.get(order.serviceId);
-      await this.sendDeliveryBrandMedia(customer.privateChatId);
-      await this.present(
-        { chatId: customer.privateChatId },
-        serviceDeliveredText(service.remote.subscriptionUrl),
-        columnKeyboard([backToMenuButton()]),
-      );
-      await this.messenger.sendMessage(adminChatId, 'ساخت سرویس تکرار شد.');
+      await this.commerce.retryProvisioning(orderId, actorId);
     } catch {
+      // Provisioning retry and delivery retry are distinct operations; only the
+      // provisioning attempt can land here.
       await this.notifyProvisioningDelay(orderId);
       await this.messenger.sendMessage(
         adminChatId,
         'ساخت سرویس الان تمام نشد. از صف سفارش‌های باز دوباره تلاش کن.',
       );
+      return;
     }
+    await this.messenger.sendMessage(adminChatId, 'ساخت سرویس تکرار شد.');
+    await this.dispatchDueDeliveries();
+  }
+
+  private async completeProofRetrieval(target: MenuTarget, orderId: string): Promise<void> {
+    const proof = await this.commerce.getPaymentProof(orderId);
+    if (proof === null) {
+      await this.present(
+        target,
+        'برای این سفارش رسیدی ثبت نشده است.',
+        columnKeyboard([backToMenuButton()]),
+      );
+      return;
+    }
+    const caption = `رسید سفارش ${escapeHtml(orderId)}`;
+    // The stored file ID never enters callback data, reports or logs; it is only
+    // passed to the Telegram send call.
+    if (proof.mediaKind === 'document') {
+      await this.messenger.sendDocument(
+        target.chatId,
+        proof.telegramFileId,
+        caption,
+        columnKeyboard([backToMenuButton()]),
+        { parseMode: 'HTML' },
+      );
+      return;
+    }
+    try {
+      await this.messenger.sendPhoto(
+        target.chatId,
+        proof.telegramFileId,
+        caption,
+        columnKeyboard([backToMenuButton()]),
+        { parseMode: 'HTML' },
+      );
+    } catch (error: unknown) {
+      if (proof.mediaKind === null) {
+        // Legacy proofs without a persisted kind fall back to document delivery.
+        await this.messenger.sendDocument(
+          target.chatId,
+          proof.telegramFileId,
+          caption,
+          columnKeyboard([backToMenuButton()]),
+          { parseMode: 'HTML' },
+        );
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async completeDeliveryRetry(
+    target: MenuTarget,
+    orderId: string,
+    actorId: string,
+  ): Promise<void> {
+    if (!this.isAdmin(actorId)) {
+      throw new DomainConflictError('ADMIN_REQUIRED');
+    }
+    if (this.delivery === null) {
+      throw new DomainConflictError('DELIVERY_UNAVAILABLE');
+    }
+    const job = await this.delivery.resetForOrder(orderId);
+    await this.present(
+      target,
+      `ارسال دوباره در صف قرار گرفت.\nوضعیت: ${deliveryStageLabel(job.stage)}`,
+      columnKeyboard([
+        { text: MENU_LABEL.queue, callback_data: ADMIN_QUEUE_CALLBACK },
+        backToMenuButton(),
+      ]),
+    );
+    await this.dispatchDueDeliveries();
   }
 
   private async notifyProvisioningDelay(orderId: string): Promise<void> {
@@ -2375,12 +2438,21 @@ export class TelegramCommerceBot {
     customer: TelegramCustomerInput,
   ): Promise<void> {
     try {
-      const service = await this.commerce.renewForCustomer(customer);
-      const remote = await this.serviceReader.get(service.id);
+      if (target.messageId === undefined) {
+        throw new DomainConflictError('RENEWAL_CONFIRMATION_INVALID');
+      }
+      const card = await this.readCheckoutCard();
+      const order = await this.commerce.beginRenewal({
+        customer,
+        idempotencyKey: `telegram:renew:${customer.telegramUserId}:${target.messageId}`,
+      });
       await this.present(
         target,
-        renewalCompletedText(remote.remote.subscriptionUrl),
-        columnKeyboard([backToMenuButton()]),
+        checkoutText(order, card.cardNumber, card.cardHolder),
+        columnKeyboard([
+          { text: MENU_LABEL.order, callback_data: ORDER_CALLBACK },
+          backToMenuButton(),
+        ]),
       );
     } catch (error: unknown) {
       if (error instanceof DomainConflictError && error.code === 'NO_ACTIVE_SERVICE') {
@@ -2444,28 +2516,18 @@ export class TelegramCommerceBot {
     await this.messenger.sendMessage(target.chatId, text, replyMarkup, { parseMode: 'HTML' });
   }
 
-  private async sendDeliveryBrandMedia(chatId: string): Promise<void> {
-    await this.sendBrandPhoto(
-      chatId,
-      this.config.brandMedia.deliveryPhotoFileId,
-      brandDeliveryCaption(),
-    );
-  }
-
   private async sendBrandPhoto(
     chatId: string,
     fileId: string | null,
     caption: string,
-    replyMarkup?: TelegramInlineKeyboardMarkup,
-  ): Promise<boolean> {
+  ): Promise<void> {
     if (fileId === null) {
-      return false;
+      return;
     }
     try {
-      await this.messenger.sendPhoto(chatId, fileId, caption, replyMarkup, { parseMode: 'HTML' });
-      return true;
+      await this.messenger.sendPhoto(chatId, fileId, caption, undefined, { parseMode: 'HTML' });
     } catch {
-      return false;
+      // Optional welcome media must never block the home screen.
     }
   }
 
@@ -2509,6 +2571,32 @@ export class TelegramCommerceBot {
 
 function isFreshStartCommand(text: string | undefined): boolean {
   return /^\/start(?:@[A-Za-z0-9_]+)?$/u.test(text?.trim() ?? '');
+}
+
+export function createTelegramDeliveryTransport(
+  messenger: TelegramMessenger,
+  brandPhotoFileId: string | null,
+): CustomerDeliveryTransport {
+  return {
+    async sendBrandPhoto(chatId: string): Promise<boolean> {
+      if (brandPhotoFileId === null) {
+        return false;
+      }
+      await messenger.sendPhoto(chatId, brandPhotoFileId, brandDeliveryCaption(), undefined, {
+        parseMode: 'HTML',
+      });
+      return true;
+    },
+    async sendAnchorMessage(chatId: string): Promise<{ readonly messageId: string }> {
+      const sent = await messenger.sendMessage(chatId, deliveryAnchorText(), undefined, {
+        parseMode: 'HTML',
+      });
+      return { messageId: sent.messageId };
+    },
+    async editMessageText(chatId: string, messageId: string, text: string): Promise<void> {
+      await messenger.editMessageText(chatId, messageId, text);
+    },
+  };
 }
 
 function customerFrom(

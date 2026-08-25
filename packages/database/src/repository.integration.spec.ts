@@ -3,8 +3,12 @@ import {
   CatalogAdminUseCase,
   CatalogChatAdminUseCase,
   CommerceUseCase,
+  DirectServiceUseCase,
+  ProvisioningModeGate,
   ReportingUseCase,
+  type ProvisioningRepository,
 } from '@neo-bot/application';
+import type { ProviderHealth, ProviderUser, ProvisioningProvider } from '@neo-bot/domain';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -83,6 +87,8 @@ describe('PostgresProvisioningRepository', () => {
       username: 'neo_integration',
       status: 'active',
       expiresAt: new Date('2026-09-19T00:00:00.000Z'),
+      dataLimitBytes: variant!.dataLimitBytes,
+      groupIds: variant!.groupIds,
       subscriptionUrl: 'https://panel.example.test/sub/integration',
     });
     expect(service.targetUserId).toBe(900719);
@@ -96,9 +102,247 @@ describe('PostgresProvisioningRepository', () => {
     const renewed = await repository.completeRenew(renew.operation.id, service.id, {
       status: 'active',
       expiresAt: new Date('2026-10-19T00:00:00.000Z'),
+      dataLimitBytes: 10_737_418_240n,
       subscriptionUrl: 'https://panel.example.test/sub/integration',
     });
     expect(renewed.expiresAt?.toISOString()).toBe('2026-10-19T00:00:00.000Z');
+  });
+
+  it('keeps concurrent create candidates write-once and dispatches only the reserved candidate', async () => {
+    const providerId = await repository.upsertProviderInstance(
+      'candidate-race-provider',
+      'https://candidate-race.example.test',
+    );
+    await repository.replaceGroupSnapshots(
+      providerId,
+      [{ id: 71, name: 'Candidate race group', disabled: false, inboundTags: ['race'] }],
+      new Date('2026-08-24T00:00:00.000Z'),
+    );
+    const variantId = await repository.upsertPilotVariant({
+      providerInstanceId: providerId,
+      code: 'candidate-race-variant',
+      name: 'Candidate race variant',
+      groupIds: [71],
+      durationDays: 30,
+      dataLimitBytes: 10n * 1024n ** 3n,
+      deviceLimit: 1,
+    });
+    const candidateInputs = ['buyer_aaaa', 'buyer_bbbb'] as const;
+    let candidateIndex = 0;
+    let reservationCalls = 0;
+    let persistedCalls = 0;
+    let releaseReservations: () => void = () => {};
+    const bothReservationsReturned = new Promise<void>((resolve) => {
+      releaseReservations = resolve;
+    });
+    let releasePersistedCandidates: () => void = () => {};
+    const bothCandidatesPersisted = new Promise<void>((resolve) => {
+      releasePersistedCandidates = resolve;
+    });
+    const racingRepository = Object.create(repository) as ProvisioningRepository;
+    racingRepository.reserveOperation = async (type, idempotencyKey, requestHash, serviceId) => {
+      const reserved = await repository.reserveOperation(
+        type,
+        idempotencyKey,
+        requestHash,
+        serviceId,
+      );
+      reservationCalls += 1;
+      if (reservationCalls === 2) {
+        releaseReservations();
+      }
+      await bothReservationsReturned;
+      return reserved;
+    };
+    racingRepository.persistCreateCandidate = async (
+      operationId,
+      _username,
+      requestedExpiresAt,
+      requestedDataLimitBytes,
+      requestedStatus,
+    ) => {
+      const username = candidateInputs[candidateIndex++];
+      if (username === undefined) {
+        throw new Error('UNEXPECTED_CANDIDATE_WRITER');
+      }
+      const persisted = await repository.persistCreateCandidate(
+        operationId,
+        username,
+        requestedExpiresAt,
+        requestedDataLimitBytes,
+        requestedStatus,
+      );
+      persistedCalls += 1;
+      if (persistedCalls === candidateInputs.length) {
+        releasePersistedCandidates();
+      }
+      await bothCandidatesPersisted;
+      return persisted;
+    };
+    const remoteUsers = new Map<string, ProviderUser>();
+    const remoteCreateUsernames: string[] = [];
+    const provider: ProvisioningProvider = {
+      health: async (): Promise<ProviderHealth> => ({
+        ok: true,
+        checkedAt: new Date('2026-08-24T00:00:00.000Z'),
+        latencyMs: 1,
+      }),
+      listGroups: async () => [],
+      findUserByUsername: async (username) => remoteUsers.get(username) ?? null,
+      getUserById: async (id) =>
+        [...remoteUsers.values()].find((remote) => remote.id === id) ?? null,
+      createUser: async (input) => {
+        remoteCreateUsernames.push(input.username);
+        const remote: ProviderUser = {
+          id: 900_762,
+          username: input.username,
+          status: 'active',
+          expiresAt: input.expiresAt,
+          dataLimitBytes: input.dataLimitBytes,
+          usedTrafficBytes: 0n,
+          groupIds: input.groupIds,
+          subscriptionUrl: 'https://candidate-race.example.test/sub/race',
+          provisioningNote: input.note,
+        };
+        remoteUsers.set(remote.username, remote);
+        return remote;
+      },
+      renewUser: async () => {
+        throw new Error('UNEXPECTED_RENEW');
+      },
+    };
+    const useCase = new DirectServiceUseCase(
+      racingRepository,
+      provider,
+      () => new Date('2026-08-24T00:00:00.000Z'),
+      new ProvisioningModeGate({ mode: 'live', isolatedGroupId: null }),
+    );
+    const command = {
+      productVariantId: variantId,
+      idempotencyKey: 'concurrent-candidate-race',
+      serviceUsernameBase: 'buyer',
+    };
+    const [first, second] = await Promise.all([useCase.create(command), useCase.create(command)]);
+
+    expect(first.targetUsername).toBe(second.targetUsername);
+    expect(candidateInputs).toContain(first.targetUsername);
+    expect(remoteCreateUsernames).toEqual([first.targetUsername]);
+    const persisted = await pool.query<{
+      candidate_username: string;
+      reconciliation_state: string;
+    }>(
+      `select candidate_username, reconciliation_state
+       from provisioning_operations
+       where operation_type = 'create' and idempotency_key = $1`,
+      [command.idempotencyKey],
+    );
+    expect(persisted.rows[0]).toEqual({
+      candidate_username: first.targetUsername,
+      reconciliation_state: 'reconciled',
+    });
+  });
+
+  it('reconciles a persisted remote create after a restart without issuing another create', async () => {
+    const providerId = await repository.upsertProviderInstance(
+      'recovery-provider',
+      'https://recovery-panel.example.test',
+    );
+    await repository.replaceGroupSnapshots(
+      providerId,
+      [{ id: 61, name: 'Recovery group', disabled: false, inboundTags: ['recovery'] }],
+      new Date('2026-08-24T00:00:00.000Z'),
+    );
+    const variantId = await repository.upsertPilotVariant({
+      providerInstanceId: providerId,
+      code: 'recovery-direct-variant',
+      name: 'Recovery direct variant',
+      groupIds: [61],
+      durationDays: 30,
+      dataLimitBytes: 10n * 1024n ** 3n,
+      deviceLimit: 1,
+    });
+    const command = {
+      productVariantId: variantId,
+      idempotencyKey: 'restart-after-remote-create',
+      requestedUsername: 'neo_recovery',
+    };
+    const requestHash = await import('node:crypto').then(({ createHash }) =>
+      createHash('sha256')
+        .update(
+          JSON.stringify({
+            productVariantId: command.productVariantId,
+            requestedUsername: command.requestedUsername,
+            serviceUsernameBase: null,
+          }),
+        )
+        .digest('hex'),
+    );
+    const operation = await repository.reserveOperation(
+      'create',
+      command.idempotencyKey,
+      requestHash,
+    );
+    await repository.persistCreateCandidate(
+      operation.operation.id,
+      command.requestedUsername,
+      new Date('2026-09-23T00:00:00.000Z'),
+      10n * 1024n ** 3n,
+      'active',
+    );
+    await repository.beginCreateAttempt(operation.operation.id);
+    const remote: ProviderUser = {
+      id: 900_761,
+      username: command.requestedUsername,
+      status: 'active',
+      expiresAt: new Date('2026-09-23T00:00:00.000Z'),
+      dataLimitBytes: 10n * 1024n ** 3n,
+      usedTrafficBytes: 0n,
+      groupIds: [61],
+      subscriptionUrl: 'https://recovery-panel.example.test/sub/recovery',
+      provisioningNote: `neo_bot create; operation=${operation.operation.id}`,
+    };
+    let createCalls = 0;
+    const provider: ProvisioningProvider = {
+      health: async (): Promise<ProviderHealth> => ({
+        ok: true,
+        checkedAt: new Date('2026-08-24T00:00:00.000Z'),
+        latencyMs: 1,
+      }),
+      listGroups: async () => [],
+      findUserByUsername: async (username) => (username === remote.username ? remote : null),
+      getUserById: async (id) => (id === remote.id ? remote : null),
+      createUser: async () => {
+        createCalls += 1;
+        return remote;
+      },
+      renewUser: async () => remote,
+    };
+    const useCase = new DirectServiceUseCase(
+      repository,
+      provider,
+      () => new Date('2026-08-24T00:00:00.000Z'),
+      new ProvisioningModeGate({ mode: 'live', isolatedGroupId: null }),
+    );
+
+    await expect(useCase.create(command)).resolves.toMatchObject({
+      targetUserId: remote.id,
+      targetUsername: remote.username,
+    });
+    expect(createCalls).toBe(0);
+    const persisted = await pool.query<{
+      candidate_username: string;
+      attempt_count: number;
+      reconciliation_state: string;
+    }>(
+      `select candidate_username, attempt_count, reconciliation_state
+       from provisioning_operations where id = $1`,
+      [operation.operation.id],
+    );
+    expect(persisted.rows[0]).toEqual({
+      candidate_username: command.requestedUsername,
+      attempt_count: 1,
+      reconciliation_state: 'reconciled',
+    });
   });
 
   it('persists an idempotent card-to-card checkout and fulfillment lifecycle', async () => {
@@ -156,15 +400,21 @@ describe('PostgresProvisioningRepository', () => {
       username: 'neo_commerce',
       status: 'active',
       expiresAt: new Date('2026-09-20T00:00:00.000Z'),
+      dataLimitBytes: variant!.dataLimitBytes,
+      groupIds: variant!.groupIds,
       subscriptionUrl: 'https://commerce-panel.example.test/sub/integration',
     });
     let provisionCalls = 0;
+    let renewCalls = 0;
     const useCase = new CommerceUseCase(commerceRepository, {
       create: async () => {
         provisionCalls += 1;
         return service;
       },
-      renew: async () => service,
+      renew: async () => {
+        renewCalls += 1;
+        return service;
+      },
     });
     const customer = {
       telegramUserId: '10001',
@@ -208,12 +458,292 @@ describe('PostgresProvisioningRepository', () => {
     expect(duplicateApproval.serviceId).toBe(service.id);
     expect(provisionCalls).toBe(1);
 
+    const renewal = await useCase.beginRenewal({
+      customer,
+      idempotencyKey: 'telegram:100:renew:1',
+    });
+    expect(renewal).toMatchObject({
+      kind: 'renewal',
+      productVariantId: variantId,
+      targetServiceId: service.id,
+      amountIrr: 1_500_000n,
+      status: 'awaiting_receipt',
+    });
+    await useCase.submitPaymentProof({
+      customer,
+      telegramFileId: 'telegram-renewal-file',
+      telegramFileUniqueId: 'unique-renewal-proof',
+    });
+    const renewedOrder = await useCase.approveOrder(renewal.id, '70001');
+    expect(renewedOrder).toMatchObject({
+      kind: 'renewal',
+      serviceId: service.id,
+      targetServiceId: service.id,
+      status: 'fulfilled',
+    });
+    expect(renewCalls).toBe(1);
+    expect(provisionCalls).toBe(1);
+
     expect(await commerceRepository.reserveTelegramUpdate('500')).toBe(true);
     await commerceRepository.completeTelegramUpdate('500');
     expect(await commerceRepository.reserveTelegramUpdate('500')).toBe(false);
     expect(await commerceRepository.reserveTelegramUpdate('501')).toBe(true);
     await commerceRepository.failTelegramUpdate('501', 'TEMPORARY_FAILURE');
     expect(await commerceRepository.reserveTelegramUpdate('501')).toBe(true);
+
+    // Every fulfilled order owns exactly one durable delivery job and its target is
+    // resolved from persisted records only.
+    const purchaseJob = await commerceRepository.getDeliveryJobForOrder(order.id);
+    expect(purchaseJob).toMatchObject({
+      orderId: order.id,
+      serviceId: service.id,
+      stage: 'pending_brand_media',
+      attemptCount: 0,
+      telegramMessageId: null,
+    });
+    const renewalJob = await commerceRepository.getDeliveryJobForOrder(renewedOrder.id);
+    expect(renewalJob).toMatchObject({ orderId: renewedOrder.id, stage: 'pending_brand_media' });
+    expect(await commerceRepository.getOrderDeliveryTarget(order.id)).toEqual({
+      chatId: '10001',
+      subscriptionUrl: 'https://commerce-panel.example.test/sub/integration',
+    });
+    expect(await commerceRepository.backfillMissingDeliveryJobs(new Date())).toBe(0);
+  });
+
+  it('claims a due delivery job exactly once under concurrent workers and stages it safely', async () => {
+    const providerId = await repository.upsertProviderInstance(
+      'delivery-provider',
+      'https://delivery-panel.example.test',
+    );
+    await repository.replaceGroupSnapshots(
+      providerId,
+      [{ id: 21, name: 'Delivery pilot', disabled: false, inboundTags: ['delivery'] }],
+      new Date('2026-08-21T02:00:00.000Z'),
+    );
+    const variantId = await repository.upsertPilotVariant({
+      providerInstanceId: providerId,
+      code: 'delivery-direct-variant',
+      name: 'تحویل یک‌ماهه',
+      groupIds: [21],
+      durationDays: 30,
+      dataLimitBytes: 20n * 1024n ** 3n,
+      deviceLimit: 1,
+    });
+    await commerceRepository.upsertCategory({
+      code: 'delivery-economic',
+      name: 'تحویل اقتصادی',
+      description: 'آزمون صف تحویل',
+    });
+    await commerceRepository.assignProductToCategory(
+      (await commerceRepository.listCategories(null)).find(
+        (category) => category.code === 'delivery-economic',
+      )!.id,
+      'pilot-direct',
+    );
+    await commerceRepository.configureVariantForSale({
+      variantCode: 'delivery-direct-variant',
+      priceIrr: 1_200_000n,
+      description: '۳۰ روز، ۲۰ گیگابایت',
+    });
+    const service = await repository.completeCreate(
+      (await repository.reserveOperation('create', 'delivery-service-op', '7'.repeat(64))).operation
+        .id,
+      (await repository.getProductVariant(variantId))!,
+      {
+        id: 900_731,
+        username: 'neo_delivery',
+        status: 'active',
+        expiresAt: new Date('2026-09-20T00:00:00.000Z'),
+        dataLimitBytes: 20n * 1024n ** 3n,
+        groupIds: [21],
+        subscriptionUrl: 'https://delivery-panel.example.test/sub/secret-link',
+      },
+    );
+    const useCase = new CommerceUseCase(commerceRepository, {
+      create: async () => service,
+      renew: async () => service,
+    });
+    const customer = {
+      telegramUserId: '10002',
+      privateChatId: '10002',
+      username: 'delivery-buyer',
+      displayName: 'خریدار تحویل',
+    } as const;
+    const order = await useCase.beginCheckout({
+      customer,
+      productVariantId: variantId,
+      idempotencyKey: 'telegram:101:buy',
+      serviceUsernameBase: 'buyer',
+    });
+    await useCase.submitPaymentProof({
+      customer,
+      telegramFileId: 'delivery-proof-file',
+      telegramFileUniqueId: 'delivery-proof-unique',
+      mediaKind: 'photo',
+    });
+    await useCase.approveOrder(order.id, '70001');
+
+    const now = new Date(Date.now() + 60_000);
+    const firstWave = await Promise.all([
+      commerceRepository.claimDueDeliveryJobs(10, now),
+      commerceRepository.claimDueDeliveryJobs(10, now),
+      commerceRepository.claimDueDeliveryJobs(10, now),
+    ]);
+    const claimedForOrder = firstWave.flat().filter((job) => job.orderId === order.id);
+    expect(claimedForOrder).toHaveLength(1);
+    expect(claimedForOrder[0]).toMatchObject({ stage: 'pending_brand_media', attemptCount: 1 });
+
+    // A repeated claim wave before the retry time finds nothing due.
+    const secondWave = await commerceRepository.claimDueDeliveryJobs(10, now);
+    expect(secondWave.find((job) => job.orderId === order.id)).toBeUndefined();
+
+    const jobId = claimedForOrder[0]!.id;
+    await commerceRepository.markDeliveryJobBrandSent(jobId, now);
+    await commerceRepository.markDeliveryJobAnchor(jobId, '4242', now);
+    let job = await commerceRepository.getDeliveryJobForOrder(order.id);
+    expect(job).toMatchObject({ stage: 'pending_link', telegramMessageId: '4242' });
+
+    await commerceRepository.retryDeliveryJob(
+      jobId,
+      'TELEGRAM_HTTP_500',
+      new Date(now.getTime() + 60_000),
+      now,
+    );
+    job = await commerceRepository.getDeliveryJobForOrder(order.id);
+    expect(job).toMatchObject({ stage: 'pending_link', lastErrorCode: 'TELEGRAM_HTTP_500' });
+
+    await commerceRepository.markDeliveryJobDelivered(jobId, now);
+    job = await commerceRepository.getDeliveryJobForOrder(order.id);
+    expect(job).toMatchObject({ stage: 'delivered', lastErrorCode: null });
+
+    // Delivered jobs are terminal: neither claiming nor admin reset can rewind them.
+    await pool.query(`update customer_delivery_jobs set next_attempt_at = $2 where id = $1`, [
+      jobId,
+      new Date('2026-08-21T01:00:00.000Z'),
+    ]);
+    const afterDelivered = await commerceRepository.claimDueDeliveryJobs(10, now);
+    expect(afterDelivered.find((entry) => entry.orderId === order.id)).toBeUndefined();
+    await expect(commerceRepository.resetDeliveryJob(order.id, now)).rejects.toThrow();
+
+    // A failed job resets to the anchor stage when its message already exists.
+    const failedOrderId = (
+      await pool.query<{ order_id: string }>(
+        `select order_id::text from customer_delivery_jobs
+         where order_id <> $1 and stage in ('pending_brand_media','pending_link')
+         limit 1`,
+        [order.id],
+      )
+    ).rows[0]?.order_id;
+    if (failedOrderId !== undefined) {
+      const failedJobId = (
+        await pool.query<{ id: string }>(
+          `select id::text from customer_delivery_jobs where order_id = $1`,
+          [failedOrderId],
+        )
+      ).rows[0]!.id;
+      await commerceRepository.failDeliveryJob(failedJobId, 'BRAND_MEDIA_FAILED', now);
+      await pool.query(`update customer_delivery_jobs set telegram_message_id = 77 where id = $1`, [
+        failedJobId,
+      ]);
+      const reset = await commerceRepository.resetDeliveryJob(failedOrderId, now);
+      expect(reset).toMatchObject({ stage: 'pending_link', attemptCount: 0, lastErrorCode: null });
+    }
+
+    // The secret subscription URL never appears anywhere in the durable job row.
+    const rawJob = await pool.query(`select * from customer_delivery_jobs where order_id = $1`, [
+      order.id,
+    ]);
+    expect(JSON.stringify(rawJob.rows)).not.toContain('/sub/');
+  });
+
+  it('persists receipt media kinds and returns the newest stored proof without exposing others', async () => {
+    const providerId = await repository.upsertProviderInstance(
+      'proof-provider',
+      'https://proof-panel.example.test',
+    );
+    await repository.replaceGroupSnapshots(
+      providerId,
+      [{ id: 22, name: 'Proof pilot', disabled: false, inboundTags: ['proof'] }],
+      new Date('2026-08-21T03:00:00.000Z'),
+    );
+    const variantId = await repository.upsertPilotVariant({
+      providerInstanceId: providerId,
+      code: 'proof-direct-variant',
+      name: 'رسید یک‌ماهه',
+      groupIds: [22],
+      durationDays: 30,
+      dataLimitBytes: 20n * 1024n ** 3n,
+      deviceLimit: 1,
+    });
+    await commerceRepository.upsertCategory({
+      code: 'proof-economic',
+      name: 'رسید اقتصادی',
+      description: 'آزمون رسید',
+    });
+    await commerceRepository.assignProductToCategory(
+      (await commerceRepository.listCategories(null)).find(
+        (category) => category.code === 'proof-economic',
+      )!.id,
+      'pilot-direct',
+    );
+    await commerceRepository.configureVariantForSale({
+      variantCode: 'proof-direct-variant',
+      priceIrr: 900_000n,
+      description: '۳۰ روز، ۲۰ گیگابایت',
+    });
+    const service = await repository.completeCreate(
+      (await repository.reserveOperation('create', 'proof-service-op', '8'.repeat(64))).operation
+        .id,
+      (await repository.getProductVariant(variantId))!,
+      {
+        id: 900_732,
+        username: 'neo_proof',
+        status: 'active',
+        expiresAt: new Date('2026-09-20T00:00:00.000Z'),
+        dataLimitBytes: 20n * 1024n ** 3n,
+        groupIds: [22],
+        subscriptionUrl: 'https://proof-panel.example.test/sub/proof',
+      },
+    );
+    const useCase = new CommerceUseCase(commerceRepository, {
+      create: async () => service,
+      renew: async () => service,
+    });
+    const customer = {
+      telegramUserId: '10003',
+      privateChatId: '10003',
+      username: 'proof-buyer',
+      displayName: 'خریدار رسید',
+    } as const;
+    const order = await useCase.beginCheckout({
+      customer,
+      productVariantId: variantId,
+      idempotencyKey: 'telegram:102:buy',
+      serviceUsernameBase: 'buyer',
+    });
+    await useCase.submitPaymentProof({
+      customer,
+      telegramFileId: 'first-photo-file',
+      telegramFileUniqueId: 'proof-unique-1',
+      mediaKind: 'photo',
+    });
+    await useCase.submitPaymentProof({
+      customer,
+      telegramFileId: 'second-document-file',
+      telegramFileUniqueId: 'proof-unique-2',
+      mediaKind: 'document',
+    });
+
+    const latest = await commerceRepository.getPaymentProof(order.id);
+    expect(latest).toMatchObject({
+      telegramFileId: 'second-document-file',
+      mediaKind: 'document',
+    });
+    const kinds = await pool.query<{ media_kind: string | null }>(
+      `select media_kind from telegram_payment_proofs where order_id = $1 order by id`,
+      [order.id],
+    );
+    expect(kinds.rows.map((row) => row.media_kind)).toEqual(['photo', 'document']);
   });
 
   it('publishes an arbitrary catalog matrix atomically for the Mini App', async () => {

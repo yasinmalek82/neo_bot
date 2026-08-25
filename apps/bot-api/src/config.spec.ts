@@ -20,6 +20,28 @@ describe('configuration', () => {
     });
   });
 
+  it('defaults provider mutations to disabled and requires an explicit isolated group', () => {
+    const base = {
+      DATABASE_URL: 'postgres://local/test',
+      PASARGUARD_BASE_URL: 'https://panel.example.test',
+      PASARGUARD_API_KEY: 'test-api-key',
+    };
+    expect(loadPilotConfig(base)).toMatchObject({
+      provisioningMode: 'disabled',
+      isolatedGroupId: null,
+    });
+    expect(() => loadPilotConfig({ ...base, PROVISIONING_MODE: 'isolated' })).toThrow(
+      'INVALID_PILOT_CONFIGURATION',
+    );
+    expect(
+      loadPilotConfig({
+        ...base,
+        PROVISIONING_MODE: 'isolated',
+        PROVISIONING_ISOLATED_GROUP_ID: '42',
+      }),
+    ).toMatchObject({ provisioningMode: 'isolated', isolatedGroupId: 42 });
+  });
+
   it('keeps Telegram disabled without requiring secrets', () => {
     expect(loadTelegramConfig({ TELEGRAM_ENABLED: 'false' })).toEqual({ enabled: false });
   });

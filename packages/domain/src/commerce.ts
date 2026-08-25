@@ -60,6 +60,10 @@ export type SalesOrderStatus =
   | 'rejected'
   | 'cancelled';
 
+export const SALES_ORDER_KINDS = ['purchase', 'renewal'] as const;
+
+export type SalesOrderKind = (typeof SALES_ORDER_KINDS)[number];
+
 export interface SalesOrder {
   readonly id: string;
   readonly customerId: string;
@@ -67,8 +71,10 @@ export interface SalesOrder {
   readonly productName: string;
   readonly variantName: string;
   readonly amountIrr: bigint;
+  readonly kind: SalesOrderKind;
   readonly status: SalesOrderStatus;
   readonly serviceId: string | null;
+  readonly targetServiceId: string | null;
   readonly representativeId?: string | null;
   readonly representativeCode?: string | null;
   readonly pricingSource?: RepresentativePricingSource;
@@ -78,12 +84,55 @@ export interface SalesOrder {
   readonly updatedAt: Date;
 }
 
+export const PAYMENT_PROOF_MEDIA_KINDS = ['photo', 'document'] as const;
+
+export type PaymentProofMediaKind = (typeof PAYMENT_PROOF_MEDIA_KINDS)[number];
+
 export interface TelegramPaymentProof {
   readonly id: string;
   readonly orderId: string;
   readonly telegramFileId: string;
   readonly telegramFileUniqueId: string;
+  readonly mediaKind?: PaymentProofMediaKind | null;
   readonly submittedAt: Date;
+}
+
+export const DELIVERY_JOB_STAGES = [
+  'pending_brand_media',
+  'pending_link',
+  'delivered',
+  'failed',
+] as const;
+
+export type DeliveryJobStage = (typeof DELIVERY_JOB_STAGES)[number];
+
+/**
+ * Durable customer-delivery job. It intentionally carries internal references and
+ * progress metadata only. A subscription URL, provider credential or receipt file ID
+ * must never enter a delivery job.
+ */
+export interface CustomerDeliveryJob {
+  readonly id: string;
+  readonly orderId: string;
+  readonly customerId: string;
+  readonly serviceId: string;
+  readonly stage: DeliveryJobStage;
+  readonly attemptCount: number;
+  readonly nextAttemptAt: Date;
+  readonly lastErrorCode: string | null;
+  readonly telegramMessageId: string | null;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+export interface ClaimedDeliveryJob {
+  readonly id: string;
+  readonly orderId: string;
+  readonly customerId: string;
+  readonly serviceId: string;
+  readonly stage: DeliveryJobStage;
+  readonly attemptCount: number;
+  readonly telegramMessageId: string | null;
 }
 
 export interface TelegramCustomerInput {

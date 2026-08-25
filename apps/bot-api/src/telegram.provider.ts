@@ -1,8 +1,10 @@
 import { CatalogChatAdminUseCase, type CatalogAdminUseCase } from '@neo-bot/application';
 import {
   CommerceUseCase,
+  CustomerDeliveryUseCase,
   DirectServiceUseCase,
   OpsDailySummaryUseCase,
+  ProvisioningModeGate,
   ReportingUseCase,
 } from '@neo-bot/application';
 import {
@@ -18,7 +20,8 @@ import { catalogAdminUseCaseToken } from './catalog.provider.js';
 import { loadPilotConfig, loadTelegramConfig } from './config.js';
 import { databasePoolToken } from './database.provider.js';
 import { TelegramApiClient } from './telegram-api.js';
-import { TelegramCommerceBot } from './telegram-commerce-bot.js';
+import { createTelegramDeliveryTransport, TelegramCommerceBot } from './telegram-commerce-bot.js';
+import { serviceDeliveredText } from './telegram-menu.js';
 
 export const telegramCommerceBotToken = Symbol('telegramCommerceBot');
 
@@ -65,9 +68,22 @@ export const telegramCommerceBotProvider = {
       baseUrl: providerConfig.baseUrl,
       apiKey: providerConfig.apiKey,
     });
-    const directService = new DirectServiceUseCase(provisioningRepository, pasarGuard);
+    const directService = new DirectServiceUseCase(
+      provisioningRepository,
+      pasarGuard,
+      () => new Date(),
+      new ProvisioningModeGate({
+        mode: providerConfig.provisioningMode,
+        isolatedGroupId: providerConfig.isolatedGroupId,
+      }),
+    );
     const commerce = new CommerceUseCase(commerceRepository, directService, reporting);
     const dailySummary = new OpsDailySummaryUseCase(commerceRepository, reporting);
+    const delivery = new CustomerDeliveryUseCase(
+      commerceRepository,
+      createTelegramDeliveryTransport(telegramApi, telegramConfig.brandMedia.deliveryPhotoFileId),
+      serviceDeliveredText,
+    );
     return new TelegramCommerceBot(
       telegramConfig,
       commerce,
@@ -78,6 +94,7 @@ export const telegramCommerceBotProvider = {
       catalogChat,
       reporting,
       dailySummary,
+      delivery,
     );
   },
 };

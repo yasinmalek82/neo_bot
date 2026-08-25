@@ -31,6 +31,7 @@ export const rawUserSchema = z
     used_traffic: nonNegativeBigInt.default(0n),
     group_ids: z.array(positiveInteger).default([]),
     subscription_url: z.string().min(1).max(2_048),
+    note: z.string().max(500).nullish(),
     proxy_settings: z.record(z.string(), z.unknown()).default({}),
     hwid_limit: z.number().int().nonnegative().nullish(),
   })

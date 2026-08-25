@@ -1,5 +1,10 @@
 import type { CatalogAdminUseCase } from '@neo-bot/application';
-import { CommerceUseCase, DirectServiceUseCase, ReportingUseCase } from '@neo-bot/application';
+import {
+  CommerceUseCase,
+  DirectServiceUseCase,
+  ProvisioningModeGate,
+  ReportingUseCase,
+} from '@neo-bot/application';
 import {
   PostgresCommerceRepository,
   PostgresProvisioningRepository,
@@ -34,6 +39,11 @@ export const customerOrderServiceProvider = {
     const directService = new DirectServiceUseCase(
       new PostgresProvisioningRepository(pool),
       pasarGuard,
+      () => new Date(),
+      new ProvisioningModeGate({
+        mode: providerConfig.provisioningMode,
+        isolatedGroupId: providerConfig.isolatedGroupId,
+      }),
     );
     const commerce = new CommerceUseCase(commerceRepository, directService, reporting);
     return new CustomerOrderService(
@@ -42,7 +52,6 @@ export const customerOrderServiceProvider = {
       telegramConfig.botToken,
       new TelegramApiClient(telegramConfig.botToken),
       telegramConfig.adminTelegramUserIds,
-      directService,
     );
   },
 };

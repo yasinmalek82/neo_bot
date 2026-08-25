@@ -24,8 +24,10 @@ const order: SalesOrder = {
   productName: 'اقتصادی',
   variantName: 'یک‌ماهه',
   amountIrr: 1_500_000n,
+  kind: 'purchase',
   status: 'provisioning',
   serviceId: null,
+  targetServiceId: null,
   serviceUsernameBase: 'buyer',
   failureCode: null,
   createdAt: new Date('2026-08-21T00:00:00.000Z'),
@@ -191,22 +193,48 @@ describe('CommerceUseCase', () => {
     );
   });
 
-  it('renews the latest fulfilled service without putting usernames in reports', async () => {
+  it('creates a paid renewal order and renews only after receipt approval', async () => {
     const repository = createRepository();
     const reporting = { record: vi.fn().mockResolvedValue({ id: '3', created: true }) };
     const renew = vi.fn().mockResolvedValue(service);
     const useCase = new CommerceUseCase(repository, { create: vi.fn(), renew }, reporting);
+    const awaitingReceipt = {
+      ...order,
+      kind: 'renewal' as const,
+      status: 'awaiting_receipt' as const,
+      targetServiceId: service.id,
+    };
+    const provisioning = { ...awaitingReceipt, status: 'provisioning' as const };
+    const fulfilled = {
+      ...provisioning,
+      status: 'fulfilled' as const,
+      serviceId: service.id,
+    };
+    vi.mocked(repository.createRenewalOrder).mockResolvedValue(awaitingReceipt);
+    vi.mocked(repository.reserveProvisioning).mockResolvedValue(provisioning);
+    vi.mocked(repository.completeOrder).mockResolvedValue(fulfilled);
 
     await expect(
-      useCase.renewForCustomer({
-        telegramUserId: '10001',
-        privateChatId: '10001',
-        displayName: 'خریدار',
+      useCase.beginRenewal({
+        idempotencyKey: 'telegram:10001:renew:7',
+        customer: {
+          telegramUserId: '10001',
+          privateChatId: '10001',
+          displayName: 'خریدار',
+        },
       }),
-    ).resolves.toEqual(service);
+    ).resolves.toEqual(awaitingReceipt);
+    expect(repository.createRenewalOrder).toHaveBeenCalledWith(
+      customer.id,
+      'telegram:10001:renew:7',
+      undefined,
+    );
+    expect(renew).not.toHaveBeenCalled();
+
+    await expect(useCase.approveOrder(awaitingReceipt.id, '70001')).resolves.toEqual(fulfilled);
     expect(renew).toHaveBeenCalledWith({
       serviceId: service.id,
-      idempotencyKey: expect.stringMatching(/^renew:40:\d{4}-\d{2}-\d{2}$/u),
+      idempotencyKey: `order:${awaitingReceipt.id}:provision`,
     });
     expect(JSON.stringify(reporting.record.mock.calls)).not.toContain('neo_order');
     expect(JSON.stringify(reporting.record.mock.calls)).not.toContain('https://');
@@ -479,6 +507,90 @@ describe('CommerceUseCase', () => {
     });
   });
 
+  it('does not mislabel a fulfilled order as provisioning failure when post-completion reporting fails', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.reserveProvisioning).mockResolvedValue({
+      ...order,
+      status: 'provisioning',
+    });
+    vi.mocked(repository.completeOrder).mockResolvedValue({
+      ...order,
+      status: 'fulfilled',
+      serviceId: service.id,
+    });
+    const reporting = { record: vi.fn().mockRejectedValue(new Error('REPORTING_UNAVAILABLE')) };
+    const useCase = new CommerceUseCase(
+      repository,
+      { create: vi.fn().mockResolvedValue(service), renew: vi.fn() },
+      reporting,
+    );
+
+    await expect(useCase.approveOrder(order.id, '70001')).rejects.toThrow('REPORTING_UNAVAILABLE');
+    expect(repository.markProvisioningFailed).not.toHaveBeenCalled();
+    expect(reporting.record).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'provisioning.failed' }),
+    );
+  });
+
+  it('still marks genuine provider failures as provisioning_failed', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.reserveProvisioning).mockResolvedValue({
+      ...order,
+      status: 'provisioning',
+    });
+    const reporting = { record: vi.fn().mockResolvedValue({ id: '7', created: true }) };
+    const useCase = new CommerceUseCase(
+      repository,
+      { create: vi.fn().mockRejectedValue(new Error('PASARGUARD_HTTP_503')), renew: vi.fn() },
+      reporting,
+    );
+
+    await expect(useCase.approveOrder(order.id, '70001')).rejects.toThrow('PASARGUARD_HTTP_503');
+    expect(repository.markProvisioningFailed).toHaveBeenCalledWith(order.id, 'PASARGUARD_HTTP_503');
+    expect(reporting.record).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'provisioning.failed' }),
+    );
+    expect(repository.completeOrder).not.toHaveBeenCalled();
+  });
+
+  it('persists the proof media kind and retrieves the stored proof by order', async () => {
+    const repository = createRepository();
+    const useCase = new CommerceUseCase(repository, { create: vi.fn(), renew: vi.fn() });
+    await useCase.submitPaymentProof({
+      customer: {
+        telegramUserId: '10001',
+        privateChatId: '10001',
+        displayName: 'خریدار',
+      },
+      telegramFileId: 'receipt-file-id',
+      telegramFileUniqueId: 'receipt-unique',
+      mediaKind: 'photo',
+    });
+    expect(repository.submitTelegramProof).toHaveBeenCalledWith(
+      customer.id,
+      'receipt-file-id',
+      'receipt-unique',
+      'photo',
+    );
+
+    await expect(useCase.getPaymentProof(order.id)).resolves.toMatchObject({
+      telegramFileId: 'file',
+    });
+
+    await expect(
+      useCase.submitPaymentProof({
+        customer: {
+          telegramUserId: '10001',
+          privateChatId: '10001',
+          displayName: 'خریدار',
+        },
+        telegramFileId: 'receipt-file-id',
+        telegramFileUniqueId: 'receipt-unique-2',
+        mediaKind: 'video' as never,
+      }),
+    ).rejects.toThrow('INVALID_PAYMENT_PROOF');
+  });
+
   it('rejects checkout when the username base is invalid', async () => {
     const repository = createRepository();
     const useCase = new CommerceUseCase(repository, { create: vi.fn(), renew: vi.fn() });
@@ -514,6 +626,7 @@ function createRepository(): CommerceRepository {
     getSellableVariant: vi.fn().mockResolvedValue(null),
     upsertTelegramCustomer: vi.fn().mockResolvedValue({ customer, created: false }),
     createOrder: vi.fn().mockResolvedValue(order),
+    createRenewalOrder: vi.fn().mockResolvedValue(order),
     getOrder: vi.fn().mockResolvedValue(order),
     getCustomerForOrder: vi.fn().mockResolvedValue(customer),
     getOpenOrderForCustomer: vi.fn().mockResolvedValue(order),
@@ -527,6 +640,19 @@ function createRepository(): CommerceRepository {
     listReviewQueue: vi.fn().mockResolvedValue([]),
     listFailedProvisioning: vi.fn().mockResolvedValue([]),
     submitTelegramProof: vi.fn().mockResolvedValue({ order, proof }),
+    getPaymentProof: vi.fn().mockResolvedValue(proof),
+    claimDueDeliveryJobs: vi.fn().mockResolvedValue([]),
+    markDeliveryJobBrandSent: vi.fn().mockResolvedValue(undefined),
+    markDeliveryJobAnchor: vi.fn().mockResolvedValue(undefined),
+    markDeliveryJobDelivered: vi.fn().mockResolvedValue(undefined),
+    retryDeliveryJob: vi.fn().mockResolvedValue(undefined),
+    failDeliveryJob: vi.fn().mockResolvedValue(undefined),
+    getDeliveryJobForOrder: vi.fn().mockResolvedValue(null),
+    resetDeliveryJob: vi.fn().mockImplementation(() => {
+      throw new Error('DELIVERY_JOB_NOT_RETRYABLE');
+    }),
+    backfillMissingDeliveryJobs: vi.fn().mockResolvedValue(0),
+    getOrderDeliveryTarget: vi.fn().mockResolvedValue(null),
     reserveProvisioning: vi.fn().mockResolvedValue(order),
     completeOrder: vi.fn().mockResolvedValue(order),
     markProvisioningFailed: vi.fn().mockResolvedValue(order),

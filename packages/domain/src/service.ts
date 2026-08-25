@@ -13,6 +13,8 @@ export interface ServiceBinding {
 
 export type ProvisioningOperationType = 'create' | 'renew';
 export type ProvisioningOperationStatus = 'pending' | 'completed' | 'failed';
+export type ProvisioningReconciliationState =
+  'not_required' | 'candidate_persisted' | 'attempting' | 'reconciliation_required' | 'reconciled';
 
 export interface ProvisioningOperation {
   readonly id: string;
@@ -20,6 +22,12 @@ export interface ProvisioningOperation {
   readonly idempotencyKey: string;
   readonly requestHash: string;
   readonly status: ProvisioningOperationStatus;
+  readonly candidateUsername: string | null;
+  readonly attemptCount: number;
+  readonly reconciliationState: ProvisioningReconciliationState;
+  readonly requestedExpiresAt: Date | null;
+  readonly requestedDataLimitBytes: bigint | null;
+  readonly requestedStatus: ProviderUserStatus | null;
   readonly serviceId: string | null;
   readonly remoteUserId: number | null;
   readonly errorCode: string | null;
