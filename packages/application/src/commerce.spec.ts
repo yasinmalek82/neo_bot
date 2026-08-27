@@ -183,6 +183,27 @@ describe('CommerceUseCase', () => {
     );
   });
 
+  it('replays the idempotent success report for an already fulfilled provisioning retry', async () => {
+    const fulfilled = { ...order, status: 'fulfilled' as const, serviceId: service.id };
+    const repository = createRepository();
+    vi.mocked(repository.getOrder).mockResolvedValue(fulfilled);
+    const create = vi.fn();
+    const renew = vi.fn();
+    const reporting = { record: vi.fn().mockResolvedValue({ id: '2', created: true }) };
+    const useCase = new CommerceUseCase(repository, { create, renew }, reporting);
+
+    await expect(useCase.retryProvisioning(order.id, '70001')).resolves.toEqual(fulfilled);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(renew).not.toHaveBeenCalled();
+    expect(reporting.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'provisioning.succeeded',
+        occurrenceKey: `order:${order.id}:provisioned`,
+      }),
+    );
+  });
+
   it('rejects provisioning retry for unready orders', async () => {
     const repository = createRepository();
     vi.mocked(repository.getOrder).mockResolvedValue({ ...order, status: 'awaiting_receipt' });
@@ -532,6 +553,23 @@ describe('CommerceUseCase', () => {
     );
   });
 
+  it('replays the idempotent success report when an already fulfilled approval is retried', async () => {
+    const fulfilled = { ...order, status: 'fulfilled' as const, serviceId: service.id };
+    const repository = createRepository();
+    vi.mocked(repository.reserveProvisioning).mockResolvedValue(fulfilled);
+    const reporting = { record: vi.fn().mockResolvedValue({ id: '2', created: true }) };
+    const useCase = new CommerceUseCase(repository, { create: vi.fn(), renew: vi.fn() }, reporting);
+
+    await expect(useCase.approveOrder(order.id, '70001')).resolves.toEqual(fulfilled);
+
+    expect(reporting.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'provisioning.succeeded',
+        occurrenceKey: `order:${order.id}:provisioned`,
+      }),
+    );
+  });
+
   it('still marks genuine provider failures as provisioning_failed', async () => {
     const repository = createRepository();
     vi.mocked(repository.reserveProvisioning).mockResolvedValue({
@@ -642,11 +680,11 @@ function createRepository(): CommerceRepository {
     submitTelegramProof: vi.fn().mockResolvedValue({ order, proof }),
     getPaymentProof: vi.fn().mockResolvedValue(proof),
     claimDueDeliveryJobs: vi.fn().mockResolvedValue([]),
-    markDeliveryJobBrandSent: vi.fn().mockResolvedValue(undefined),
-    markDeliveryJobAnchor: vi.fn().mockResolvedValue(undefined),
-    markDeliveryJobDelivered: vi.fn().mockResolvedValue(undefined),
-    retryDeliveryJob: vi.fn().mockResolvedValue(undefined),
-    failDeliveryJob: vi.fn().mockResolvedValue(undefined),
+    markDeliveryJobBrandSent: vi.fn().mockResolvedValue(true),
+    markDeliveryJobAnchor: vi.fn().mockResolvedValue(true),
+    markDeliveryJobDelivered: vi.fn().mockResolvedValue(true),
+    retryDeliveryJob: vi.fn().mockResolvedValue(true),
+    failDeliveryJob: vi.fn().mockResolvedValue(true),
     getDeliveryJobForOrder: vi.fn().mockResolvedValue(null),
     resetDeliveryJob: vi.fn().mockImplementation(() => {
       throw new Error('DELIVERY_JOB_NOT_RETRYABLE');

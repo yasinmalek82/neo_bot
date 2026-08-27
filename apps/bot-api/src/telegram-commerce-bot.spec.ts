@@ -1562,6 +1562,7 @@ describe('TelegramCommerceBot', () => {
         serviceId: service.id,
         stage: 'pending_brand_media',
         attemptCount: 1,
+        claimVersion: '1',
         telegramMessageId: null,
       },
     ]);
@@ -1616,10 +1617,114 @@ describe('TelegramCommerceBot', () => {
     for (const call of vi.mocked(messenger.sendMessage).mock.calls) {
       expect(call[1]).not.toContain(service.subscriptionUrl);
     }
-    expect(repository.markDeliveryJobBrandSent).toHaveBeenCalledWith('9', expect.any(Date));
-    expect(repository.markDeliveryJobAnchor).toHaveBeenCalledWith('9', '1', expect.any(Date));
-    expect(repository.markDeliveryJobDelivered).toHaveBeenCalledWith('9', expect.any(Date));
+    expect(repository.markDeliveryJobBrandSent).toHaveBeenCalledWith('9', '1', expect.any(Date));
+    expect(repository.markDeliveryJobAnchor).toHaveBeenCalledWith('9', '1', '1', expect.any(Date));
+    expect(repository.markDeliveryJobDelivered).toHaveBeenCalledWith('9', '1', expect.any(Date));
     expect(messenger.sendMessage).toHaveBeenCalledWith('70001', 'سفارش تکمیل شد.');
+  });
+
+  it('does not present a post-completion reporting failure as provisioning failure', async () => {
+    const fulfilled = { ...order, status: 'fulfilled' as const, serviceId: service.id };
+    const repository = createRepository();
+    vi.mocked(repository.reserveProvisioning).mockResolvedValue({
+      ...order,
+      status: 'provisioning',
+    });
+    vi.mocked(repository.completeOrder).mockResolvedValue(fulfilled);
+    vi.mocked(repository.getOrder).mockResolvedValue(fulfilled);
+    const reporting = {
+      record: vi
+        .fn()
+        .mockResolvedValueOnce({ id: 'approved', created: true })
+        .mockRejectedValueOnce(new Error('REPORTING_UNAVAILABLE')),
+      dispatchDue: vi.fn(),
+    };
+    const messenger = createMessenger();
+    const delivery = createDelivery(repository, messenger);
+    const bot = createBot(
+      repository,
+      messenger,
+      reporting as never,
+      undefined,
+      null,
+      {},
+      {},
+      {},
+      delivery,
+    );
+
+    await expect(
+      bot.handleUpdate({
+        update_id: 1232,
+        callback_query: {
+          id: 'cb-approve-report-failure',
+          from: { id: 70001, first_name: 'ادمین' },
+          message: { message_id: 14, chat: { id: 70001, type: 'private' }, text: 'رسید' },
+          data: 'approve:3',
+        },
+      }),
+    ).rejects.toThrow('REPORTING_UNAVAILABLE');
+
+    expect(repository.backfillMissingDeliveryJobs).toHaveBeenCalled();
+    expect(messenger.sendMessage).not.toHaveBeenCalledWith(
+      '70001',
+      expect.stringContaining('ساخت سرویس الان تمام نشد'),
+    );
+    expect(messenger.sendMessage).not.toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('بعداً'),
+      expect.anything(),
+    );
+  });
+
+  it('does not present a fulfilled retry reporting failure as provisioning failure', async () => {
+    const fulfilled = { ...order, status: 'fulfilled' as const, serviceId: service.id };
+    const repository = createRepository();
+    vi.mocked(repository.getOrder).mockResolvedValue(fulfilled);
+    const reporting = {
+      record: vi.fn().mockRejectedValue(new Error('REPORTING_UNAVAILABLE')),
+      dispatchDue: vi.fn(),
+    };
+    const messenger = createMessenger();
+    const delivery = createDelivery(repository, messenger);
+    const create = vi.fn();
+    const renew = vi.fn();
+    const bot = createBot(
+      repository,
+      messenger,
+      reporting as never,
+      { create, renew },
+      null,
+      {},
+      {},
+      {},
+      delivery,
+    );
+
+    await expect(
+      bot.handleUpdate({
+        update_id: 1233,
+        callback_query: {
+          id: 'cb-retry-report-failure',
+          from: { id: 70001, first_name: 'ادمین' },
+          message: { message_id: 15, chat: { id: 70001, type: 'private' }, text: 'سفارش' },
+          data: 'admin:retry:3',
+        },
+      }),
+    ).rejects.toThrow('REPORTING_UNAVAILABLE');
+
+    expect(create).not.toHaveBeenCalled();
+    expect(renew).not.toHaveBeenCalled();
+    expect(repository.backfillMissingDeliveryJobs).toHaveBeenCalled();
+    expect(messenger.sendMessage).not.toHaveBeenCalledWith(
+      '70001',
+      expect.stringContaining('ساخت سرویس الان تمام نشد'),
+    );
+    expect(messenger.sendMessage).not.toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('بعداً'),
+      expect.anything(),
+    );
   });
 
   it('keeps the order fulfilled when only the delivery edit fails and retries stay provider-free', async () => {
@@ -1636,6 +1741,7 @@ describe('TelegramCommerceBot', () => {
       serviceId: service.id,
       stage: 'failed',
       attemptCount: 3,
+      claimVersion: '2',
       nextAttemptAt: new Date('2026-08-21T00:00:00.000Z'),
       lastErrorCode: 'TELEGRAM_HTTP_500',
       telegramMessageId: '77',
@@ -1649,6 +1755,7 @@ describe('TelegramCommerceBot', () => {
       serviceId: service.id,
       stage: 'pending_link',
       attemptCount: 0,
+      claimVersion: '3',
       nextAttemptAt: new Date('2026-08-21T00:05:00.000Z'),
       lastErrorCode: null,
       telegramMessageId: '77',
@@ -1667,6 +1774,7 @@ describe('TelegramCommerceBot', () => {
         serviceId: service.id,
         stage: 'pending_link',
         attemptCount: 4,
+        claimVersion: '4',
         telegramMessageId: '77',
       },
     ]);
@@ -1705,7 +1813,7 @@ describe('TelegramCommerceBot', () => {
       '77',
       expect.stringContaining(service.subscriptionUrl),
     );
-    expect(repository.markDeliveryJobDelivered).toHaveBeenCalledWith('9', expect.any(Date));
+    expect(repository.markDeliveryJobDelivered).toHaveBeenCalledWith('9', '4', expect.any(Date));
     expect(vi.mocked(messenger.editMessageText).mock.calls[0]?.[2]).toContain('ارسال دوباره');
   });
 
@@ -2275,6 +2383,7 @@ function createBot(
     adminTelegramUserIds: new Set(['70001']),
     reporting: null,
     reportDispatchIntervalMs: 15_000,
+    deliveryDispatchIntervalMs: 15_000,
     ...configOverrides,
   };
   const commerce = new CommerceUseCase(repository, provisioner, reporting);
@@ -2367,11 +2476,11 @@ function createRepository(): CommerceRepository {
     submitTelegramProof: vi.fn().mockResolvedValue({ order, proof }),
     getPaymentProof: vi.fn().mockResolvedValue(proof),
     claimDueDeliveryJobs: vi.fn().mockResolvedValue([]),
-    markDeliveryJobBrandSent: vi.fn().mockResolvedValue(undefined),
-    markDeliveryJobAnchor: vi.fn().mockResolvedValue(undefined),
-    markDeliveryJobDelivered: vi.fn().mockResolvedValue(undefined),
-    retryDeliveryJob: vi.fn().mockResolvedValue(undefined),
-    failDeliveryJob: vi.fn().mockResolvedValue(undefined),
+    markDeliveryJobBrandSent: vi.fn().mockResolvedValue(true),
+    markDeliveryJobAnchor: vi.fn().mockResolvedValue(true),
+    markDeliveryJobDelivered: vi.fn().mockResolvedValue(true),
+    retryDeliveryJob: vi.fn().mockResolvedValue(true),
+    failDeliveryJob: vi.fn().mockResolvedValue(true),
     getDeliveryJobForOrder: vi.fn().mockResolvedValue(null),
     resetDeliveryJob: vi.fn().mockImplementation(() => {
       throw new Error('DELIVERY_JOB_NOT_RETRYABLE');

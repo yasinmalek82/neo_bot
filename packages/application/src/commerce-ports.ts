@@ -57,11 +57,27 @@ export interface CommerceRepository {
   ): Promise<{ readonly order: SalesOrder; readonly proof: TelegramPaymentProof }>;
   getPaymentProof(orderId: string): Promise<TelegramPaymentProof | null>;
   claimDueDeliveryJobs(limit: number, now: Date): Promise<readonly ClaimedDeliveryJob[]>;
-  markDeliveryJobBrandSent(jobId: string, now: Date): Promise<void>;
-  markDeliveryJobAnchor(jobId: string, telegramMessageId: string, now: Date): Promise<void>;
-  markDeliveryJobDelivered(jobId: string, now: Date): Promise<void>;
-  retryDeliveryJob(jobId: string, errorCode: string, nextAttemptAt: Date, now: Date): Promise<void>;
-  failDeliveryJob(jobId: string, errorCode: string, now: Date): Promise<void>;
+  markDeliveryJobBrandSent(jobId: string, claimVersion: string, now: Date): Promise<boolean>;
+  markDeliveryJobAnchor(
+    jobId: string,
+    claimVersion: string,
+    telegramMessageId: string,
+    now: Date,
+  ): Promise<boolean>;
+  markDeliveryJobDelivered(jobId: string, claimVersion: string, now: Date): Promise<boolean>;
+  retryDeliveryJob(
+    jobId: string,
+    claimVersion: string,
+    errorCode: string,
+    nextAttemptAt: Date,
+    now: Date,
+  ): Promise<boolean>;
+  failDeliveryJob(
+    jobId: string,
+    claimVersion: string,
+    errorCode: string,
+    now: Date,
+  ): Promise<boolean>;
   getDeliveryJobForOrder(orderId: string): Promise<CustomerDeliveryJob | null>;
   resetDeliveryJob(orderId: string, now: Date): Promise<CustomerDeliveryJob>;
   backfillMissingDeliveryJobs(now: Date): Promise<number>;

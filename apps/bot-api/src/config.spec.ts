@@ -69,10 +69,11 @@ describe('configuration', () => {
         topics: { receipts: '3' },
       },
       reportDispatchIntervalMs: 15_000,
+      deliveryDispatchIntervalMs: 15_000,
     });
   });
 
-  it('allows disabling the idle report dispatcher with a zero interval', () => {
+  it('keeps report-only timer disablement independent from durable customer delivery', () => {
     expect(
       loadTelegramConfig({
         TELEGRAM_ENABLED: 'true',
@@ -80,8 +81,9 @@ describe('configuration', () => {
         TELEGRAM_WEBHOOK_SECRET: 'safe_webhook_secret_123',
         TELEGRAM_ADMIN_IDS: '70001',
         TELEGRAM_REPORT_DISPATCH_INTERVAL_MS: '0',
+        TELEGRAM_DELIVERY_DISPATCH_INTERVAL_MS: '25000',
       }),
-    ).toMatchObject({ enabled: true, webhookUrl: null, reportDispatchIntervalMs: 0 });
+    ).toMatchObject({ reportDispatchIntervalMs: 0, deliveryDispatchIntervalMs: 25_000 });
   });
 
   it('keeps optional brand media disabled until Telegram file IDs are configured', () => {

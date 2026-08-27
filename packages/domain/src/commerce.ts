@@ -118,6 +118,7 @@ export interface CustomerDeliveryJob {
   readonly serviceId: string;
   readonly stage: DeliveryJobStage;
   readonly attemptCount: number;
+  readonly claimVersion: string;
   readonly nextAttemptAt: Date;
   readonly lastErrorCode: string | null;
   readonly telegramMessageId: string | null;
@@ -132,6 +133,7 @@ export interface ClaimedDeliveryJob {
   readonly serviceId: string;
   readonly stage: DeliveryJobStage;
   readonly attemptCount: number;
+  readonly claimVersion: string;
   readonly telegramMessageId: string | null;
 }
 

@@ -69,7 +69,11 @@ export class CustomerDeliveryUseCase {
           // Optional media: false means unconfigured, a throw means a retryable failure.
           await this.transport.sendBrandPhoto(target.chatId);
         }
-        await this.repository.markDeliveryJobBrandSent(job.id, this.now());
+        if (
+          !(await this.repository.markDeliveryJobBrandSent(job.id, job.claimVersion, this.now()))
+        ) {
+          return;
+        }
         stage = 'pending_link';
       }
       if (stage === 'pending_link') {
@@ -87,7 +91,18 @@ export class CustomerDeliveryUseCase {
     let messageId = job.telegramMessageId;
     if (messageId === null) {
       const anchor = await this.transport.sendAnchorMessage(chatId);
-      await this.repository.markDeliveryJobAnchor(job.id, anchor.messageId, this.now());
+      // A stale worker may have sent a non-secret placeholder, but it must never
+      // edit that placeholder with the subscription URL after losing its claim.
+      if (
+        !(await this.repository.markDeliveryJobAnchor(
+          job.id,
+          job.claimVersion,
+          anchor.messageId,
+          this.now(),
+        ))
+      ) {
+        return;
+      }
       messageId = anchor.messageId;
     }
     try {
@@ -102,7 +117,7 @@ export class CustomerDeliveryUseCase {
         throw error;
       }
     }
-    await this.repository.markDeliveryJobDelivered(job.id, this.now());
+    await this.repository.markDeliveryJobDelivered(job.id, job.claimVersion, this.now());
   }
 
   private async requiredSubscriptionUrl(orderId: string): Promise<string> {
@@ -117,11 +132,12 @@ export class CustomerDeliveryUseCase {
     const code = deliveryErrorCode(error);
     const now = this.now();
     if (!isRetryableDeliveryError(code) || job.attemptCount >= MAX_DELIVERY_ATTEMPTS) {
-      await this.repository.failDeliveryJob(job.id, code, now);
+      await this.repository.failDeliveryJob(job.id, job.claimVersion, code, now);
       return;
     }
     await this.repository.retryDeliveryJob(
       job.id,
+      job.claimVersion,
       code,
       nextDeliveryAttemptAt(job.attemptCount, now),
       now,

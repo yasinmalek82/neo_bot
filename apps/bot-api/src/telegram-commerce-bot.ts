@@ -2292,7 +2292,12 @@ export class TelegramCommerceBot {
   ): Promise<void> {
     try {
       await this.commerce.approveOrder(orderId, actorId);
-    } catch {
+    } catch (error: unknown) {
+      const current = await this.repository.getOrder(orderId);
+      if (current?.status === 'fulfilled') {
+        await this.dispatchDueDeliveries();
+        throw error;
+      }
       // Only a genuine provisioning failure reaches this branch; delivery failures
       // stay inside the durable delivery job and never mislabel the order.
       await this.notifyProvisioningDelay(orderId);
@@ -2333,7 +2338,12 @@ export class TelegramCommerceBot {
   ): Promise<void> {
     try {
       await this.commerce.retryProvisioning(orderId, actorId);
-    } catch {
+    } catch (error: unknown) {
+      const current = await this.repository.getOrder(orderId);
+      if (current?.status === 'fulfilled') {
+        await this.dispatchDueDeliveries();
+        throw error;
+      }
       // Provisioning retry and delivery retry are distinct operations; only the
       // provisioning attempt can land here.
       await this.notifyProvisioningDelay(orderId);

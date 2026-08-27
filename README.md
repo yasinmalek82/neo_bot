@@ -120,7 +120,8 @@ deduplicated. Receipt file references and subscription URLs are never written to
 
 When the bot is enabled, an idle outbox dispatcher also flushes pending operator reports on a timer
 so quiet webhook traffic cannot strand notices. Set `TELEGRAM_REPORT_DISPATCH_INTERVAL_MS=0` to keep
-webhook-only flushing.
+webhook-only report flushing. Durable customer delivery has its own always-on timer, configured with
+`TELEGRAM_DELIVERY_DISPATCH_INTERVAL_MS`, so a quiet webhook cannot strand a fulfilled order.
 
 Operator reports go to a private Telegram forum. Create the group, enable Topics, add the bot as
 administrator with Manage Topics, then set `TELEGRAM_REPORT_GROUP_CHAT_ID`. On startup the bot

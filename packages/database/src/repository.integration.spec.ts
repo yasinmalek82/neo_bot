@@ -39,6 +39,30 @@ describe('PostgresProvisioningRepository', () => {
     await container?.stop();
   });
 
+  it('upgrades an already-applied delivery schema with additive claim fencing', async () => {
+    const migration = '0013_customer_delivery_claim_fencing.sql';
+    await pool.query('delete from schema_migrations where version = $1', [migration]);
+    await pool.query('alter table customer_delivery_jobs drop column claim_version');
+
+    await migrate(pool);
+
+    const applied = await pool.query<{ exists: boolean }>(
+      'select exists(select 1 from schema_migrations where version = $1) as exists',
+      [migration],
+    );
+    const column = await pool.query<{ exists: boolean }>(
+      `select exists(
+         select 1
+         from information_schema.columns
+         where table_schema = current_schema()
+           and table_name = 'customer_delivery_jobs'
+           and column_name = 'claim_version'
+       ) as exists`,
+    );
+    expect(applied.rows[0]?.exists).toBe(true);
+    expect(column.rows[0]?.exists).toBe(true);
+  });
+
   it('tracks removed groups and persists an idempotent create/renew lifecycle', async () => {
     const providerId = await repository.upsertProviderInstance(
       'integration-provider',
@@ -591,28 +615,70 @@ describe('PostgresProvisioningRepository', () => {
     ]);
     const claimedForOrder = firstWave.flat().filter((job) => job.orderId === order.id);
     expect(claimedForOrder).toHaveLength(1);
-    expect(claimedForOrder[0]).toMatchObject({ stage: 'pending_brand_media', attemptCount: 1 });
+    expect(claimedForOrder[0]).toMatchObject({
+      stage: 'pending_brand_media',
+      attemptCount: 1,
+      claimVersion: '1',
+    });
 
     // A repeated claim wave before the retry time finds nothing due.
     const secondWave = await commerceRepository.claimDueDeliveryJobs(10, now);
     expect(secondWave.find((job) => job.orderId === order.id)).toBeUndefined();
 
     const jobId = claimedForOrder[0]!.id;
-    await commerceRepository.markDeliveryJobBrandSent(jobId, now);
-    await commerceRepository.markDeliveryJobAnchor(jobId, '4242', now);
+    const expiredClaim = (
+      await commerceRepository.claimDueDeliveryJobs(10, new Date(now.getTime() + 120_001))
+    ).find((job) => job.orderId === order.id)!;
+    expect(expiredClaim).toMatchObject({ claimVersion: '2' });
+    expect(
+      await commerceRepository.markDeliveryJobBrandSent(
+        jobId,
+        claimedForOrder[0]!.claimVersion,
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      await commerceRepository.markDeliveryJobBrandSent(jobId, expiredClaim.claimVersion, now),
+    ).toBe(true);
+    expect(
+      await commerceRepository.markDeliveryJobAnchor(jobId, expiredClaim.claimVersion, '4242', now),
+    ).toBe(true);
     let job = await commerceRepository.getDeliveryJobForOrder(order.id);
-    expect(job).toMatchObject({ stage: 'pending_link', telegramMessageId: '4242' });
+    expect(job).toMatchObject({
+      stage: 'pending_link',
+      telegramMessageId: '4242',
+      claimVersion: '2',
+    });
 
-    await commerceRepository.retryDeliveryJob(
-      jobId,
-      'TELEGRAM_HTTP_500',
-      new Date(now.getTime() + 60_000),
-      now,
-    );
+    expect(
+      await commerceRepository.retryDeliveryJob(
+        jobId,
+        claimedForOrder[0]!.claimVersion,
+        'TELEGRAM_HTTP_500',
+        new Date(now.getTime() + 60_000),
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      await commerceRepository.retryDeliveryJob(
+        jobId,
+        expiredClaim.claimVersion,
+        'TELEGRAM_HTTP_500',
+        new Date(now.getTime() + 60_000),
+        now,
+      ),
+    ).toBe(true);
     job = await commerceRepository.getDeliveryJobForOrder(order.id);
     expect(job).toMatchObject({ stage: 'pending_link', lastErrorCode: 'TELEGRAM_HTTP_500' });
 
-    await commerceRepository.markDeliveryJobDelivered(jobId, now);
+    const reset = await commerceRepository.resetDeliveryJob(order.id, now);
+    expect(reset).toMatchObject({ stage: 'pending_link', claimVersion: '3' });
+    expect(
+      await commerceRepository.markDeliveryJobDelivered(jobId, expiredClaim.claimVersion, now),
+    ).toBe(false);
+    expect(await commerceRepository.markDeliveryJobDelivered(jobId, reset.claimVersion, now)).toBe(
+      true,
+    );
     job = await commerceRepository.getDeliveryJobForOrder(order.id);
     expect(job).toMatchObject({ stage: 'delivered', lastErrorCode: null });
 
@@ -641,7 +707,22 @@ describe('PostgresProvisioningRepository', () => {
           [failedOrderId],
         )
       ).rows[0]!.id;
-      await commerceRepository.failDeliveryJob(failedJobId, 'BRAND_MEDIA_FAILED', now);
+      await pool.query(`update customer_delivery_jobs set next_attempt_at = $2 where id = $1`, [
+        failedJobId,
+        now,
+      ]);
+      const failedClaim = (await commerceRepository.claimDueDeliveryJobs(10, now)).find(
+        (job) => job.id === failedJobId,
+      );
+      if (failedClaim === undefined) {
+        throw new Error('TEST_DELIVERY_CLAIM_MISSING');
+      }
+      await commerceRepository.failDeliveryJob(
+        failedJobId,
+        failedClaim.claimVersion,
+        'BRAND_MEDIA_FAILED',
+        now,
+      );
       await pool.query(`update customer_delivery_jobs set telegram_message_id = 77 where id = $1`, [
         failedJobId,
       ]);

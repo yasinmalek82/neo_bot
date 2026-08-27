@@ -13,17 +13,18 @@ const baseJob = {
   serviceId: '4',
   stage: 'pending_brand_media',
   attemptCount: 1,
+  claimVersion: '1',
   telegramMessageId: null,
 } as const;
 
 function createRepository(): CommerceRepository {
   return {
     claimDueDeliveryJobs: vi.fn().mockResolvedValue([]),
-    markDeliveryJobBrandSent: vi.fn().mockResolvedValue(undefined),
-    markDeliveryJobAnchor: vi.fn().mockResolvedValue(undefined),
-    markDeliveryJobDelivered: vi.fn().mockResolvedValue(undefined),
-    retryDeliveryJob: vi.fn().mockResolvedValue(undefined),
-    failDeliveryJob: vi.fn().mockResolvedValue(undefined),
+    markDeliveryJobBrandSent: vi.fn().mockResolvedValue(true),
+    markDeliveryJobAnchor: vi.fn().mockResolvedValue(true),
+    markDeliveryJobDelivered: vi.fn().mockResolvedValue(true),
+    retryDeliveryJob: vi.fn().mockResolvedValue(true),
+    failDeliveryJob: vi.fn().mockResolvedValue(true),
     getDeliveryJobForOrder: vi.fn().mockResolvedValue(null),
     resetDeliveryJob: vi.fn().mockResolvedValue(null),
     backfillMissingDeliveryJobs: vi.fn().mockResolvedValue(0),
@@ -59,15 +60,15 @@ describe('CustomerDeliveryUseCase', () => {
     await useCase.dispatchDue();
 
     expect(transport.sendBrandPhoto).toHaveBeenCalledWith('10001');
-    expect(repository.markDeliveryJobBrandSent).toHaveBeenCalledWith('9', fixedNow());
+    expect(repository.markDeliveryJobBrandSent).toHaveBeenCalledWith('9', '1', fixedNow());
     expect(transport.sendAnchorMessage).toHaveBeenCalledTimes(1);
-    expect(repository.markDeliveryJobAnchor).toHaveBeenCalledWith('9', '55', fixedNow());
+    expect(repository.markDeliveryJobAnchor).toHaveBeenCalledWith('9', '1', '55', fixedNow());
     expect(transport.editMessageText).toHaveBeenCalledWith(
       '10001',
       '55',
       expect.stringContaining('https://panel.example/sub/order'),
     );
-    expect(repository.markDeliveryJobDelivered).toHaveBeenCalledWith('9', fixedNow());
+    expect(repository.markDeliveryJobDelivered).toHaveBeenCalledWith('9', '1', fixedNow());
   });
 
   it('keeps unconfigured optional brand media observable-free but non-blocking', async () => {
@@ -96,6 +97,7 @@ describe('CustomerDeliveryUseCase', () => {
 
     expect(repository.retryDeliveryJob).toHaveBeenCalledWith(
       '9',
+      '1',
       'TELEGRAM_HTTP_500',
       expect.any(Date),
       fixedNow(),
@@ -112,7 +114,12 @@ describe('CustomerDeliveryUseCase', () => {
     });
     const exhausted = new CustomerDeliveryUseCase(repository, transport, serviceText, fixedNow);
     await exhausted.dispatchDue();
-    expect(repository.failDeliveryJob).toHaveBeenCalledWith('9', 'TELEGRAM_HTTP_429', fixedNow());
+    expect(repository.failDeliveryJob).toHaveBeenCalledWith(
+      '9',
+      '1',
+      'TELEGRAM_HTTP_429',
+      fixedNow(),
+    );
 
     vi.mocked(repository.getOrderDeliveryTarget).mockResolvedValue(null);
     vi.mocked(repository.claimDueDeliveryJobs).mockResolvedValue([
@@ -122,6 +129,7 @@ describe('CustomerDeliveryUseCase', () => {
     await missingTarget.dispatchDue();
     expect(repository.failDeliveryJob).toHaveBeenCalledWith(
       '9',
+      '1',
       'DELIVERY_TARGET_MISSING',
       fixedNow(),
     );
@@ -139,7 +147,7 @@ describe('CustomerDeliveryUseCase', () => {
 
     await useCase.dispatchDue();
 
-    expect(repository.markDeliveryJobDelivered).toHaveBeenCalledWith('9', fixedNow());
+    expect(repository.markDeliveryJobDelivered).toHaveBeenCalledWith('9', '1', fixedNow());
     expect(repository.retryDeliveryJob).not.toHaveBeenCalled();
     expect(transport.sendAnchorMessage).not.toHaveBeenCalled();
   });
@@ -163,6 +171,7 @@ describe('CustomerDeliveryUseCase', () => {
     expect(transport.sendAnchorMessage).toHaveBeenCalledTimes(1);
     expect(repository.retryDeliveryJob).toHaveBeenCalledWith(
       '9',
+      '1',
       'SIMULATED_CRASH',
       expect.any(Date),
       fixedNow(),
@@ -170,13 +179,52 @@ describe('CustomerDeliveryUseCase', () => {
 
     // Replay: the job is claimed again with no stored message id, so a second anchor
     // may be created (duplicated non-secret placeholder), which is then completed.
-    vi.mocked(repository.markDeliveryJobAnchor).mockResolvedValue();
+    vi.mocked(repository.markDeliveryJobAnchor).mockResolvedValue(true);
     vi.mocked(repository.claimDueDeliveryJobs).mockResolvedValue([
       { ...baseJob, telegramMessageId: null },
     ]);
     await useCase.dispatchDue();
     expect(transport.sendAnchorMessage).toHaveBeenCalledTimes(2);
     expect(repository.markDeliveryJobDelivered).toHaveBeenCalled();
+  });
+
+  it('lets only the claim that wins the anchor CAS edit a subscription URL', async () => {
+    const repository = createRepository();
+    const first = { ...baseJob, stage: 'pending_link' as const, claimVersion: '1' };
+    const second = { ...baseJob, stage: 'pending_link' as const, claimVersion: '2' };
+    vi.mocked(repository.claimDueDeliveryJobs)
+      .mockResolvedValueOnce([first])
+      .mockResolvedValueOnce([second]);
+    let releaseFirstAnchor: (() => void) | undefined;
+    const transport = createTransport({
+      sendAnchorMessage: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<{ readonly messageId: string }>((resolve) => {
+              releaseFirstAnchor = () => resolve({ messageId: 'stale-anchor' });
+            }),
+        )
+        .mockResolvedValueOnce({ messageId: 'canonical-anchor' }),
+    });
+    vi.mocked(repository.markDeliveryJobAnchor).mockImplementation(
+      async (_jobId, claimVersion) => claimVersion === '2',
+    );
+    const useCase = new CustomerDeliveryUseCase(repository, transport, serviceText, fixedNow);
+
+    const workerA = useCase.dispatchDue();
+    await vi.waitFor(() => expect(releaseFirstAnchor).toBeDefined());
+    await useCase.dispatchDue();
+    releaseFirstAnchor?.();
+    await workerA;
+
+    expect(transport.sendAnchorMessage).toHaveBeenCalledTimes(2);
+    expect(transport.editMessageText).toHaveBeenCalledTimes(1);
+    expect(transport.editMessageText).toHaveBeenCalledWith(
+      '10001',
+      'canonical-anchor',
+      expect.stringContaining('https://panel.example/sub/order'),
+    );
   });
 
   it('resets only non-delivered jobs for administrator retry', async () => {
@@ -188,6 +236,7 @@ describe('CustomerDeliveryUseCase', () => {
       serviceId: '4',
       stage: 'pending_link',
       attemptCount: 0,
+      claimVersion: '3',
       nextAttemptAt: fixedNow(),
       lastErrorCode: null,
       telegramMessageId: '77',

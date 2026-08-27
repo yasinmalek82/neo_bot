@@ -290,6 +290,7 @@ export class CommerceUseCase {
       },
     });
     if (order.status === 'fulfilled') {
+      await this.publishProvisioningSucceeded(order, customer?.telegramUserId ?? 'unknown');
       return order;
     }
     return this.fulfillReservedOrder(order);
@@ -305,6 +306,8 @@ export class CommerceUseCase {
       throw new DomainConflictError('ORDER_NOT_FOUND');
     }
     if (order.status === 'fulfilled') {
+      const customer = await this.repository.getCustomerForOrder(order.id);
+      await this.publishProvisioningSucceeded(order, customer?.telegramUserId ?? 'unknown');
       return order;
     }
     if (order.status !== 'provisioning' && order.status !== 'provisioning_failed') {
@@ -376,16 +379,23 @@ export class CommerceUseCase {
     const fulfilled = await this.repository.completeOrder(order.id, service.id);
     // Failures after completeOrder must not rewrite the fulfilled order into a
     // provisioning failure; the durable delivery job owns customer notification.
+    await this.publishProvisioningSucceeded(fulfilled, customer?.telegramUserId ?? 'unknown');
+    return fulfilled;
+  }
+
+  private async publishProvisioningSucceeded(
+    order: SalesOrder,
+    telegramUserId: string,
+  ): Promise<void> {
     await this.publish({
       type: 'provisioning.succeeded',
       occurrenceKey: `order:${order.id}:provisioned`,
       payload: {
         orderId: order.id,
-        serviceId: service.id,
-        telegramUserId: customer?.telegramUserId ?? 'unknown',
+        serviceId: order.serviceId ?? 'unknown',
+        telegramUserId,
       },
     });
-    return fulfilled;
   }
 
   private async renewReservedOrder(order: SalesOrder): Promise<ServiceBinding> {

@@ -96,6 +96,7 @@ interface DeliveryJobRow {
   service_id: string;
   stage: CustomerDeliveryJob['stage'];
   attempt_count: number;
+  claim_version: string;
   next_attempt_at: Date;
   last_error_code: string | null;
   telegram_message_id: string | null;
@@ -110,6 +111,7 @@ interface DeliveryJobClaimRow {
   service_id: string;
   stage: string;
   attempt_count: number;
+  claim_version: string;
   telegram_message_id: string | null;
 }
 
@@ -748,6 +750,7 @@ export class PostgresCommerceRepository implements CommerceRepository {
        updated as (
          update customer_delivery_jobs job
          set attempt_count = job.attempt_count + 1,
+             claim_version = job.claim_version + 1,
              next_attempt_at = $2 + interval '2 minutes',
              updated_at = $2
          from claimed
@@ -759,6 +762,7 @@ export class PostgresCommerceRepository implements CommerceRepository {
            job.service_id::text as service_id,
            job.stage,
            job.attempt_count,
+           job.claim_version::text as claim_version,
            job.telegram_message_id::text as telegram_message_id
        )
        select * from updated order by id`,
@@ -771,62 +775,87 @@ export class PostgresCommerceRepository implements CommerceRepository {
       serviceId: row.service_id,
       stage: row.stage as CustomerDeliveryJob['stage'],
       attemptCount: row.attempt_count,
+      claimVersion: row.claim_version,
       telegramMessageId: row.telegram_message_id,
     }));
   }
 
-  public async markDeliveryJobBrandSent(jobId: string, now: Date): Promise<void> {
-    await this.pool.query(
+  public async markDeliveryJobBrandSent(
+    jobId: string,
+    claimVersion: string,
+    now: Date,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
       `update customer_delivery_jobs
-       set stage = 'pending_link', updated_at = $2
-       where id = $1 and stage = 'pending_brand_media'`,
-      [jobId, now],
+       set stage = 'pending_link', updated_at = $3
+       where id = $1 and claim_version = $2::bigint and stage = 'pending_brand_media'`,
+      [jobId, claimVersion, now],
     );
+    return result.rowCount === 1;
   }
 
   public async markDeliveryJobAnchor(
     jobId: string,
+    claimVersion: string,
     telegramMessageId: string,
     now: Date,
-  ): Promise<void> {
-    await this.pool.query(
+  ): Promise<boolean> {
+    const result = await this.pool.query(
       `update customer_delivery_jobs
-       set telegram_message_id = $2, updated_at = $3
-       where id = $1 and stage = 'pending_link'`,
-      [jobId, BigInt(telegramMessageId), now],
+       set telegram_message_id = $3, updated_at = $4
+       where id = $1 and claim_version = $2::bigint
+         and stage = 'pending_link' and telegram_message_id is null`,
+      [jobId, claimVersion, BigInt(telegramMessageId), now],
     );
+    return result.rowCount === 1;
   }
 
-  public async markDeliveryJobDelivered(jobId: string, now: Date): Promise<void> {
-    await this.pool.query(
+  public async markDeliveryJobDelivered(
+    jobId: string,
+    claimVersion: string,
+    now: Date,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
       `update customer_delivery_jobs
-       set stage = 'delivered', last_error_code = null, updated_at = $2
-       where id = $1 and stage <> 'delivered'`,
-      [jobId, now],
+       set stage = 'delivered', last_error_code = null, updated_at = $3
+       where id = $1 and claim_version = $2::bigint
+         and stage in ('pending_brand_media', 'pending_link')`,
+      [jobId, claimVersion, now],
     );
+    return result.rowCount === 1;
   }
 
   public async retryDeliveryJob(
     jobId: string,
+    claimVersion: string,
     errorCode: string,
     nextAttemptAt: Date,
     now: Date,
-  ): Promise<void> {
-    await this.pool.query(
+  ): Promise<boolean> {
+    const result = await this.pool.query(
       `update customer_delivery_jobs
-       set last_error_code = $2, next_attempt_at = $3, updated_at = $4
-       where id = $1 and stage in ('pending_brand_media', 'pending_link')`,
-      [jobId, errorCode, nextAttemptAt, now],
+       set last_error_code = $3, next_attempt_at = $4, updated_at = $5
+       where id = $1 and claim_version = $2::bigint
+         and stage in ('pending_brand_media', 'pending_link')`,
+      [jobId, claimVersion, errorCode, nextAttemptAt, now],
     );
+    return result.rowCount === 1;
   }
 
-  public async failDeliveryJob(jobId: string, errorCode: string, now: Date): Promise<void> {
-    await this.pool.query(
+  public async failDeliveryJob(
+    jobId: string,
+    claimVersion: string,
+    errorCode: string,
+    now: Date,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
       `update customer_delivery_jobs
-       set stage = 'failed', last_error_code = $2, updated_at = $3
-       where id = $1 and stage <> 'delivered'`,
-      [jobId, errorCode, now],
+       set stage = 'failed', last_error_code = $3, updated_at = $4
+       where id = $1 and claim_version = $2::bigint
+         and stage in ('pending_brand_media', 'pending_link')`,
+      [jobId, claimVersion, errorCode, now],
     );
+    return result.rowCount === 1;
   }
 
   public async getDeliveryJobForOrder(orderId: string): Promise<CustomerDeliveryJob | null> {
@@ -846,6 +875,7 @@ export class PostgresCommerceRepository implements CommerceRepository {
        set stage = case when telegram_message_id is null then 'pending_brand_media'
                         else 'pending_link' end,
            attempt_count = 0,
+           claim_version = claim_version + 1,
            next_attempt_at = $2,
            last_error_code = null,
            updated_at = $2
@@ -1140,6 +1170,7 @@ const deliveryJobColumns = `
   service_id::text,
   stage,
   attempt_count,
+  claim_version::text as claim_version,
   next_attempt_at,
   last_error_code,
   telegram_message_id::text,
@@ -1155,6 +1186,7 @@ function mapDeliveryJob(row: DeliveryJobRow): CustomerDeliveryJob {
     serviceId: row.service_id,
     stage: row.stage,
     attemptCount: row.attempt_count,
+    claimVersion: row.claim_version,
     nextAttemptAt: row.next_attempt_at,
     lastErrorCode: row.last_error_code,
     telegramMessageId: row.telegram_message_id,

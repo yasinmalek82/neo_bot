@@ -7,7 +7,8 @@ import { telegramCommerceBotToken } from './telegram.provider.js';
 
 @Injectable()
 export class ReportingOutboxHost implements OnModuleInit, OnModuleDestroy {
-  private scheduler: ReportingOutboxScheduler | null = null;
+  private reportScheduler: ReportingOutboxScheduler | null = null;
+  private deliveryScheduler: ReportingOutboxScheduler | null = null;
 
   public constructor(
     @Inject(telegramCommerceBotToken)
@@ -23,15 +24,21 @@ export class ReportingOutboxHost implements OnModuleInit, OnModuleDestroy {
     if (!config.enabled) {
       return;
     }
-    this.scheduler = new ReportingOutboxScheduler(
+    this.reportScheduler = new ReportingOutboxScheduler(
       () => bot.dispatchDueReports(),
       config.reportDispatchIntervalMs,
     );
-    this.scheduler.start();
+    this.deliveryScheduler = new ReportingOutboxScheduler(
+      () => bot.dispatchDueDeliveries(),
+      config.deliveryDispatchIntervalMs,
+    );
+    this.reportScheduler.start();
+    this.deliveryScheduler.start();
   }
 
   public async onModuleDestroy(): Promise<void> {
-    this.scheduler?.stop();
-    await this.scheduler?.waitForIdle();
+    this.reportScheduler?.stop();
+    this.deliveryScheduler?.stop();
+    await Promise.all([this.reportScheduler?.waitForIdle(), this.deliveryScheduler?.waitForIdle()]);
   }
 }
