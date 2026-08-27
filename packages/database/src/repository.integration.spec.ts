@@ -1150,7 +1150,7 @@ describe('PostgresProvisioningRepository', () => {
       telegramFileId: 'sensitive-file-id',
       telegramFileUniqueId: 'unique-report-proof',
     });
-    now = new Date();
+    now = (await pool.query<{ now: Date }>('select now() as now')).rows[0]!.now;
     await reporting.dispatchDue(20);
     now = new Date(now.getTime() + 5 * 60_000);
     const restarted = new ReportingUseCase(reportingRepository, transport, () => now);
