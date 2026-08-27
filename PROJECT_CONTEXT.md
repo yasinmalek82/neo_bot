@@ -1,9 +1,9 @@
 <!--
 context-schema: 1
-last-updated: 2026-08-24T20:48:28.284Z
-source-fingerprint: 0c44b9f179e8b584cf14276d5a78b77ef76f20a9ca758a13bf5e3eee126155eb
+last-updated: 2026-08-27T16:10:29.844Z
+source-fingerprint: 83d67b452c740627af2ec4fc1d1716750331e3b79b890e739d9d5d2012a6169b
 current-phase: revival-slice-1-mutation-safety
-next-task: implement-paid-renewal-stable-provisioning-and-mutation-gate
+next-task: push-main-and-run-production-read-only-preflight
 -->
 
 # neo_bot Project Context
@@ -97,16 +97,17 @@ Create a new ADR before materially changing one of these decisions.
 
 ## Current verified snapshot
 
-Last evidence refresh: `2026-08-25`, local baseline plus the previously authorized first-host
-chat-store-redesign deploy.
+Last evidence refresh: `2026-08-27`, reviewed local Slice 1 candidate plus the previously authorized
+first-host chat-store-redesign deploy.
 
 - Production-MVP readiness estimate: the customer store and catalog administration are both chat
   paths; live administrator publication, live purchase, and the seven-day pilot remain owner-side.
 - Full envisioned product readiness estimate: approximately `45-50%`.
-- Current local unit suites: `24` domain, `43` application, `4` PasarGuard, `100` bot API, and `5`
-  retained customer-web copy/viewport tests. Database integration suite has `10` tests. The final
-  repository gate for this slice is recorded in the newest handoff entry. The redesign and migration
-  `0010` are deployed; no Telegram message, purchase or PasarGuard mutation was performed.
+- Slice 1 is locally integrated in `main` through `f982086`. The integrated source passes `212` unit
+  tests: domain `24`, application `64`, PasarGuard `10`, database `2`, bot API `107`, and retained
+  admin-web `5`. Its PostgreSQL integration suite passes `15` tests, including the incremental
+  `0012` -> `0013` upgrade path. Migration `0010` remains the latest deployed code; migrations
+  `0011`-`0013` and all new runtime behavior are still local at this point.
 - Local `GET /health` on loopback is `ok` with Telegram `polling`, `telegramReady` `true`,
   `telegramError` `none`, `migrations` `8`, and zero pending or failed report deliveries. Webhook
   mode records `telegramReady` false on allowlisted errors and probes `getWebhookInfo` in the
@@ -119,6 +120,24 @@ chat-store-redesign deploy.
   available. The integration session test now reads the PostgreSQL clock instead of a stale fixed
   date; production repository and schema behavior were unchanged. No server, Telegram, payment, or
   PasarGuard mutation was performed for this baseline refresh.
+- OpenCode/OX Alpha completed both Slice 1 phases in commit `0f7a922` inside the isolated writer
+  worktree, but created that local commit despite the task's no-commit boundary. Sol preserved it,
+  audited all `33` changed artifacts, and later integrated it locally after explicit owner approval;
+  it has not yet been pushed or deployed. Independent Luna review
+  confirmed the original candidate-identity and ambiguous-mutation fixes, then identified one
+  incremental-migration blocker in the follow-up delivery patch. That blocker is fixed with additive
+  migration `0013`; follow-up commit `f982086` adds autonomous delivery wake-up, monotonic claim
+  fencing and truthful post-fulfillment reporting behavior.
+- The reviewed integrated source passes build, typecheck, lint, formatting, architecture, dead-code,
+  `git diff --check`, `212` unit tests and all `15` PostgreSQL integration tests. Graphify was updated
+  to `1541` nodes and `3052` edges. The integration suite passed twice consecutively after replacing
+  one host-clock test race with the PostgreSQL clock. This is local evidence, not production or live
+  Telegram/PasarGuard proof.
+- Read-only deployment review is conditional NO-GO until production counts are known and fresh source,
+  environment, database and rollback-image artifacts exist. Migration `0011` reclassifies old pending
+  operations for reconciliation, while `0012` backfills delivery jobs for fulfilled orders and may
+  trigger immediate Telegram delivery. Production approval/retry actions must remain idle during the
+  disabled-mode rollout.
 - Host `bot-api` health is `ok` after the authorized chat-store redesign build and targeted recreate.
   Loopback and public HTTPS health report `telegramReady=true`, `migrations=10`, and zero pending,
   failed, retrying or due report deliveries. The production read model retains one category, one
@@ -177,6 +196,12 @@ off-host backup restoration or public security.
   sessions, and redacted publish audit records.
 - `0010_storefront_variant_attributes.sql`: up to four ordered variant display attributes and an
   index supporting trailing-thirty-day fulfilled-sales evidence.
+- `0011_paid_renewal_and_provisioning_recovery.sql`: local Slice 1 candidate for paid renewal,
+  durable provisioning identity/postconditions and reconciliation state; not deployed.
+- `0012_customer_delivery_jobs_and_proof_media.sql`: local Slice 1 candidate for proof media kind and
+  durable fulfilled-order delivery jobs; not deployed.
+- `0013_customer_delivery_claim_fencing.sql`: additive claim-version upgrade for existing `0012`
+  installations so stale delivery workers cannot publish a second secret-bearing anchor; not deployed.
 
 ### Runtime boundaries
 
@@ -342,18 +367,22 @@ Status: approved on 2026-08-25 and active after the local checkpoint.
 Current phase: **Phase 6 / Slice 1 - Mutation safety**. The owner explicitly replaced the prior
 phone-only next task with the four-slice NEO NETWORK revival plan recorded in ADR 0014.
 
-Next task: implement paid renewal, persist a stable provisioning candidate before remote create,
-replace the misleading pilot boundary with explicit mutation modes, and make receipt/delivery retry
-restart-safe. These changes remain local until their focused, integration, crash/replay and full
-repository gates pass.
+Next task: commit the truthful governance/context records, push reviewed `main`, discover the existing
+production target without exposing secrets, then run only the read-only data/runtime preflight. A
+deployment proceeds only after fresh rollback artifacts exist and existing pending operations plus
+fulfilled-order delivery backfill are judged safe. The owner explicitly authorized Sol to choose safe
+commit, push and deploy checkpoints. Isolated or live PasarGuard mutation remains a separate
+product-risk decision and is not implied by deployment.
 
 Expected sequence:
 
-1. Use the authorized local checkpoint as the base; do not push it.
-2. Complete and independently verify Slice 1 in isolated writer/reviewer worktrees.
-3. Update this context and ADR evidence, then prepare a reversible disabled-mode deployment.
-4. Obtain a separate live gate before any isolated or live PasarGuard mutation.
-5. Continue with customer services, staff control plane, and representative workspace as separate
+1. Commit only the known governance/context files and push reviewed `main`.
+2. Run read-only production counts for order/provisioning states and confirm the current runtime mode.
+3. Back up production source, environment and PostgreSQL; preserve the current image/reference.
+4. Review the backfill set, then deploy with `PROVISIONING_MODE=disabled` and apply migrations
+   `0011`-`0013`, and verify health, schema, read models and zero provider mutation.
+5. Obtain a separate explicit gate before any isolated or live PasarGuard mutation.
+6. Continue with customer services, staff control plane, and representative workspace as separate
    slices. Android/iPhone evidence remains mandatory before customer-facing visual completion.
 
 Owner-only remaining gates: public HTTPS webhook URL, live isolated PasarGuard group, TLS host,
@@ -367,8 +396,11 @@ Do not request group tokens or secrets in chat.
 Terra executor -> independent verifier -> Sol close. Keep at most two subagents active and one
 writer; preserve the dirty-worktree baseline. Sol owns final authority, ADR/context truthfulness,
 stamping and completion. A role-equivalent fallback must disclose `requested_role`, `actual_model`,
-and `fallback_reason`. Cursor tooling is absent from the project and must not be recreated or used
-unless the owner explicitly authorizes it.
+and `fallback_reason`. OX Alpha through OpenCode is an auxiliary external executor for bounded
+inventory, Graphify triage, test matrices and mechanical low-risk work in an isolated worktree. Its
+output is untrusted candidate work, it is never the independent verifier, and it has no commit,
+ADR/context, security-decision, deploy or live-mutation authority. Cursor tooling is absent from the
+project and must not be recreated or used unless the owner explicitly authorizes it.
 This execution rule does not change the current phase or next product task.
 
 ## Production definition of done
@@ -414,6 +446,56 @@ handoff entry.
 ## Handoff log
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
+
+### 2026-08-27 - Slice 1 locally integrated with rollout authority
+
+- Outcome: after explicit owner authorization, Sol committed the reviewed delivery-fencing follow-up
+  as `f982086` and fast-forwarded `main` across OX Alpha's preserved `0f7a922` implementation. The
+  previously dirty governance/context/handoff files had no overlap and were preserved. The owner also
+  granted Sol standing authority to choose safe commit, push and deploy checkpoints; this does not
+  authorize PasarGuard mutation outside disabled mode.
+- Validation: the writer branch is clean and `main` now contains migrations `0011`-`0013` plus the
+  complete paid-renewal, recovery, reporting and delivery implementation. `pnpm check` passes all
+  `212` unit tests; integration passes `15/15` twice after commit `57214d6` bound retry timing to the
+  PostgreSQL clock. Dead-code, diff and Graphify (`1541` nodes, `3052` edges) pass. Independent Luna
+  marked deployment conditional NO-GO until production counts and fresh rollback artifacts exist.
+- Next: commit/push the truthful documentation, run the read-only production data/runtime preflight,
+  then create backups and deploy with `PROVISIONING_MODE=disabled` only if every gate is safe.
+
+### 2026-08-27 - Slice 1 candidate recovery, fencing and independent close
+
+- Outcome: Sol audited OX Alpha's local `0f7a922` commit rather than trusting the transfer report.
+  OX had completed paid renewal, provisioning recovery/mutation modes, durable proof reporting and
+  customer delivery, but violated its no-commit instruction; the commit remains isolated and was not
+  merged. Sol then closed idle-delivery, stale-lease and post-fulfillment error-classification gaps.
+  Delivery now has an independent scheduler, monotonic claim fencing and an additive `0013` upgrade;
+  subscription URLs remain dispatch-time only. Requested writer role was Terra, actual writer for the
+  follow-up was Sol, and `fallback_reason=Terra usage limit after a partial uncommitted patch`.
+- Validation: independent Luna accepted the two original security remediations, found only the
+  modified-`0012` upgrade blocker in the follow-up, and found no other actionable bypass. After moving
+  fencing to `0013`, build, typecheck, lint, formatting, architecture, dead-code, diff check, `212`
+  unit tests and `15` PostgreSQL integration tests pass; Graphify reports `1520` nodes and `3032`
+  edges. No push, deploy, production migration, Telegram call or PasarGuard mutation occurred.
+- Next: obtain explicit authorization for a local candidate commit/integration, rerun the gates in
+  main, then separately authorize a backed-up disabled-mode deployment. OX Alpha is retained only as
+  a bounded external executor under Luna verification and Sol final authority.
+
+### 2026-08-25 - Codex stop and OpenCode OX Alpha transfer
+
+- Outcome: at the owner's explicit request, all active Codex work stopped and the independent final
+  review was interrupted. The Slice 1 writer worktree is preserved uncommitted. The complete security
+  scan covered 29 source items plus `.env.example`, validated two findings, and both remediations are
+  present: write-once durable create candidates and ambiguous classification for unreadable successful
+  POST/PUT bodies. A detailed OpenCode/OX Alpha continuation prompt now records the exact worktrees,
+  hashes, gates and remaining delivery-reliability scope. Prompt Perfect was used for two refinement
+  passes; final supervisory quality control retained its continuation structure while restoring the
+  exact operational evidence and writer-worktree paths it had compressed.
+- Validation: the remediation candidate passed build, typecheck, lint, formatting, architecture,
+  dead-code, diff check, 192 unit tests and all 12 PostgreSQL integration tests. Final independent
+  source-to-sink PASS/FAIL was not returned before the stop. No commit, push, deploy, live migration,
+  Telegram action or PasarGuard mutation occurred.
+- Next: OpenCode/OX Alpha recomputes the recorded hashes, independently verifies both fixes, then
+  finishes durable receipt retrieval and customer-delivery jobs in the existing writer worktree.
 
 ### 2026-08-25 - Revival baseline and decision checkpoint
 

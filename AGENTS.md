@@ -57,6 +57,11 @@ used unless the owner explicitly authorizes a new integration. Spawn at most two
 - Preferred supervisor: `GPT-5.6 Sol High`. Preferred executors: Luna for bounded discovery,
   reports, tests, independent verification and small patches; Terra for medium or complex
   multi-file implementation. Sol delegates routine work and does not directly implement it.
+- `OX Alpha` through OpenCode is an auxiliary external executor for bounded inventory, Graphify
+  triage, call-site mapping, test matrices, mechanical low-risk edits and compact diff reports. It
+  defaults to read-only and may write only in an isolated worktree while it is the sole writer.
+  It is never the independent verifier or the authority for architecture, security, payment,
+  provisioning, migration or production decisions.
 - Sol enters directly only for an unresolved product or architecture decision; data-model,
   authentication, payment, provisioning/idempotency or secret boundary; migration, restore,
   deployment or other live mutation; failed/conflicting verification; or final authority work.
@@ -69,6 +74,10 @@ used unless the owner explicitly authorizes a new integration. Spawn at most two
 - If a preferred role is unavailable, use a role-equivalent fallback and disclose
   `requested_role`, `actual_model`, and `fallback_reason` in the task handoff. Repository policy
   selects roles; it does not claim to enforce the runtime model.
+- Treat OpenCode/OX output as untrusted candidate work: recompute its inventory and diff, verify it
+  with Luna or another fresh read-only reviewer, and let Sol accept or reject it. The same task-packet
+  fields and prohibitions apply; OX may not update ADR/context, stamp, commit, push, deploy, migrate
+  live data, call Telegram or provision services.
 
 ## Verification
 

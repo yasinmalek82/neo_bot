@@ -34,6 +34,15 @@ no implementation, schema, copy, callback, asset, or generated output may enter 
   their own locally identified customers and services; final retail price remains outside NEO.
 - The retained customer web prototype is removed only after proving it has no live consumer. No
   catalog or customer Mini App replaces the chat experience in this roadmap.
+- Fulfilled-order customer delivery is a durable local job. It stores references and redacted retry
+  state, resolves the subscription URL only at dispatch time, and uses a monotonic claim version to
+  fence stale workers. A crash may duplicate a non-secret placeholder, but only the canonical
+  claimed Telegram message may receive the subscription URL.
+- Customer-delivery wake-up is independent from operator-report scheduling. Disabling the timed
+  report dispatcher preserves webhook-only report behavior but cannot strand a fulfilled order.
+- A reporting or Telegram failure after local fulfillment never rewrites the order as a provisioning
+  failure and never triggers provider mutation. Replayed approval or retry publishes the same
+  idempotent success occurrence and resumes only durable delivery.
 
 Implementation is delivered in four independently reversible slices: mutation safety, customer
 service lifecycle, staff control plane, and representative workspace.
