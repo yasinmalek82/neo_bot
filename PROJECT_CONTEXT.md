@@ -1,9 +1,9 @@
 <!--
 context-schema: 1
-last-updated: 2026-08-28T12:16:51.738Z
+last-updated: 2026-08-28T12:26:19.985Z
 source-fingerprint: 46775568002ff073e344bd2283f6acdc2e09affc225463c672615e815ad3c4de
 current-phase: revival-slice-1-mutation-safety
-next-task: run-production-read-only-preflight
+next-task: restore-production-host-connectivity-and-rerun-preflight
 -->
 
 # neo_bot Project Context
@@ -140,7 +140,9 @@ first-host chat-store-redesign deploy.
   disabled-mode rollout.
 - The existing first-host SSH target and `/root/neo_bot` checkout were rediscovered from prior
   authorized local session evidence with strict known-host verification. Connection details remain
-  machine-local and are not committed. No new remote connection was made during discovery.
+  machine-local and are not committed. A read-only preflight connection attempt then timed out on
+  ports `22`, `80` and `443`; no remote command ran and current production data/runtime state remains
+  unverified.
 - Host `bot-api` health is `ok` after the authorized chat-store redesign build and targeted recreate.
   Loopback and public HTTPS health report `telegramReady=true`, `migrations=10`, and zero pending,
   failed, retrying or due report deliveries. The production read model retains one category, one
@@ -151,10 +153,11 @@ first-host chat-store-redesign deploy.
 - `pnpm db:restore-drill` restored a fresh dump onto a disposable Postgres on loopback
   (`schema_migrations=6`), then destroyed the instance and dump. The live local database was not
   overwritten. Restore onto a chosen target still requires `RESTORE_CONFIRM=yes`.
-- Reviewed `main` is pushed through CI repair `3a3f9d1`. The prior run `33092034399` had stopped
+- Reviewed `main` is pushed through Spec Kit integration `741c670`. The prior run `33092034399` had stopped
   before install because the pre-existing workflow and `package.json` both supplied pnpm versions.
   The redundant workflow version is removed and GitHub Actions run `33169092504` passes frozen
-  install, the complete `pnpm check` gate and the required high-severity audit.
+  install, the complete `pnpm check` gate and the required high-severity audit. Follow-up run
+  `33170559019` passes the same complete gate for the integrated Spec Kit commit.
 - Official GitHub Spec Kit `v1.0.1` is installed locally for Codex with ten project-local skills,
   pinned CLI metadata, Bash workflow scripts and templates. The project constitution derives from
   `AGENTS.md`, `PROJECT_CONTEXT.md` and ADRs; generated feature artifacts cannot override those
@@ -164,7 +167,7 @@ first-host chat-store-redesign deploy.
   Converge stages with review gates, and root governance explicitly constrains Converge intent to the
   canonical project authorities. `specify check`, script/JSON validation, `pnpm check` (`212` unit
   tests), dead-code, high-severity audit and diff checks pass. Graphify was fully re-extracted and
-  updated after the ignore change (`1544` nodes, `3055` edges). This is tooling validation, not
+  updated after the ignore change (`1545` nodes, `3056` edges). This is tooling validation, not
   production evidence.
 - CI `pnpm audit --audit-level=high` is required. One moderate `uuid` advisory remains in
   Testcontainers only.
@@ -172,9 +175,9 @@ first-host chat-store-redesign deploy.
   activity, one `order.created`, and one `ops.daily_summary` (four deliveries, none failed). One
   sales order is `awaiting_receipt` with zero payment proofs. Receipt, approval and provisioning
   notices are still unconfirmed. Owner visual check of the daily-summaries topic is still required.
-- Authorized Git history is pushed through `3a3f9d1` on `main`, remote
-  `https://github.com/yasinmalek82/neo_bot`. `.env` was not committed. Spec Kit adoption is local and
-  uncommitted; it changes development governance only, not application runtime or production state.
+- Authorized Git history is pushed through `741c670` on `main`, remote
+  `https://github.com/yasinmalek82/neo_bot`. `.env` was not committed. Spec Kit changes development
+  governance only, not application runtime or production state.
 - The owner reported first-host install completed. Public HTTPS Mini App purchase and receipt photo
   still need live evidence. No live-user migration or isolated PasarGuard pilot.
 
@@ -384,20 +387,23 @@ Status: approved on 2026-08-25 and active after the local checkpoint.
 Current phase: **Phase 6 / Slice 1 - Mutation safety**. The owner explicitly replaced the prior
 phone-only next task with the four-slice NEO NETWORK revival plan recorded in ADR 0014.
 
-Next task: discover the existing production target without exposing secrets and run only the
-read-only data/runtime preflight. CI is green; deployment still waits for fresh rollback artifacts and
-a safe judgment on existing pending operations plus the fulfilled-order delivery backfill. The owner
-explicitly authorized Sol to choose safe commit, push and deploy checkpoints. Isolated or live
-PasarGuard mutation remains a separate product-risk decision and is not implied by deployment.
+Next task: restore connectivity to the known production host or confirm its current replacement, then
+rerun the read-only data/runtime preflight. CI is green, but the known host currently times out on
+SSH, HTTP and HTTPS; deployment cannot start until it is reachable. It still waits for fresh rollback
+artifacts and a safe judgment on existing pending operations plus the fulfilled-order delivery
+backfill. The owner explicitly authorized Sol to choose safe commit, push and deploy checkpoints.
+Isolated or live PasarGuard mutation remains a separate product-risk decision and is not implied by
+deployment.
 
 Expected sequence:
 
-1. Run read-only production counts for order/provisioning states and confirm the current runtime mode.
-2. Back up production source, environment and PostgreSQL; preserve the current image/reference.
-3. Review the backfill set, then deploy with `PROVISIONING_MODE=disabled` and apply migrations
+1. Restore/confirm production host reachability without changing its runtime.
+2. Run read-only production counts for order/provisioning states and confirm the current runtime mode.
+3. Back up production source, environment and PostgreSQL; preserve the current image/reference.
+4. Review the backfill set, then deploy with `PROVISIONING_MODE=disabled` and apply migrations
    `0011`-`0013`, and verify health, schema, read models and zero provider mutation.
-4. Obtain a separate explicit gate before any isolated or live PasarGuard mutation.
-5. Continue with customer services, staff control plane, and representative workspace as separate
+5. Obtain a separate explicit gate before any isolated or live PasarGuard mutation.
+6. Continue with customer services, staff control plane, and representative workspace as separate
    slices. Android/iPhone evidence remains mandatory before customer-facing visual completion.
 
 Owner-only remaining gates: public HTTPS webhook URL, live isolated PasarGuard group, TLS host,
@@ -462,6 +468,17 @@ handoff entry.
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
 
+### 2026-08-28 - CI green; production preflight blocked before remote execution
+
+- Outcome: pushed Spec Kit integration commit `741c670`; GitHub Actions run `33170559019` passed
+  frozen install, `pnpm check` and high-severity audit. The known first-host target and checkout were
+  recovered from prior authorized local evidence without committing connection details.
+- Validation: strict-known-host SSH timed out before authentication, and bounded TCP checks also
+  timed out on ports `80` and `443`. No compose, database, environment, Telegram or PasarGuard command
+  ran remotely; current migrations, backfill size and runtime mode therefore remain unverified.
+- Next: owner restores the known VPS/network path or confirms the current host address; rerun the
+  read-only preflight before backups, migration or disabled-mode deploy.
+
 ### 2026-08-28 - Spec Kit adopted for bounded Codex feature delivery
 
 - Outcome: installed official pinned Spec Kit `v1.0.1` with Codex skills mode and no extensions or
@@ -474,7 +491,7 @@ Keep entries concise and newest first. This is an operational summary, not a tra
   Converge authority ambiguity and ignore-policy fingerprint gap. All `22` installer-manifested
   upstream files retain exact hashes; `specify check`, workflow inspection, Bash/JSON validation,
   full `pnpm check` (`212` tests), dead-code, high-severity audit and diff checks pass. Graphify was
-  fully rebuilt after excluding managed workflow assets and reports `1544` nodes and `3055` edges.
+  fully rebuilt after excluding managed workflow assets and reports `1545` nodes and `3056` edges.
   No application, database, Telegram, PasarGuard or production behavior changed.
 - Next: run the production read-only preflight as the unchanged product priority. Do not start a
   feature spec until its scope is reconciled with this context.
