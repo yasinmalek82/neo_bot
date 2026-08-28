@@ -22,7 +22,11 @@
     "check": "pnpm context:check && pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm architecture && pnpm test",
     "db:backup": "bash tools/postgres-backup.sh",
     "db:restore": "bash tools/postgres-restore.sh",
-    "db:restore-drill": "bash tools/postgres-restore-drill.sh"
+    "db:restore-drill": "bash tools/postgres-restore-drill.sh",
+    "local-test:up": "docker compose -p neo_bot_local_test -f docker-compose.yml -f docker-compose.local-test.yml --profile app up -d --build",
+    "local-test:down": "docker compose -p neo_bot_local_test -f docker-compose.yml -f docker-compose.local-test.yml --profile app down",
+    "local-test:status": "docker compose -p neo_bot_local_test -f docker-compose.yml -f docker-compose.local-test.yml --profile app ps",
+    "local-test:logs": "docker compose -p neo_bot_local_test -f docker-compose.yml -f docker-compose.local-test.yml --profile app logs --tail=100 -f"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

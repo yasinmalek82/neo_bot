@@ -1150,7 +1150,9 @@ describe('PostgresProvisioningRepository', () => {
       telegramFileId: 'sensitive-file-id',
       telegramFileUniqueId: 'unique-report-proof',
     });
-    now = (await pool.query<{ now: Date }>('select now() as now')).rows[0]!.now;
+    // Keep the test clock clear of PostgreSQL microseconds lost when pg creates a JS Date.
+    now = (await pool.query<{ now: Date }>("select now() + interval '1 second' as now")).rows[0]!
+      .now;
     await reporting.dispatchDue(20);
     now = new Date(now.getTime() + 5 * 60_000);
     const restarted = new ReportingUseCase(reportingRepository, transport, () => now);

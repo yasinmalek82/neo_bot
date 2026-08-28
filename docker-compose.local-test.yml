@@ -1,0 +1,8 @@
+services:
+  bot-api:
+    environment:
+      PROVISIONING_MODE: disabled
+      PILOT_ENABLED: 'false'
+      TELEGRAM_WEBHOOK_URL: ''
+      TELEGRAM_REPORT_GROUP_CHAT_ID: ''
+      TELEGRAM_ENABLED: ${LOCAL_TELEGRAM_ENABLED:-false}

@@ -1,9 +1,9 @@
 <!--
 context-schema: 1
-last-updated: 2026-08-28T12:26:19.985Z
-source-fingerprint: 46775568002ff073e344bd2283f6acdc2e09affc225463c672615e815ad3c4de
+last-updated: 2026-08-28T20:03:30.757Z
+source-fingerprint: e0d4b07b434a9f5a938112f165e4f0f26d7b3e22fcc6977cb65401ddb6d09148
 current-phase: revival-slice-1-mutation-safety
-next-task: restore-production-host-connectivity-and-rerun-preflight
+next-task: activate-local-telegram-intake-and-run-slice-1-smoke
 -->
 
 # neo_bot Project Context
@@ -97,8 +97,8 @@ Create a new ADR before materially changing one of these decisions.
 
 ## Current verified snapshot
 
-Last evidence refresh: `2026-08-27`, reviewed local Slice 1 candidate plus the previously authorized
-first-host chat-store-redesign deploy.
+Last evidence refresh: `2026-08-28`, reviewed the isolated local Slice 1 runtime plus the previously
+authorized first-host chat-store-redesign deploy.
 
 - Production-MVP readiness estimate: the customer store and catalog administration are both chat
   paths; live administrator publication, live purchase, and the seven-day pilot remain owner-side.
@@ -108,13 +108,18 @@ first-host chat-store-redesign deploy.
   admin-web `5`. Its PostgreSQL integration suite passes `15` tests, including the incremental
   `0012` -> `0013` upgrade path. Migration `0010` remains the latest deployed code; migrations
   `0011`-`0013` and all new runtime behavior are still local at this point.
-- Local `GET /health` on loopback is `ok` with Telegram `polling`, `telegramReady` `true`,
-  `telegramError` `none`, `migrations` `8`, and zero pending or failed report deliveries. Webhook
-  mode records `telegramReady` false on allowlisted errors and probes `getWebhookInfo` in the
-  background. Public `GET /catalog` omits card numbers. Customer checkout is the private chat.
-  `POST /customer/orders` and `POST /customer/renew` are gone. Receipt photos stay Telegram files.
-  Migrations through `0010` are in-repo and applied on first-host (`schema_migrations=10`), including
-  durable catalog revisions, administrator sessions and ordered variant presentation attributes.
+- The fixed Compose project `neo_bot_local_test` now provides the active test runtime on the local
+  Mac instead of the retired Mini App VPS path. Its fresh named PostgreSQL volume is separate from
+  the preserved default local volume. Loopback `GET /health` is `ok`, the database is `reachable`,
+  Telegram is `disabled`, `telegramReady=true`, `telegramError=none`, all `13` migrations are
+  applied, and orders, provisioning operations, delivery jobs and report queues are empty. The
+  profile forces `PROVISIONING_MODE=disabled`, `PILOT_ENABLED=false`, an empty webhook URL and
+  reporting destination, and Telegram disabled unless the owner explicitly opts into sole-intake
+  local polling.
+- The previous default local PostgreSQL volume remains intact and stopped. It contains an older
+  six-migration snapshot with one fulfilled order, so it was not upgraded, reset or reused: applying
+  migration `0012` there could backfill a customer-delivery job. No old order was delivered and no
+  Telegram or PasarGuard request was made during isolated runtime setup.
 - The 2026-08-25 local baseline passes `pnpm check` (`178` unit tests), `pnpm deadcode`,
   `git diff --check`, and all `10` PostgreSQL integration tests after Docker Desktop was made
   available. The integration session test now reads the PostgreSQL clock instead of a stale fixed
@@ -133,6 +138,12 @@ first-host chat-store-redesign deploy.
   to `1541` nodes and `3052` edges. The integration suite passed twice consecutively after replacing
   one host-clock test race with the PostgreSQL clock. This is local evidence, not production or live
   Telegram/PasarGuard proof.
+- The first Docker-backed integration run after local-runtime setup exposed a narrower precision
+  race in the retry test: PostgreSQL retained sub-millisecond `timestamptz` precision that `pg`
+  truncated in a JavaScript `Date`, so the newest delivery could miss the first due claim. The
+  test-only clock now advances one second past the database boundary. An independent Luna probe
+  reproduced the precision loss; five targeted retry runs and the complete PostgreSQL suite then
+  passed (`15/15`). Product retry behavior was not changed.
 - Read-only deployment review is conditional NO-GO until production counts are known and fresh source,
   environment, database and rollback-image artifacts exist. Migration `0011` reclassifies old pending
   operations for reconciliation, while `0012` backfills delivery jobs for fulfilled orders and may
@@ -153,11 +164,13 @@ first-host chat-store-redesign deploy.
 - `pnpm db:restore-drill` restored a fresh dump onto a disposable Postgres on loopback
   (`schema_migrations=6`), then destroyed the instance and dump. The live local database was not
   overwritten. Restore onto a chosen target still requires `RESTORE_CONFIRM=yes`.
-- Reviewed `main` is pushed through Spec Kit integration `741c670`. The prior run `33092034399` had stopped
-  before install because the pre-existing workflow and `package.json` both supplied pnpm versions.
+- Reviewed `main` is pushed through blocked-preflight record `d53366d`; Spec Kit integration is
+  `741c670`. The prior run `33092034399` had stopped before install because the pre-existing workflow
+  and `package.json` both supplied pnpm versions.
   The redundant workflow version is removed and GitHub Actions run `33169092504` passes frozen
   install, the complete `pnpm check` gate and the required high-severity audit. Follow-up run
-  `33170559019` passes the same complete gate for the integrated Spec Kit commit.
+  `33170559019` passes the same complete gate for the integrated Spec Kit commit, and follow-up run
+  `33171228559` passes after the truthful blocked-preflight context update.
 - Official GitHub Spec Kit `v1.0.1` is installed locally for Codex with ten project-local skills,
   pinned CLI metadata, Bash workflow scripts and templates. The project constitution derives from
   `AGENTS.md`, `PROJECT_CONTEXT.md` and ADRs; generated feature artifacts cannot override those
@@ -175,7 +188,7 @@ first-host chat-store-redesign deploy.
   activity, one `order.created`, and one `ops.daily_summary` (four deliveries, none failed). One
   sales order is `awaiting_receipt` with zero payment proofs. Receipt, approval and provisioning
   notices are still unconfirmed. Owner visual check of the daily-summaries topic is still required.
-- Authorized Git history is pushed through `741c670` on `main`, remote
+- Authorized Git history is pushed through `d53366d` on `main`, remote
   `https://github.com/yasinmalek82/neo_bot`. `.env` was not committed. Spec Kit changes development
   governance only, not application runtime or production state.
 - The owner reported first-host install completed. Public HTTPS Mini App purchase and receipt photo
@@ -226,11 +239,15 @@ off-host backup restoration or public security.
 ### Runtime boundaries
 
 - `docker-compose.yml` provisions local PostgreSQL by default. Profile `app` builds `bot-api` from
-  `Dockerfile` without embedding secrets. `docker-compose.production.yml` is the host shape (Postgres
-  unpublished, API on loopback, `bot-api` `DATABASE_URL` injected with host `postgres` so a loopback
-  `.env` value cannot strand the container, Caddy on 80/443 for retained customer statics and API
-  routes, TLS via `deploy/Caddyfile.example`, JSON access logs to Caddy stdout); it is not
-  deployed until `deploy/install.sh` runs on a host.
+  `Dockerfile` without embedding secrets. `docker-compose.local-test.yml` plus the
+  `pnpm local-test:*` scripts use the fixed `neo_bot_local_test` project and a separate retained
+  volume, force provider mutation off and keep Telegram disabled by default. Polling is an explicit
+  sole-intake opt-in; the local reporting destination is cleared and the down command preserves
+  data. `docker-compose.production.yml` is the host shape (Postgres unpublished, API on loopback,
+  `bot-api` `DATABASE_URL` injected with host `postgres` so a loopback `.env` value cannot strand the
+  container, Caddy on 80/443 for retained customer statics and API routes, TLS via
+  `deploy/Caddyfile.example`, JSON access logs to Caddy stdout); it is not deployed until
+  `deploy/install.sh` runs on a host.
 - In-repo CI is `.github/workflows/check.yml` (`pnpm check` and required high-severity `pnpm audit`).
   `pnpm db:backup`, `pnpm db:restore`, and `pnpm db:restore-drill` cover dump/restore. Compose-network
   URLs dump via `docker compose exec` (production file when the host is `postgres`). Dumps are
@@ -387,24 +404,26 @@ Status: approved on 2026-08-25 and active after the local checkpoint.
 Current phase: **Phase 6 / Slice 1 - Mutation safety**. The owner explicitly replaced the prior
 phone-only next task with the four-slice NEO NETWORK revival plan recorded in ADR 0014.
 
-Next task: restore connectivity to the known production host or confirm its current replacement, then
-rerun the read-only data/runtime preflight. CI is green, but the known host currently times out on
-SSH, HTTP and HTTPS; deployment cannot start until it is reachable. It still waits for fresh rollback
-artifacts and a safe judgment on existing pending operations plus the fulfilled-order delivery
-backfill. The owner explicitly authorized Sol to choose safe commit, push and deploy checkpoints.
-Isolated or live PasarGuard mutation remains a separate product-risk decision and is not implied by
-deployment.
+Next task: use the isolated Mac runtime for Slice 1 testing. The owner removed the old Mini App VPS
+from the current test path; production-host connectivity is no longer a prerequisite for local
+verification, though a reachable backed-up host will still be required for a later production
+release. After the local profile and gates are committed, explicitly switch this test bot to local
+polling as its sole intake, keep provisioning disabled, and run the current customer/admin purchase
+and paid-renewal smoke paths. Isolated or live PasarGuard mutation remains a separate product-risk
+decision.
 
 Expected sequence:
 
-1. Restore/confirm production host reachability without changing its runtime.
-2. Run read-only production counts for order/provisioning states and confirm the current runtime mode.
-3. Back up production source, environment and PostgreSQL; preserve the current image/reference.
-4. Review the backfill set, then deploy with `PROVISIONING_MODE=disabled` and apply migrations
-   `0011`-`0013`, and verify health, schema, read models and zero provider mutation.
-5. Obtain a separate explicit gate before any isolated or live PasarGuard mutation.
-6. Continue with customer services, staff control plane, and representative workspace as separate
+1. Keep the isolated `neo_bot_local_test` database and disabled-mode API healthy; never reuse or
+   delete the preserved default local volume implicitly.
+2. Complete local static, integration, context and Graphify gates; commit and push the reproducible
+   profile under the owner's standing checkpoint authorization.
+3. Enable local polling only as the sole Telegram intake, verify polling health and run bounded
+   customer/admin Slice 1 smoke tests without provider mutation.
+4. Continue with customer services, staff control plane, and representative workspace as separate
    slices. Android/iPhone evidence remains mandatory before customer-facing visual completion.
+5. Before a future production release, restore host reachability, collect read-only counts, create
+   fresh rollback artifacts and review the fulfilled-order delivery backfill.
 
 Owner-only remaining gates: public HTTPS webhook URL, live isolated PasarGuard group, TLS host,
 off-host backup storage, seven-day pilot.
@@ -467,6 +486,20 @@ handoff entry.
 ## Handoff log
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
+
+### 2026-08-28 - Isolated local test runtime replaces the Mini App VPS path
+
+- Outcome: added a fixed `neo_bot_local_test` Compose profile and package commands for a fresh local
+  PostgreSQL volume plus `bot-api`. The default profile forces Telegram and provisioning off; its
+  down command preserves data. The older default volume was stopped and preserved rather than
+  migrated because its fulfilled order could enter the new delivery backfill.
+- Validation: both default and polling-opt-in Compose renders have the intended safety controls. The
+  running default profile is healthy on loopback with `13` migrations and zero orders,
+  provisioning operations or delivery jobs. Luna independently verified the disabled-call boundary
+  and the integration-test timestamp race; five targeted retries and the complete PostgreSQL suite
+  pass after the test-only precision margin. No Telegram or PasarGuard request was made.
+- Next: finish the repository gates and push the profile, then make local polling the sole test-bot
+  intake and run the bounded Slice 1 chat smoke path with provisioning still disabled.
 
 ### 2026-08-28 - CI green; production preflight blocked before remote execution
 

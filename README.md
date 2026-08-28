@@ -71,6 +71,38 @@ Optional in-process app container (secrets come from `.env`, not the compose fil
 docker compose --profile app up --build
 ```
 
+## Isolated local test profile
+
+Use this profile instead of a VPS or Mini App test host. It always uses the fixed Compose project
+name `neo_bot_local_test`, so its containers, network, and named PostgreSQL volume are separate from
+the default local Compose project.
+
+```bash
+pnpm local-test:up
+pnpm local-test:status
+pnpm local-test:logs
+pnpm local-test:down
+```
+
+The default startup forces `PROVISIONING_MODE=disabled`, `PILOT_ENABLED=false`, an empty
+`TELEGRAM_WEBHOOK_URL`, no Telegram reporting group, and `TELEGRAM_ENABLED=false`; it cannot call
+Telegram or provision through PasarGuard. `local-test:down` intentionally preserves the isolated
+PostgreSQL volume. There is no reset or volume-deletion command in this workflow.
+
+The profile keeps the existing `127.0.0.1:55432` and `127.0.0.1:3100` bindings. It therefore cannot
+run concurrently with another local Compose stack that already owns either port.
+
+To intentionally test a dedicated bot with local polling, enable it only while this is the sole
+intended intake for that bot:
+
+```bash
+LOCAL_TELEGRAM_ENABLED=true pnpm local-test:up
+```
+
+This clears the configured webhook with `drop_pending_updates=false` and then uses `getUpdates`
+polling, so it can take over the bot's Telegram intake while preserving queued updates. Never use it
+while a production webhook, another poller, or any other intended bot intake is active.
+
 Start the optional customer static interface:
 
 ```bash

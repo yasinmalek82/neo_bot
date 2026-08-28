@@ -44,6 +44,7 @@ const sourceFiles = new Set([
   'README.md',
   'SECURITY.md',
   'Dockerfile',
+  'docker-compose.local-test.yml',
   'docker-compose.yml',
   'docker-compose.production.yml',
   'eslint.config.mjs',
