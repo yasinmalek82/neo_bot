@@ -1,9 +1,9 @@
 <!--
 context-schema: 1
-last-updated: 2026-08-27T16:18:18.845Z
-source-fingerprint: aeb2e4d11869be56847477a4521d3cc07fc7ffa085eaa6886af6eedd5e236ac7
+last-updated: 2026-08-28T12:16:51.738Z
+source-fingerprint: 46775568002ff073e344bd2283f6acdc2e09affc225463c672615e815ad3c4de
 current-phase: revival-slice-1-mutation-safety
-next-task: repair-github-ci-and-confirm-green
+next-task: run-production-read-only-preflight
 -->
 
 # neo_bot Project Context
@@ -138,6 +138,9 @@ first-host chat-store-redesign deploy.
   operations for reconciliation, while `0012` backfills delivery jobs for fulfilled orders and may
   trigger immediate Telegram delivery. Production approval/retry actions must remain idle during the
   disabled-mode rollout.
+- The existing first-host SSH target and `/root/neo_bot` checkout were rediscovered from prior
+  authorized local session evidence with strict known-host verification. Connection details remain
+  machine-local and are not committed. No new remote connection was made during discovery.
 - Host `bot-api` health is `ok` after the authorized chat-store redesign build and targeted recreate.
   Loopback and public HTTPS health report `telegramReady=true`, `migrations=10`, and zero pending,
   failed, retrying or due report deliveries. The production read model retains one category, one
@@ -148,20 +151,30 @@ first-host chat-store-redesign deploy.
 - `pnpm db:restore-drill` restored a fresh dump onto a disposable Postgres on loopback
   (`schema_migrations=6`), then destroyed the instance and dump. The live local database was not
   overwritten. Restore onto a chosen target still requires `RESTORE_CONFIRM=yes`.
-- Reviewed `main` is pushed through `57e4955`. GitHub Actions run `33092034399` did not reach install
-  or project tests: the pre-existing workflow declared broad `pnpm 11` while `package.json`
-  declared exact `pnpm@11.19.0`, and `pnpm/action-setup@v4` rejected the duplicate version sources.
-  The local repair removes the redundant workflow version so `package.json` remains authoritative;
-  a new pushed run is required before deployment resumes.
+- Reviewed `main` is pushed through CI repair `3a3f9d1`. The prior run `33092034399` had stopped
+  before install because the pre-existing workflow and `package.json` both supplied pnpm versions.
+  The redundant workflow version is removed and GitHub Actions run `33169092504` passes frozen
+  install, the complete `pnpm check` gate and the required high-severity audit.
+- Official GitHub Spec Kit `v1.0.1` is installed locally for Codex with ten project-local skills,
+  pinned CLI metadata, Bash workflow scripts and templates. The project constitution derives from
+  `AGENTS.md`, `PROJECT_CONTEXT.md` and ADRs; generated feature artifacts cannot override those
+  authorities. `.specify/`, `.agents/skills/` and future `specs/` are included in the context
+  fingerprint together with ignore-policy files, while managed Spec Kit files are excluded from
+  Prettier mutation and Graphify noise. The local full-cycle workflow adds mandatory Analyze and
+  Converge stages with review gates, and root governance explicitly constrains Converge intent to the
+  canonical project authorities. `specify check`, script/JSON validation, `pnpm check` (`212` unit
+  tests), dead-code, high-severity audit and diff checks pass. Graphify was fully re-extracted and
+  updated after the ignore change (`1544` nodes, `3055` edges). This is tooling validation, not
+  production evidence.
 - CI `pnpm audit --audit-level=high` is required. One moderate `uuid` advisory remains in
   Testcontainers only.
 - Live test forum: eight purpose topics exist. The local outbox delivered first-contact, returning
   activity, one `order.created`, and one `ops.daily_summary` (four deliveries, none failed). One
   sales order is `awaiting_receipt` with zero payment proofs. Receipt, approval and provisioning
   notices are still unconfirmed. Owner visual check of the daily-summaries topic is still required.
-- Authorized Git history is pushed through `57e4955` on `main`, remote
-  `https://github.com/yasinmalek82/neo_bot`. `.env` was not committed. The only current source change
-  is the reviewed CI setup repair plus this truthful context update.
+- Authorized Git history is pushed through `3a3f9d1` on `main`, remote
+  `https://github.com/yasinmalek82/neo_bot`. `.env` was not committed. Spec Kit adoption is local and
+  uncommitted; it changes development governance only, not application runtime or production state.
 - The owner reported first-host install completed. Public HTTPS Mini App purchase and receipt photo
   still need live evidence. No live-user migration or isolated PasarGuard pilot.
 
@@ -371,23 +384,20 @@ Status: approved on 2026-08-25 and active after the local checkpoint.
 Current phase: **Phase 6 / Slice 1 - Mutation safety**. The owner explicitly replaced the prior
 phone-only next task with the four-slice NEO NETWORK revival plan recorded in ADR 0014.
 
-Next task: commit and push the minimal GitHub Actions package-manager repair, confirm a complete green
-CI run, then discover the existing production target without exposing secrets and run only the
-read-only data/runtime preflight. Deployment remains paused while CI is red. It proceeds only after
-fresh rollback artifacts exist and existing pending operations plus fulfilled-order delivery backfill
-are judged safe. The owner explicitly authorized Sol to choose safe commit, push and deploy
-checkpoints. Isolated or live PasarGuard mutation remains a separate product-risk decision and is not
-implied by deployment.
+Next task: discover the existing production target without exposing secrets and run only the
+read-only data/runtime preflight. CI is green; deployment still waits for fresh rollback artifacts and
+a safe judgment on existing pending operations plus the fulfilled-order delivery backfill. The owner
+explicitly authorized Sol to choose safe commit, push and deploy checkpoints. Isolated or live
+PasarGuard mutation remains a separate product-risk decision and is not implied by deployment.
 
 Expected sequence:
 
-1. Push the reviewed CI repair and require a complete green GitHub Actions run.
-2. Run read-only production counts for order/provisioning states and confirm the current runtime mode.
-3. Back up production source, environment and PostgreSQL; preserve the current image/reference.
-4. Review the backfill set, then deploy with `PROVISIONING_MODE=disabled` and apply migrations
+1. Run read-only production counts for order/provisioning states and confirm the current runtime mode.
+2. Back up production source, environment and PostgreSQL; preserve the current image/reference.
+3. Review the backfill set, then deploy with `PROVISIONING_MODE=disabled` and apply migrations
    `0011`-`0013`, and verify health, schema, read models and zero provider mutation.
-5. Obtain a separate explicit gate before any isolated or live PasarGuard mutation.
-6. Continue with customer services, staff control plane, and representative workspace as separate
+4. Obtain a separate explicit gate before any isolated or live PasarGuard mutation.
+5. Continue with customer services, staff control plane, and representative workspace as separate
    slices. Android/iPhone evidence remains mandatory before customer-facing visual completion.
 
 Owner-only remaining gates: public HTTPS webhook URL, live isolated PasarGuard group, TLS host,
@@ -452,19 +462,37 @@ handoff entry.
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
 
-### 2026-08-27 - Pre-existing GitHub Actions setup failure isolated
+### 2026-08-28 - Spec Kit adopted for bounded Codex feature delivery
+
+- Outcome: installed official pinned Spec Kit `v1.0.1` with Codex skills mode and no extensions or
+  presets. Root rules define strict precedence over generated feature artifacts, explicitly bound
+  Converge to feature-local intent, and the local full-cycle workflow now includes Analyze and
+  Converge review gates. The seeded constitution mirrors the existing clean-room, mutation-safety,
+  secret and evidence boundaries.
+- Validation: isolated preview and two independent read-only reviews confirmed the generated scope.
+  A final independent Luna review then found and closed the missing Analyze/Converge stages, the
+  Converge authority ambiguity and ignore-policy fingerprint gap. All `22` installer-manifested
+  upstream files retain exact hashes; `specify check`, workflow inspection, Bash/JSON validation,
+  full `pnpm check` (`212` tests), dead-code, high-severity audit and diff checks pass. Graphify was
+  fully rebuilt after excluding managed workflow assets and reports `1544` nodes and `3055` edges.
+  No application, database, Telegram, PasarGuard or production behavior changed.
+- Next: run the production read-only preflight as the unchanged product priority. Do not start a
+  feature spec until its scope is reconciled with this context.
+
+### 2026-08-28 - GitHub Actions setup repaired and green
 
 - Outcome: deployment was paused after the owner reported failed GitHub jobs. Run `33092034399`
   failed before dependency installation because both `.github/workflows/check.yml` and
   `package.json` supplied pnpm versions. The minimal local repair removes the redundant broad
-  workflow version and keeps exact `pnpm@11.19.0` authoritative in package metadata.
+  workflow version and keeps exact `pnpm@11.19.0` authoritative in package metadata; commit
+  `3a3f9d1` is pushed.
 - Validation: GitHub job `98587114990` identifies `pnpm/action-setup@v4` as the only failed step;
   checkout passed and install/check/audit were skipped. Independent Luna traced both declarations to
-  baseline commit `6c9bbe4`, so this is not a Slice 1 regression. Locally, frozen install uses
-  `pnpm 11.19.0`, high-severity audit passes with one moderate Testcontainers advisory, and diff check
-  passes. A fresh GitHub run is still required.
-- Next: stamp and run the complete local gate, commit/push the workflow repair, and keep deployment
-  stopped until GitHub Actions completes successfully.
+  baseline commit `6c9bbe4`, so this is not a Slice 1 regression. Locally, frozen install, the full
+  `212`-test gate, high-severity audit, dead-code, diff and Graphify checks pass. GitHub Actions run
+  `33169092504` then passed install, `pnpm check` and audit in `1m2s`.
+- Next: run the production read-only data/runtime preflight; create fresh rollback artifacts before
+  any disabled-mode deployment.
 
 ### 2026-08-27 - Slice 1 locally integrated with rollout authority
 

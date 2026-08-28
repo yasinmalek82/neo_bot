@@ -9,6 +9,8 @@ graphify-out/
 .git/
 var/
 tmp/
+.agents/
+.specify/
 
 # Lockfiles and assistant-generated artifacts
 pnpm-lock.yaml

@@ -1,0 +1,102 @@
+schema_version: "1.0"
+workflow:
+  id: "speckit"
+  name: "Full SDD Cycle"
+  version: "1.0.1"
+  author: "GitHub with neo_bot governance overlay"
+  description: "Runs specify → plan → tasks → analyze → implement → converge with review gates"
+
+requires:
+  # 0.8.5 is the first release with engine-side resolution of the
+  # ``integration: "auto"`` default. Older versions would treat "auto"
+  # as a literal integration key and fail at dispatch.
+  speckit_version: ">=0.8.5"
+  integrations:
+    # The six commands below (specify, plan, tasks, analyze, implement, converge)
+    # must be provided by the selected integration. The list here is an
+    # advisory, non-exhaustive compatibility hint following the documented
+    # ``any: [...]`` schema -- it is NOT a closed set. The workflow runs
+    # against any integration the project was initialized with, including
+    # ones not listed below, as long as that integration provides all six
+    # core commands referenced in ``steps``.
+    any:
+      - "alquimia"
+      - "claude"
+      - "copilot"
+      - "gemini"
+      - "opencode"
+
+inputs:
+  spec:
+    type: string
+    required: true
+    prompt: "Describe what you want to build"
+  integration:
+    type: string
+    default: "auto"
+    prompt: "Integration to use (e.g. claude, copilot, gemini; 'auto' uses the project's initialized integration)"
+  scope:
+    type: string
+    default: "full"
+    enum: ["full", "backend-only", "frontend-only"]
+
+steps:
+  - id: specify
+    command: speckit.specify
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: review-spec
+    type: gate
+    message: "Review the generated spec before planning."
+    options: [approve, reject]
+    on_reject: abort
+
+  - id: plan
+    command: speckit.plan
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: review-plan
+    type: gate
+    message: "Review the plan before generating tasks."
+    options: [approve, reject]
+    on_reject: abort
+
+  - id: tasks
+    command: speckit.tasks
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: analyze
+    command: speckit.analyze
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: review-analysis
+    type: gate
+    message: "Approve only after Analyze reports no unresolved conflict with canonical project authorities or feature artifacts."
+    options: [approve, reject]
+    on_reject: abort
+
+  - id: implement
+    command: speckit.implement
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: converge
+    command: speckit.converge
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.spec }}"
+
+  - id: review-convergence
+    type: gate
+    message: "Approve only when Converge reports no remaining tasks; otherwise reject and run Implement then Converge again."
+    options: [approve, reject]
+    on_reject: abort

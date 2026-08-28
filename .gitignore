@@ -9,6 +9,9 @@ graphify-out/
 .DS_Store
 .idea/
 .vscode/
+.agents/*
+!.agents/skills/
+!.agents/skills/**
 tmp/
 var/
 backups/

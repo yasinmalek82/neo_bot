@@ -2,6 +2,8 @@ dist
 coverage
 graphify-out
 .cursor
+.agents/skills
+.specify
 pnpm-lock.yaml
 apps/admin-web/playwright.config.ts
 apps/admin-web/vite.config.ts

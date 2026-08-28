@@ -23,11 +23,23 @@ const requiredHeadings = [
   '## Handoff log',
 ];
 
-const sourceRoots = ['apps/', 'packages/', 'tools/', 'docs/adr/', 'docs/runbooks/', 'deploy/'];
+const sourceRoots = [
+  '.agents/skills/',
+  '.specify/',
+  'apps/',
+  'packages/',
+  'tools/',
+  'docs/adr/',
+  'docs/runbooks/',
+  'deploy/',
+  'specs/',
+];
 const sourceFiles = new Set([
   '.dependency-cruiser.cjs',
   '.env.example',
+  '.gitignore',
   '.github/workflows/check.yml',
+  '.prettierignore',
   'AGENTS.md',
   'README.md',
   'SECURITY.md',

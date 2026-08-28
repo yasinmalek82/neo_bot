@@ -27,6 +27,29 @@ or security:
 A change is not complete while the context gate is stale. Read-only investigation does not require a
 context update.
 
+## Spec Kit workflow
+
+Spec Kit `v1.0.1` is installed for Codex feature delivery. Its project skills live under
+`.agents/skills/speckit-*`, shared workflow assets live under `.specify/`, and feature artifacts live
+under `specs/`.
+
+- Precedence is strict: the nearest `AGENTS.md` governs execution, `PROJECT_CONTEXT.md` governs
+  current truth and roadmap, ADRs govern durable decisions, and Spec Kit constitution/spec/plan/task
+  artifacts are bounded derivatives of those sources. Generated artifacts never override them.
+- Use `$speckit-specify` -> optional `$speckit-clarify` -> `$speckit-plan` -> `$speckit-tasks` ->
+  `$speckit-analyze` -> `$speckit-implement` -> `$speckit-converge` for material feature work when
+  the owner has approved implementation. Do not create feature artifacts for a read-only report or a
+  trivial operational check.
+- Before implementation, reconcile every generated spec and plan with the current phase and next task
+  in `PROJECT_CONTEXT.md`. If they conflict, stop and resolve the canonical project state first.
+- In the managed `$speckit-converge` skill, "sole source of intent" means feature-local intent only.
+  It never outranks the nearest `AGENTS.md`, `PROJECT_CONTEXT.md`, an applicable ADR or the project
+  constitution; stop rather than append tasks when those authorities conflict.
+- Spec Kit implementation commands do not relax the continuity protocol, delegation rules, safety
+  boundaries, verification gates, or prohibitions on commit, push, deploy and live mutation.
+- Do not install community extensions or presets without owner approval and source review. Prefer the
+  pinned official CLI and review generated-file diffs before accepting an integration upgrade.
+
 ## Scope
 
 This is a private, clean-room implementation. Do not copy code from the legacy AGPL bot.
