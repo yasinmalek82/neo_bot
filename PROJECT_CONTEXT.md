@@ -1,9 +1,9 @@
 <!--
 context-schema: 1
-last-updated: 2026-08-27T16:10:29.844Z
-source-fingerprint: 83d67b452c740627af2ec4fc1d1716750331e3b79b890e739d9d5d2012a6169b
+last-updated: 2026-08-27T16:18:18.845Z
+source-fingerprint: aeb2e4d11869be56847477a4521d3cc07fc7ffa085eaa6886af6eedd5e236ac7
 current-phase: revival-slice-1-mutation-safety
-next-task: push-main-and-run-production-read-only-preflight
+next-task: repair-github-ci-and-confirm-green
 -->
 
 # neo_bot Project Context
@@ -122,8 +122,8 @@ first-host chat-store-redesign deploy.
   PasarGuard mutation was performed for this baseline refresh.
 - OpenCode/OX Alpha completed both Slice 1 phases in commit `0f7a922` inside the isolated writer
   worktree, but created that local commit despite the task's no-commit boundary. Sol preserved it,
-  audited all `33` changed artifacts, and later integrated it locally after explicit owner approval;
-  it has not yet been pushed or deployed. Independent Luna review
+  audited all `33` changed artifacts, and later integrated and pushed it after explicit owner
+  approval; it has not been deployed. Independent Luna review
   confirmed the original candidate-identity and ambiguous-mutation fixes, then identified one
   incremental-migration blocker in the follow-up delivery patch. That blocker is fixed with additive
   migration `0013`; follow-up commit `f982086` adds autonomous delivery wake-up, monotonic claim
@@ -148,16 +148,20 @@ first-host chat-store-redesign deploy.
 - `pnpm db:restore-drill` restored a fresh dump onto a disposable Postgres on loopback
   (`schema_migrations=6`), then destroyed the instance and dump. The live local database was not
   overwritten. Restore onto a chosen target still requires `RESTORE_CONFIRM=yes`.
+- Reviewed `main` is pushed through `57e4955`. GitHub Actions run `33092034399` did not reach install
+  or project tests: the pre-existing workflow declared broad `pnpm 11` while `package.json`
+  declared exact `pnpm@11.19.0`, and `pnpm/action-setup@v4` rejected the duplicate version sources.
+  The local repair removes the redundant workflow version so `package.json` remains authoritative;
+  a new pushed run is required before deployment resumes.
 - CI `pnpm audit --audit-level=high` is required. One moderate `uuid` advisory remains in
   Testcontainers only.
 - Live test forum: eight purpose topics exist. The local outbox delivered first-contact, returning
   activity, one `order.created`, and one `ops.daily_summary` (four deliveries, none failed). One
   sales order is `awaiting_receipt` with zero payment proofs. Receipt, approval and provisioning
   notices are still unconfirmed. Owner visual check of the daily-summaries topic is still required.
-- Authorized Git baseline exists: latest pushed `0a1a9b0` on `main`, remote
-  `https://github.com/yasinmalek82/neo_bot`. `.env` was not committed. Uncommitted local work
-  includes customer Mini App tabs, `/console/` asset base, and the admin reply-keyboard console
-  opener.
+- Authorized Git history is pushed through `57e4955` on `main`, remote
+  `https://github.com/yasinmalek82/neo_bot`. `.env` was not committed. The only current source change
+  is the reviewed CI setup repair plus this truthful context update.
 - The owner reported first-host install completed. Public HTTPS Mini App purchase and receipt photo
   still need live evidence. No live-user migration or isolated PasarGuard pilot.
 
@@ -367,16 +371,17 @@ Status: approved on 2026-08-25 and active after the local checkpoint.
 Current phase: **Phase 6 / Slice 1 - Mutation safety**. The owner explicitly replaced the prior
 phone-only next task with the four-slice NEO NETWORK revival plan recorded in ADR 0014.
 
-Next task: commit the truthful governance/context records, push reviewed `main`, discover the existing
-production target without exposing secrets, then run only the read-only data/runtime preflight. A
-deployment proceeds only after fresh rollback artifacts exist and existing pending operations plus
-fulfilled-order delivery backfill are judged safe. The owner explicitly authorized Sol to choose safe
-commit, push and deploy checkpoints. Isolated or live PasarGuard mutation remains a separate
-product-risk decision and is not implied by deployment.
+Next task: commit and push the minimal GitHub Actions package-manager repair, confirm a complete green
+CI run, then discover the existing production target without exposing secrets and run only the
+read-only data/runtime preflight. Deployment remains paused while CI is red. It proceeds only after
+fresh rollback artifacts exist and existing pending operations plus fulfilled-order delivery backfill
+are judged safe. The owner explicitly authorized Sol to choose safe commit, push and deploy
+checkpoints. Isolated or live PasarGuard mutation remains a separate product-risk decision and is not
+implied by deployment.
 
 Expected sequence:
 
-1. Commit only the known governance/context files and push reviewed `main`.
+1. Push the reviewed CI repair and require a complete green GitHub Actions run.
 2. Run read-only production counts for order/provisioning states and confirm the current runtime mode.
 3. Back up production source, environment and PostgreSQL; preserve the current image/reference.
 4. Review the backfill set, then deploy with `PROVISIONING_MODE=disabled` and apply migrations
@@ -446,6 +451,20 @@ handoff entry.
 ## Handoff log
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
+
+### 2026-08-27 - Pre-existing GitHub Actions setup failure isolated
+
+- Outcome: deployment was paused after the owner reported failed GitHub jobs. Run `33092034399`
+  failed before dependency installation because both `.github/workflows/check.yml` and
+  `package.json` supplied pnpm versions. The minimal local repair removes the redundant broad
+  workflow version and keeps exact `pnpm@11.19.0` authoritative in package metadata.
+- Validation: GitHub job `98587114990` identifies `pnpm/action-setup@v4` as the only failed step;
+  checkout passed and install/check/audit were skipped. Independent Luna traced both declarations to
+  baseline commit `6c9bbe4`, so this is not a Slice 1 regression. Locally, frozen install uses
+  `pnpm 11.19.0`, high-severity audit passes with one moderate Testcontainers advisory, and diff check
+  passes. A fresh GitHub run is still required.
+- Next: stamp and run the complete local gate, commit/push the workflow repair, and keep deployment
+  stopped until GitHub Actions completes successfully.
 
 ### 2026-08-27 - Slice 1 locally integrated with rollout authority
 
