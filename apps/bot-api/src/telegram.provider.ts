@@ -7,6 +7,7 @@ import {
   ProvisioningModeGate,
   ReferralUseCase,
   ReportingUseCase,
+  RepresentativeWalletUseCase,
 } from '@neo-bot/application';
 import {
   PostgresCommerceRepository,
@@ -79,7 +80,14 @@ export const telegramCommerceBotProvider = {
       }),
     );
     const referral = new ReferralUseCase(commerceRepository, reporting);
-    const commerce = new CommerceUseCase(commerceRepository, directService, reporting, referral);
+    const representativeWallet = new RepresentativeWalletUseCase(commerceRepository);
+    const commerce = new CommerceUseCase(
+      commerceRepository,
+      directService,
+      reporting,
+      referral,
+      representativeWallet,
+    );
     const dailySummary = new OpsDailySummaryUseCase(commerceRepository, reporting);
     const delivery = new CustomerDeliveryUseCase(
       commerceRepository,
@@ -98,6 +106,8 @@ export const telegramCommerceBotProvider = {
       dailySummary,
       delivery,
       pasarGuard,
+      undefined,
+      representativeWallet,
     );
   },
 };

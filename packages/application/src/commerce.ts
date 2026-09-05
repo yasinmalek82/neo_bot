@@ -18,6 +18,7 @@ import {
 
 import type { CommerceRepository, ServiceProvisioner } from './commerce-ports.js';
 import type { ReferralUseCase } from './referral.js';
+import type { RepresentativeWalletUseCase } from './representative-wallet.js';
 import type { ReportingPublisher } from './reporting-ports.js';
 import { utcDateStamp } from './reporting.js';
 
@@ -27,6 +28,7 @@ export class CommerceUseCase {
     private readonly serviceProvisioner: ServiceProvisioner,
     private readonly reporting: ReportingPublisher | null = null,
     private readonly referral: ReferralUseCase | null = null,
+    private readonly representativeWallet: RepresentativeWalletUseCase | null = null,
   ) {}
 
   public listCategories(parentId: string | null): Promise<readonly CatalogCategory[]> {
@@ -197,6 +199,8 @@ export class CommerceUseCase {
       occurrenceKey: `order:${order.id}:created`,
       payload: {
         orderId: order.id,
+        amountIrr: order.amountIrr.toString(),
+        replayed: String(entry.replayed),
         telegramUserId: customer.telegramUserId,
         productName: order.productName,
         variantName: order.variantName,
@@ -416,6 +420,7 @@ export class CommerceUseCase {
     if (order.status !== 'provisioning' && order.status !== 'provisioning_failed') {
       throw new DomainConflictError('ORDER_NOT_READY_FOR_PROVISIONING');
     }
+    await this.debitRepresentativeWalletIfNeeded(order);
     const customer = await this.repository.getCustomerForOrder(order.id);
     let service: ServiceBinding;
     try {
@@ -449,6 +454,43 @@ export class CommerceUseCase {
     await this.publishProvisioningSucceeded(fulfilled, customer?.telegramUserId ?? 'unknown');
     await this.grantReferralReward(fulfilled);
     return fulfilled;
+  }
+
+  private async debitRepresentativeWalletIfNeeded(order: SalesOrder): Promise<void> {
+    if (this.representativeWallet === null) {
+      return;
+    }
+    if (order.kind === 'trial' || order.amountIrr <= 0n) {
+      return;
+    }
+    if (
+      order.pricingSource !== 'representative_base' &&
+      order.pricingSource !== 'representative_override'
+    ) {
+      return;
+    }
+    if (
+      order.representativeId === undefined ||
+      order.representativeId === null ||
+      order.representativeId.length === 0
+    ) {
+      throw new DomainConflictError('INVALID_REPRESENTATIVE');
+    }
+    const entry = await this.representativeWallet.debitForPurchase({
+      representativeId: order.representativeId,
+      amountIrr: order.amountIrr,
+      salesOrderId: order.id,
+      idempotencyKey: `order:${order.id}:rep-wallet-debit`,
+    });
+    await this.publish({
+      type: 'reseller.wallet_debited',
+      occurrenceKey: `reseller:order:${order.id}:wallet-debited`,
+      payload: {
+        representativeId: entry.representativeId,
+        ledgerId: entry.id,
+        orderId: order.id,
+      },
+    });
   }
 
   private async grantReferralReward(order: SalesOrder): Promise<void> {

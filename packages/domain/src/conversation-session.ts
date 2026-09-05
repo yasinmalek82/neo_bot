@@ -7,6 +7,7 @@ export const CONVERSATION_FLOW_IDS = [
   'support.ticket',
   'admin.broadcast',
   'admin.ops',
+  'admin.rep-wallet-credit',
 ] as const;
 
 export type ConversationFlowId = (typeof CONVERSATION_FLOW_IDS)[number];
@@ -19,6 +20,7 @@ export const CONVERSATION_STEPS = [
   'create',
   'followup',
   'settings',
+  'ownerCredit',
 ] as const;
 
 export type ConversationStep = (typeof CONVERSATION_STEPS)[number];
@@ -74,6 +76,12 @@ export interface AdminBroadcastPayload {
   readonly mode: 'create';
 }
 
+export interface AdminRepWalletCreditPayload {
+  readonly code?: string;
+  readonly telegramUserId?: string;
+  readonly amountIrr?: string;
+}
+
 export const ADMIN_OPS_FIELDS = [
   'channel',
   'reminderDays',
@@ -96,7 +104,8 @@ export type ConversationPayload =
   | WalletTopUpPayload
   | SupportTicketPayload
   | AdminBroadcastPayload
-  | AdminOpsPayload;
+  | AdminOpsPayload
+  | AdminRepWalletCreditPayload;
 
 export interface DurableConversationSession {
   readonly id: string;
@@ -177,6 +186,8 @@ export function parseConversationPayload(
       return parseBroadcastPayload(step, payload);
     case 'admin.ops':
       return parseAdminOpsPayload(step, payload);
+    case 'admin.rep-wallet-credit':
+      return parseAdminRepWalletCreditPayload(step, payload);
   }
 }
 
@@ -315,6 +326,46 @@ function parseBroadcastPayload(
   return { mode: 'create' };
 }
 
+function parseAdminRepWalletCreditPayload(
+  step: ConversationStep,
+  payload: Record<string, unknown>,
+): AdminRepWalletCreditPayload {
+  if (step === 'create') {
+    if (Object.keys(payload).length !== 0) {
+      throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
+    }
+    return {};
+  }
+  const code = payload['code'];
+  const telegramUserId = payload['telegramUserId'];
+  if (
+    (code !== undefined &&
+      (typeof code !== 'string' || code.trim().length === 0 || code.trim().length > 64)) ||
+    (telegramUserId !== undefined &&
+      (typeof telegramUserId !== 'string' || !/^\d{1,20}$/u.test(telegramUserId))) ||
+    (code === undefined && telegramUserId === undefined)
+  ) {
+    throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
+  }
+  if (step === 'amount') {
+    return {
+      ...(code === undefined ? {} : { code: code.trim() }),
+      ...(telegramUserId === undefined ? {} : { telegramUserId }),
+    };
+  }
+  if (step === 'ownerCredit') {
+    const amountIrr = payload['amountIrr'];
+    if (typeof amountIrr !== 'string') {
+      throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
+    }
+    return {
+      ...(code === undefined ? {} : { code: code.trim() }),
+      ...(telegramUserId === undefined ? {} : { telegramUserId }),
+      amountIrr: parseWalletAmountIrr(amountIrr).toString(),
+    };
+  }
+  throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
+}
 function parseAdminOpsPayload(
   step: ConversationStep,
   payload: Record<string, unknown>,

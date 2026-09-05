@@ -31,6 +31,7 @@ const CUSTOMER_NAVIGATION_CALLBACKS = new Set([
   'admin:summary',
   'admin:ops',
   'admin:sales',
+  'admin:rep-wallet',
   'admin:broadcast',
   'invite',
   'trial',
@@ -76,6 +77,12 @@ export type FlowScreenId =
   | 'expired'
   | 'malformed'
   | 'cancelled'
+  | 'admin.rep-wallet.lookup'
+  | 'admin.rep-wallet.amount'
+  | 'admin.rep-wallet.invalid-lookup'
+  | 'admin.rep-wallet.invalid-amount'
+  | 'admin.rep-wallet.credited'
+  | 'admin.rep-wallet.failed'
   | 'admin.broadcast.compose'
   | 'admin.broadcast.queued'
   | 'admin.broadcast.invalid'

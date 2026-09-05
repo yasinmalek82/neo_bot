@@ -32,6 +32,7 @@ export const SERVICES_CALLBACK = 'services';
 export const JOIN_REFRESH_CALLBACK = 'join:refresh';
 export const ADMIN_OPS_CALLBACK = 'admin:ops';
 export const ADMIN_SALES_CALLBACK = 'admin:sales';
+export const ADMIN_REP_WALLET_CALLBACK = 'admin:rep-wallet';
 export const ADMIN_BROADCAST_CALLBACK = 'admin:broadcast';
 export const ADMIN_BROADCAST_CANCEL_PREFIX = 'admin:broadcast:cancel:';
 export const INVITE_CALLBACK = 'invite';
@@ -879,6 +880,7 @@ export function adminHubKeyboard(): TelegramInlineKeyboardMarkup {
       { text: 'تنظیمات تجاری 🛠', callback_data: ADMIN_OPS_CALLBACK },
       { text: 'خلاصه فروش 📊', callback_data: ADMIN_SALES_CALLBACK },
     ],
+    { text: 'شارژ کیف پول نماینده 💳', callback_data: ADMIN_REP_WALLET_CALLBACK },
     { text: 'پیام همگانی 📢', callback_data: ADMIN_BROADCAST_CALLBACK },
     backToMenuButton(),
   ]);
