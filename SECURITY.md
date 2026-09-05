@@ -39,5 +39,6 @@ not a claim that production is ready.
 - Public HTTPS webhook, off-host backup storage, and a live restore onto the
   production volume are still required before production. In-repo secret-rotation steps are in
   `docs/runbooks/secret-rotation.md`; they are not a completed live rotation.
-- CI fails on high-severity `pnpm audit` findings. One moderate `uuid` advisory remains in the
-  Testcontainers development tree and is not a runtime dependency of `bot-api`
+- CI fails on high-severity `pnpm audit` findings. Transitive `fast-uri` is pinned in
+  `pnpm-workspace.yaml` to patched 3.1.6 / 4.1.3. One moderate `uuid` advisory remains in the
+  Testcontainers development tree and is not a runtime dependency of `bot-api`.

@@ -1,7 +1,7 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T10:10:19.465Z
-source-fingerprint: 72ca29f15f7dcce6a16edc42e1600c5807d8bd749f7c07ac930caede820fbadb
+last-updated: 2026-09-05T10:13:33.331Z
+source-fingerprint: b38f63ede99475543834f472d7c977033246bcee48c38699ca9965446bfdd233
 current-phase: commercial-wave2
 next-task: owner-authorized-isolated-pilot-gates
 -->
@@ -193,7 +193,8 @@ the existing `telegram-menu` mixed layout.
   tests), dead-code, high-severity audit and diff checks pass. Graphify was fully re-extracted and
   updated after the ignore change (`1545` nodes, `3056` edges). This is tooling validation, not
   production evidence.
-- CI `pnpm audit --audit-level=high` is required. One moderate `uuid` advisory remains in
+- CI `pnpm audit --audit-level=high` is required. Transitive `fast-uri` is pinned to patched
+  3.1.6 / 4.1.3 in `pnpm-workspace.yaml`. One moderate `uuid` advisory remains in
   Testcontainers only.
 - Live test forum: eight purpose topics exist. The local outbox delivered first-contact, returning
   activity, one `order.created`, and one `ops.daily_summary` (four deliveries, none failed). One
@@ -522,10 +523,13 @@ Keep entries concise and newest first. This is an operational summary, not a tra
   `deploy/menu.sh`, and keep-or-reconfigure first setup in `deploy/install.sh`. README and
   `docs/runbooks/first-host.md` document the curl|bash command for `main` after merge and the
   PR-branch pin. No AGPL copy. No live host install, Telegram call, or PasarGuard mutation.
-- Validation: `pnpm check` passed (build, typecheck, lint, format, architecture, unit tests,
-  `pnpm test:deploy-cli`). Unit suites: domain `37`, application `88`, PasarGuard `10`, database
-  `2`, bot-api `151`, admin-web `5` (`293` total) plus installer validators/shellcheck. No VPS
-  install, Telegram send, or PasarGuard mutation.
+- Validation: `pnpm check` passed locally and on GitHub Actions (build, typecheck, lint, format,
+  architecture, unit tests, `pnpm test:deploy-cli`). Unit suites: domain `37`, application `88`,
+  PasarGuard `10`, database `2`, bot-api `151`, admin-web `5` (`293` total) plus installer
+  validators/shellcheck. CI then failed the required high-severity audit on transitive `fast-uri`;
+  patched pins 3.1.6 / 4.1.3 are in `pnpm-workspace.yaml` and `pnpm audit --audit-level=high` is
+  now clean except the known moderate Testcontainers `uuid`. No VPS install, Telegram send, or
+  PasarGuard mutation.
 - Next: unchanged owner-authorized isolated apply of `0014`+`0015`+`0016`, then webhook TLS,
   isolated PasarGuard group, backups, and phone smoke. Owner can run the one-liner on a VPS.
 
