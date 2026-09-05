@@ -1,6 +1,6 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T10:09:13.191Z
+last-updated: 2026-09-05T10:10:19.465Z
 source-fingerprint: 72ca29f15f7dcce6a16edc42e1600c5807d8bd749f7c07ac930caede820fbadb
 current-phase: commercial-wave2
 next-task: owner-authorized-isolated-pilot-gates
@@ -105,8 +105,8 @@ referral/invite, admin sales snapshot) is implemented on `cursor/wave2-commercia
 Wave 1 commercial-pilot baseline. ADR 0023 and migration `0016` record the durable decisions.
 A Mirza-style one-line host installer and interactive menu landed on
 `cursor/vps-installer-menu-59e1` (`deploy/neo-install.sh`, `deploy/neo`, evolved
-`deploy/install.sh`). Validator tests and shellcheck are green; this agent did not install on a
-VPS. Isolated/live evidence is unchanged. Isolated local Slice 1 runtime and first-host evidence
+`deploy/install.sh`). Local `pnpm check` is green on this branch, including `pnpm test:deploy-cli`
+and shellcheck. This agent did not install on a VPS. Isolated/live evidence is unchanged. Isolated local Slice 1 runtime and first-host evidence
 remain unchanged historical records, not a new live check. Feature `004-telegram-home-concept`
 artifacts are not on this remote; the visual baseline used was ADR 0013 ReplyKeyboard home plus
 the existing `telegram-menu` mixed layout.
@@ -522,9 +522,10 @@ Keep entries concise and newest first. This is an operational summary, not a tra
   `deploy/menu.sh`, and keep-or-reconfigure first setup in `deploy/install.sh`. README and
   `docs/runbooks/first-host.md` document the curl|bash command for `main` after merge and the
   PR-branch pin. No AGPL copy. No live host install, Telegram call, or PasarGuard mutation.
-- Validation: `bash tools/deploy-cli.test.sh` (validators, secret-preserving reconfigure, `bash -n`)
-  and `shellcheck --severity=warning` on the new scripts. Full `pnpm check` not yet claimed in this
-  entry.
+- Validation: `pnpm check` passed (build, typecheck, lint, format, architecture, unit tests,
+  `pnpm test:deploy-cli`). Unit suites: domain `37`, application `88`, PasarGuard `10`, database
+  `2`, bot-api `151`, admin-web `5` (`293` total) plus installer validators/shellcheck. No VPS
+  install, Telegram send, or PasarGuard mutation.
 - Next: unchanged owner-authorized isolated apply of `0014`+`0015`+`0016`, then webhook TLS,
   isolated PasarGuard group, backups, and phone smoke. Owner can run the one-liner on a VPS.
 
