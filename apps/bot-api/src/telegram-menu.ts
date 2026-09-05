@@ -33,6 +33,8 @@ export const JOIN_REFRESH_CALLBACK = 'join:refresh';
 export const ADMIN_OPS_CALLBACK = 'admin:ops';
 export const ADMIN_SALES_CALLBACK = 'admin:sales';
 export const ADMIN_REP_WALLET_CALLBACK = 'admin:rep-wallet';
+export const ADMIN_REP_PRICING_CALLBACK = 'admin:rep-pricing';
+export const ADMIN_REP_LIST_CALLBACK = 'admin:rep-list';
 export const ADMIN_BROADCAST_CALLBACK = 'admin:broadcast';
 export const ADMIN_BROADCAST_CANCEL_PREFIX = 'admin:broadcast:cancel:';
 export const INVITE_CALLBACK = 'invite';
@@ -880,10 +882,51 @@ export function adminHubKeyboard(): TelegramInlineKeyboardMarkup {
       { text: 'تنظیمات تجاری 🛠', callback_data: ADMIN_OPS_CALLBACK },
       { text: 'خلاصه فروش 📊', callback_data: ADMIN_SALES_CALLBACK },
     ],
-    { text: 'شارژ کیف پول نماینده 💳', callback_data: ADMIN_REP_WALLET_CALLBACK },
+    [
+      { text: 'شارژ کیف پول نماینده 💳', callback_data: ADMIN_REP_WALLET_CALLBACK },
+      { text: 'قیمت‌گذاری نماینده 🧾', callback_data: ADMIN_REP_PRICING_CALLBACK },
+    ],
     { text: 'پیام همگانی 📢', callback_data: ADMIN_BROADCAST_CALLBACK },
     backToMenuButton(),
   ]);
+}
+
+export function adminRepPricingKeyboard(): TelegramInlineKeyboardMarkup {
+  return adminScreenKeyboard([
+    { text: 'اعطای دسترسی پلن', callback_data: 'rep-pricing:grant-access' },
+    { text: 'لغو دسترسی پلن', callback_data: 'rep-pricing:revoke-access' },
+    { text: 'ثبت قیمت پایه', callback_data: 'rep-pricing:set-base-price' },
+    { text: 'پاک‌کردن قیمت پایه', callback_data: 'rep-pricing:clear-base-price' },
+    { text: 'ثبت قیمت اختصاصی', callback_data: 'rep-pricing:set-override-price' },
+    { text: 'پاک‌کردن قیمت اختصاصی', callback_data: 'rep-pricing:clear-override-price' },
+    { text: 'فهرست نماینده‌ها', callback_data: ADMIN_REP_LIST_CALLBACK },
+  ]);
+}
+
+export function adminRepPricingText(): string {
+  return [
+    '<b>مدیریت دسترسی و قیمت نماینده‌ها</b>',
+    'عملیات را انتخاب کن. شناسه نماینده و شناسه پلن از فهرست‌ها قابل استفاده است.',
+    'قیمت‌ها به ریال ثبت می‌شوند؛ قیمت اختصاصی بر قیمت پایه مقدم است.',
+  ].join('\n');
+}
+
+export function adminRepresentativesText(
+  representatives: readonly {
+    readonly id: string;
+    readonly code: string;
+    readonly displayName: string;
+    readonly active: boolean;
+  }[],
+): string {
+  if (representatives.length === 0) return '<b>نماینده‌ای ثبت نشده است</b>';
+  return [
+    '<b>فهرست نماینده‌ها</b>',
+    ...representatives.map(
+      (item) =>
+        `${item.active ? 'فعال' : 'غیرفعال'} · #${escapeHtml(item.id)} · ${escapeHtml(item.code)} · ${escapeHtml(item.displayName)}`,
+    ),
+  ].join('\n');
 }
 
 export function adminQueueText(orders: readonly SalesOrder[]): string {

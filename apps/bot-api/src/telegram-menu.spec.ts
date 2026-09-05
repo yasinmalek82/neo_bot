@@ -222,7 +222,10 @@ describe('telegram menu copy', () => {
           { text: 'تنظیمات تجاری 🛠', callback_data: 'admin:ops' },
           { text: 'خلاصه فروش 📊', callback_data: 'admin:sales' },
         ],
-        [{ text: 'شارژ کیف پول نماینده 💳', callback_data: 'admin:rep-wallet' }],
+        [
+          { text: 'شارژ کیف پول نماینده 💳', callback_data: 'admin:rep-wallet' },
+          { text: 'قیمت‌گذاری نماینده 🧾', callback_data: 'admin:rep-pricing' },
+        ],
         [{ text: 'پیام همگانی 📢', callback_data: 'admin:broadcast' }],
         [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
       ],

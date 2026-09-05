@@ -8,6 +8,7 @@ export const CONVERSATION_FLOW_IDS = [
   'admin.broadcast',
   'admin.ops',
   'admin.rep-wallet-credit',
+  'admin.rep-pricing',
 ] as const;
 
 export type ConversationFlowId = (typeof CONVERSATION_FLOW_IDS)[number];
@@ -82,6 +83,23 @@ export interface AdminRepWalletCreditPayload {
   readonly amountIrr?: string;
 }
 
+export const ADMIN_REP_PRICING_ACTIONS = [
+  'grant-access',
+  'revoke-access',
+  'set-base-price',
+  'clear-base-price',
+  'set-override-price',
+  'clear-override-price',
+] as const;
+
+export type AdminRepPricingAction = (typeof ADMIN_REP_PRICING_ACTIONS)[number];
+
+export interface AdminRepPricingPayload {
+  readonly action: AdminRepPricingAction;
+  readonly representativeId?: string;
+  readonly variantId?: string;
+}
+
 export const ADMIN_OPS_FIELDS = [
   'channel',
   'reminderDays',
@@ -105,7 +123,8 @@ export type ConversationPayload =
   | SupportTicketPayload
   | AdminBroadcastPayload
   | AdminOpsPayload
-  | AdminRepWalletCreditPayload;
+  | AdminRepWalletCreditPayload
+  | AdminRepPricingPayload;
 
 export interface DurableConversationSession {
   readonly id: string;
@@ -188,6 +207,8 @@ export function parseConversationPayload(
       return parseAdminOpsPayload(step, payload);
     case 'admin.rep-wallet-credit':
       return parseAdminRepWalletCreditPayload(step, payload);
+    case 'admin.rep-pricing':
+      return parseAdminRepPricingPayload(step, payload);
   }
 }
 
@@ -366,6 +387,49 @@ function parseAdminRepWalletCreditPayload(
   }
   throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
 }
+function parseAdminRepPricingPayload(
+  step: ConversationStep,
+  payload: Record<string, unknown>,
+): AdminRepPricingPayload {
+  if (step !== 'create' && step !== 'amount') {
+    throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
+  }
+  const action = payload['action'];
+  const representativeId = payload['representativeId'];
+  const variantId = payload['variantId'];
+  if (
+    typeof action !== 'string' ||
+    !ADMIN_REP_PRICING_ACTIONS.some((item) => item === action) ||
+    (representativeId !== undefined &&
+      (typeof representativeId !== 'string' || !/^\d{1,20}$/u.test(representativeId))) ||
+    (variantId !== undefined && (typeof variantId !== 'string' || !/^\d{1,20}$/u.test(variantId)))
+  ) {
+    throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
+  }
+  if (
+    step === 'amount' &&
+    (action === 'grant-access' ||
+      action === 'revoke-access' ||
+      action === 'set-override-price' ||
+      action === 'clear-override-price') &&
+    representativeId === undefined
+  ) {
+    throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
+  }
+  if (
+    step === 'amount' &&
+    (action === 'set-base-price' || action === 'clear-base-price') &&
+    variantId === undefined
+  ) {
+    throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
+  }
+  return {
+    action: action as AdminRepPricingAction,
+    ...(representativeId === undefined ? {} : { representativeId }),
+    ...(variantId === undefined ? {} : { variantId }),
+  };
+}
+
 function parseAdminOpsPayload(
   step: ConversationStep,
   payload: Record<string, unknown>,

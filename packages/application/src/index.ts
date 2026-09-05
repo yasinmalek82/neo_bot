@@ -19,3 +19,4 @@ export * from './referral.js';
 export * from './usage-sync.js';
 
 export * from './representative-wallet.js';
+export * from './representative-pricing.js';

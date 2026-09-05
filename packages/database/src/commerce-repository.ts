@@ -309,6 +309,19 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
     return requiredRow(result.rows).id;
   }
 
+  public async findRepresentativeById(
+    id: string,
+  ): Promise<{ id: string; code: string; telegramUserId: number; active: boolean } | null> {
+    const result = await this.pool.query<RepresentativeRow>(
+      `select id::text, code, telegram_user_id::text, display_name, active
+       from representatives
+       where id = $1`,
+      [id],
+    );
+    const row = result.rows[0];
+    return row === undefined ? null : { ...row, telegramUserId: Number(row.telegram_user_id) };
+  }
+
   public async listRepresentatives(): Promise<readonly RepresentativeProfile[]> {
     const result = await this.pool.query<RepresentativeRow>(
       `select id::text, code, telegram_user_id::text, display_name, active
@@ -368,6 +381,14 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
          price_irr = excluded.price_irr,
          updated_at = now()`,
       [input.variantId, input.priceIrr.toString()],
+    );
+  }
+
+  public async clearRepresentativeBasePrice(input: { readonly variantId: string }): Promise<void> {
+    await this.pool.query(
+      `delete from representative_variant_base_prices
+       where product_variant_id = $1`,
+      [input.variantId],
     );
   }
 
