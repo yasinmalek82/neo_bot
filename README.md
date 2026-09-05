@@ -36,6 +36,9 @@ Copy `.env.example` to `.env`, change only local values, then start PostgreSQL a
 
 ## نصب سریع روی سرور / Quick install
 
+The interactive host menu (`deploy/neo`) is **English-only** (RTL/Persian in the terminal breaks some hosts).
+The full owner guide stays here and in `docs/runbooks/first-host.md`.
+
 Owner path for one Ubuntu/Debian VPS. Do not invent a hostname. Point a DNS **A** record at the
 server first. Let’s Encrypt will not issue a certificate for a raw IP.
 

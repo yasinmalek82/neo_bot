@@ -13,7 +13,7 @@ source "${ROOT}/deploy/lib.sh"
 neo_print_menu() {
   neo_say ''
   neo_say "$(neo_color '1;36' '┌──────────── neo_bot ────────────┐')"
-  neo_say "$(neo_color '1;36' '│  نصب و سرویس | Install & services │')"
+  neo_say "$(neo_color '1;36' '│  Install & services │')"
   neo_say "$(neo_color '1;36' '└─────────────────────────────────┘')"
   neo_say "Checkout: ${NEO_ROOT}"
   if neo_env_exists; then
@@ -22,13 +22,13 @@ neo_print_menu() {
     neo_say 'Hostname: (not installed)'
   fi
   neo_say ''
-  neo_say '1) Install / first setup / نصب اولیه'
-  neo_say '2) Update from git / به‌روزرسانی'
-  neo_say '3) Change settings / تنظیمات'
-  neo_say '4) Start / stop / restart / status / logs / سرویس‌ها'
-  neo_say '5) Backup database / پشتیبان‌گیری'
-  neo_say '6) Health check / سلامت'
-  neo_say '0) Exit / خروج'
+  neo_say '1) Install / first setup'
+  neo_say '2) Update from git'
+  neo_say '3) Change settings'
+  neo_say '4) Start / stop / restart / status / logs'
+  neo_say '5) Backup database'
+  neo_say '6) Health check'
+  neo_say '0) Exit'
 }
 
 neo_dispatch() {
@@ -55,6 +55,6 @@ fi
 
 while true; do
   neo_print_menu
-  choice="$(neo_prompt 'Choose 0-6 / انتخاب: ')"
+  choice="$(neo_prompt 'Choose 0-6: ')"
   neo_dispatch "$choice" || true
 done
