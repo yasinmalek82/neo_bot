@@ -121,6 +121,7 @@ import {
 import { CommerceFlowHandler } from './interaction/commerce-flow.js';
 import {
   applyFlowTransition,
+  ConversationFlowRegistry,
   isGlobalCancelInput,
   recoverConversationSession,
   type BotScreenModel,
@@ -282,6 +283,23 @@ export class TelegramCommerceBot {
     await this.routeAction(action, target, customer, isFreshStartCommand(message.text));
   }
 
+  private customerFlowRegistry(customer: TelegramCustomerInput): ConversationFlowRegistry {
+    const registry = new ConversationFlowRegistry();
+    registry.register(new CommerceFlowHandler('commerce.purchase', this.commerce, customer));
+    registry.register(new CommerceFlowHandler('commerce.renewal', this.commerce, customer));
+    registry.register(
+      new WalletFlowHandler(
+        {
+          previewDiscount: (code) => this.commerce.previewDiscount(code),
+          creditTopUp: (command) => this.wallet.creditTopUp(command),
+        },
+        customer,
+      ),
+    );
+    registry.register(new SupportFlowHandler(this.tickets, customer));
+    return registry;
+  }
+
   private async dispatchCustomerFlow(
     target: MenuTarget,
     customer: TelegramCustomerInput,
@@ -325,18 +343,10 @@ export class TelegramCommerceBot {
       }
       return true;
     }
-    const handler =
-      session.flowId === 'commerce.purchase' || session.flowId === 'commerce.renewal'
-        ? new CommerceFlowHandler(session.flowId, this.commerce, customer)
-        : session.flowId === 'wallet.topup'
-          ? new WalletFlowHandler(
-              {
-                previewDiscount: (code) => this.commerce.previewDiscount(code),
-                creditTopUp: (command) => this.wallet.creditTopUp(command),
-              },
-              customer,
-            )
-          : new SupportFlowHandler(this.tickets, customer);
+    const handler = this.customerFlowRegistry(customer).get(session.flowId);
+    if (handler === null) {
+      return false;
+    }
     if (!handler.ownsInput(session, input)) {
       return false;
     }

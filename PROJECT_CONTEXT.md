@@ -1,7 +1,7 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T07:50:21.576Z
-source-fingerprint: 3517ffec5dc80d0f696ce316a79ef0088a99f2088f32fe1fdacc51ff46c193aa
+last-updated: 2026-09-05T07:52:07.380Z
+source-fingerprint: 080570569ddb3040e48d81750abd97f50b86455b5b5ebb76b643451d83029521
 current-phase: durable-interaction-kernel
 next-task: adopt-remaining-operator-input-into-durable-flows
 -->
@@ -492,9 +492,9 @@ Keep entries concise and newest first. This is an operational summary, not a tra
   ticket create/follow-up now use a versioned conversation-session kernel. Ticket bodies stay
   out of session history and are written only with Telegram-update idempotency. ADR 0021 and
   migration `0014` record the durable decision. This remote had no earlier 005 artifacts.
-- Validation: domain unit suite `26`, application `69` including wallet/ticket
-  idempotency, and targeted bot-api `81` covering commerce/wallet/support flows plus
-  bot reconstruction. No production migrate, Telegram send, or PasarGuard mutation.
+- Validation: `pnpm check` gates through architecture plus unit suites: domain `26`,
+  application `69`, PasarGuard `10`, database `2`, bot-api `132`, admin-web `5`
+  (`244` total). No production migrate, Telegram send, or PasarGuard mutation.
 - Next: keep remaining operator input off process-local Maps; apply `0014` only with explicit
   isolated-database authorization.
 

@@ -19,7 +19,7 @@ import {
   type FlowTransition,
 } from './conversation-flow.js';
 
-export interface SupportFlowPorts {
+interface SupportFlowPorts {
   create(command: {
     readonly customer: TelegramCustomerInput;
     readonly body: string;

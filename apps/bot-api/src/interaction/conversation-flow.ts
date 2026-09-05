@@ -9,9 +9,6 @@ import type { ConversationSessionStore } from '@neo-bot/application';
 
 export const FLOW_CANCEL_CALLBACK = 'flow:cancel';
 export const FLOW_SKIP_COUPON_CALLBACK = 'flow:skip-coupon';
-export const WALLET_TOPUP_CALLBACK = 'wallet:topup';
-export const TICKET_NEW_CALLBACK = 'ticket:new';
-export const TICKET_FOLLOW_PREFIX = 'ticket:follow:';
 
 export type ConversationInputKind = 'text' | 'callback';
 

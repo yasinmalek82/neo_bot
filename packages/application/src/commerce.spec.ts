@@ -720,9 +720,11 @@ function createRepository(): CommerceRepository {
     completeTelegramUpdate: vi.fn().mockResolvedValue(undefined),
     failTelegramUpdate: vi.fn().mockResolvedValue(undefined),
     getPendingConversationSession: vi.fn().mockResolvedValue(null),
-    putConversationSession: vi.fn().mockImplementation(async (session: DurableConversationSession) => {
-      return session;
-    }),
+    putConversationSession: vi
+      .fn()
+      .mockImplementation(async (session: DurableConversationSession) => {
+        return session;
+      }),
     finishConversationSession: vi.fn().mockResolvedValue(undefined),
     findDiscountCode: vi.fn().mockResolvedValue(null),
     creditWalletTopUp: vi.fn(),

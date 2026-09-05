@@ -26,7 +26,7 @@ import {
   type FlowTransition,
 } from './conversation-flow.js';
 
-export interface CommerceFlowPorts {
+interface CommerceFlowPorts {
   beginCheckout(command: {
     readonly customer: TelegramCustomerInput;
     readonly productVariantId: string;

@@ -25,7 +25,7 @@ import {
   type FlowTransition,
 } from './conversation-flow.js';
 
-export interface WalletFlowPorts {
+interface WalletFlowPorts {
   previewDiscount(code: string): Promise<string>;
   creditTopUp(command: {
     readonly customer: TelegramCustomerInput;
