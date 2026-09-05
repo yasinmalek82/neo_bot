@@ -1,9 +1,9 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T11:30:09.232Z
-source-fingerprint: aaa57a9b6e70c8c4a700f0fe691bd557f26de7f8437ca4e7945a5a6c06996641
-current-phase: commercial-wave3
-next-task: owner-authorized-isolated-pilot-gates
+last-updated: 2026-09-05T12:04:23.742Z
+source-fingerprint: 3b8db1ee4b1a31f3b1649ce41e2de3a993dad50779f5f8111da04b364a0be867
+current-phase: store-admin-redesign
+next-task: owner-phone-store-tree-validation
 -->
 
 # neo_bot Project Context
@@ -96,6 +96,7 @@ Authoritative decisions are recorded in:
 - `docs/adr/0022-commercial-wave1.md`
 - `docs/adr/0023-commercial-wave2.md`
 - `docs/adr/0024-representative-prepaid-wallet.md`
+- `docs/adr/0025-store-admin-tree-navigation.md`
 
 Create a new ADR before materially changing one of these decisions.
 
@@ -296,7 +297,7 @@ off-host backup restoration or public security.
 | New-user `/start` reporting          | Partial     | First-contact and same-day activity notices were delivered to the new-users topic.                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Renewal customer journey             | Partial     | Renewal now requires a preview and explicit final confirmation; back/menu causes no provider mutation. Failed renewals complete the Telegram update and keep the previous service; live PasarGuard renew remains unconfirmed.                                                                                                                                                                                                                                                                   |
 | Data-driven catalog                  | Implemented | Products and supported selector values are database-driven and atomically published. Variants support free display title/copy plus four ordered presentation attributes while volume, duration, device limit, effective price and provider binding remain typed. Migration `0010` is applied on first-host.                                                                                                                                                                                     |
-| Telegram chat catalog administration | Partial     | Private allowlisted administration remains hierarchical. Menu labels during an open wizard now navigate instead of writing a field; Home leaves the draft resumable. Store hub/wizard/list/picker screens expose Home, and the picker page indicator no longer cancels the session. Phone validation remains separate evidence.                                                                                                                                                                 |
+| Telegram chat catalog administration | Partial     | Private allowlisted administration now uses a compact tree: Category → Product → Plan, with creation scoped to «افزودن اینجا» and root-category creation in «بیشتر». Pending drafts show a publish preview and require explicit CAS confirmation; durable sessions remain resumable. Group health is outside the store hub. Phone validation remains separate evidence. |
 | Customer Mini App catalog UX         | Abandoned   | Not the store. Copy tells the customer to buy in chat.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Customer Mini App checkout           | Abandoned   | `POST /customer/orders` and `POST /customer/renew` return gone. Chat menu button is commands.                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Telegram WebApp customer identity    | Implemented | Retained customer statics validate Telegram `initData`; catalog administrator authorization is numeric allowlist plus private-chat enforcement inside the bot.                                                                                                                                                                                                                                                                                                                                  |
@@ -433,28 +434,23 @@ Status: approved on 2026-08-25 and active after the local checkpoint.
 
 ## Current priority and next task
 
-Current phase: **commercial-wave2**. Wave 1 commercial blockers plus Wave 2 usage sync,
-referral/invite, and admin sales snapshot are in source on `cursor/wave2-commercial-848a`.
-ADR 0022 and ADR 0023. Not deployed.
+Current phase: **store-admin-redesign**. The private Telegram administrator store now has a compact
+Category → Product → Plan tree, scoped «افزودن اینجا» creation, a four-action home, and an explicit
+publish preview/confirm step. ADR 0025 records the decision; ADR 0012 durable sessions and CAS
+publication remain unchanged. This redesign is not deployed.
 
-Next task: owner-authorized isolated-database apply of migrations `0014`+`0015`+`0016`, then
-owner-only live gates (public HTTPS webhook + TLS, prepared PasarGuard group, off-host backups,
-phone smoke of `/start` → shop or trial → receipt → delivery, plus invite and sales-snapshot
-chat checks). Do not treat local unit evidence as phone or production proof. Isolated or live
-PasarGuard mutation remains a separate product-risk decision. Remaining operator/staff
-memory-only Telegram input can return after those gates.
+Next task: after this PR is merged, the owner should validate the tree navigation and one
+publish-confirm flow on a phone against an isolated database. Do not treat local unit/build
+results as phone, production, Telegram, or PasarGuard proof.
 
 Expected sequence:
 
-1. Keep customer purchase naming/coupon, renewal coupon, wallet top-up, ticket, broadcast,
-   ops-settings and referral-setting flows on durable sessions; do not reintroduce process-local
-   Maps for those inputs.
-2. Apply migrations `0014`, `0015` and `0016` only with explicit authorization on an isolated
-   database.
-3. Owner configures trial variant, forced-join channels, reminder thresholds, and referral
-   credit/discount/cap in chat.
-4. Continue Slice 1 local polling smoke and later slices as separately authorized work.
-5. Android/iPhone evidence remains mandatory before customer-facing visual completion.
+1. Keep draft forms resumable and publish only through preview plus explicit CAS confirmation.
+2. Owner reviews category → product → plan creation and customer-view/archive actions in chat.
+3. Run the owner-only live gates separately: HTTPS webhook/TLS, prepared PasarGuard group,
+   off-host backups, and the complete purchase-to-delivery smoke.
+4. Continue commercial-wave follow-up only after those gates; no deploy or live mutation is part
+   of this redesign.
 
 Owner-only remaining gates: public HTTPS webhook URL, live isolated PasarGuard group, TLS host,
 off-host backup storage, phone smoke, seven-day pilot.
@@ -517,6 +513,12 @@ handoff entry.
 ## Handoff log
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
+
+### 2026-09-05 - Store admin tree navigation redesign
+
+- Outcome: shortened the store hub to primary actions, moved catalog navigation to Category → Product → Plan, scoped creation to «افزودن اینجا», moved group health out of the hub, and added explicit publish preview/confirmation. ADR 0025 records the durable IA decision. No deploy.
+- Validation: targeted bot-api store-admin tests and build are recorded below after execution; local evidence is not phone or production proof.
+- Next: owner phone validation of one tree edit and publish-confirm flow after merge.
 
 ### 2026-09-05 - Telegram home hubs and admin receipt-queue copy
 

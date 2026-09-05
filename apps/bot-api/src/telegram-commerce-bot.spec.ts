@@ -162,6 +162,8 @@ describe('TelegramCommerceBot', () => {
     });
     expect(publishSession).not.toHaveBeenCalled();
     await callback(816, 'store:publish');
+    expect(publishSession).not.toHaveBeenCalled();
+    await callback(817, 'store:publish:confirm');
     expect(publishSession).toHaveBeenCalledTimes(1);
   });
 
@@ -269,6 +271,8 @@ describe('TelegramCommerceBot', () => {
       }),
     });
     await callback(910, 'store:publish');
+    expect(publishSession).not.toHaveBeenCalled();
+    await callback(911, 'store:publish:confirm');
     expect(publishSession).toHaveBeenCalledTimes(1);
   });
 
@@ -1011,7 +1015,7 @@ describe('TelegramCommerceBot', () => {
       expect.stringContaining('مدیریت فروشگاه'),
       expect.objectContaining({
         inline_keyboard: expect.arrayContaining([
-          [expect.objectContaining({ callback_data: 'store:create' })],
+          [expect.objectContaining({ callback_data: 'store:list:c:0' })],
         ]),
       }),
       { parseMode: 'HTML' },
@@ -1064,7 +1068,7 @@ describe('TelegramCommerceBot', () => {
       expect.stringContaining('مدیریت فروشگاه'),
       expect.objectContaining({
         inline_keyboard: expect.arrayContaining([
-          [expect.objectContaining({ callback_data: 'store:create' })],
+          [expect.objectContaining({ callback_data: 'store:list:c:0' })],
         ]),
       }),
     );

@@ -1441,23 +1441,25 @@ export class TelegramCommerceBot {
       this.catalogChat.getReadModel(),
       this.catalogChat.getPendingSession(adminId),
     ]);
+    const lines = [
+      '<b>مدیریت فروشگاه</b>',
+      `دسته ${String(model.categories.length)} · محصول ${String(model.products.length)} · پلن ${String(model.variants.length)}`,
+      'از درخت دسته ← محصول ← پلن حرکت کن. انتشار فقط با تأیید صریح است.',
+    ];
+    if (pending !== null) {
+      lines.push('پیش‌نویس باز داری — «انتشار» را بزن یا از «بیشتر» ادامه بده.');
+    }
+    const primary = [
+      { text: 'دسته‌ها', callback_data: 'store:list:c:0' },
+      { text: 'کارت و پرداخت', callback_data: 'store:new:settings' },
+      ...(pending === null ? [] : [{ text: 'انتشار', callback_data: 'store:publish' }]),
+      { text: 'بیشتر', callback_data: 'store:more' },
+    ];
     await this.present(
       target,
-      [
-        '<b>NEO NETWORK — مدیریت فروشگاه</b>',
-        `دسته‌ها: ${String(model.categories.length)} | محصولات: ${String(model.products.length)} | پلن‌ها: ${String(model.variants.length)}`,
-        'یک کار را انتخاب کن. هر تغییر ابتدا پیش‌نمایش می‌شود و فقط با «انتشار نهایی» اعمال می‌شود.',
-      ].join('\n'),
+      lines.join('\n'),
       columnKeyboard([
-        { text: 'دسته‌ها', callback_data: 'store:list:c:0' },
-        { text: 'محصولات', callback_data: 'store:list:p:0' },
-        { text: 'پلن‌ها', callback_data: 'store:list:v:0' },
-        { text: 'ساخت سریع', callback_data: 'store:create' },
-        { text: 'تنظیمات فروش و کارت', callback_data: 'store:new:settings' },
-        { text: 'بایگانی و بازگردانی', callback_data: 'store:list:a:0' },
-        { text: 'سلامت گروه‌ها', callback_data: 'store:groups:0' },
-        { text: 'نمای فروشگاه', callback_data: 'store:preview' },
-        ...(pending === null ? [] : [{ text: 'ادامه فرم باز', callback_data: 'store:resume' }]),
+        ...primary,
         { text: MENU_LABEL.admin, callback_data: ADMIN_HUB_CALLBACK },
         backToMenuButton(),
       ]),
@@ -1486,15 +1488,24 @@ export class TelegramCommerceBot {
       await this.renderStoreSession(target, adminId, session, true);
       return;
     }
-    if (data === 'store:create') {
+    if (data === 'store:create' || data === 'store:more') {
+      const pending = await this.catalogChat.getPendingSession(adminId);
       await this.present(
         target,
-        'مورد جدید را انتخاب کن.',
+        data === 'store:create'
+          ? 'افزودن از سطح فعلی درخت: اول دسته‌ها را باز کن، یا دستهٔ ریشه بساز.'
+          : 'ابزارهای فرعی فروشگاه',
         columnKeyboard([
-          { text: 'دسته + محصول + پلن', callback_data: 'store:new:guided' },
-          { text: 'دسته', callback_data: 'store:new:category' },
-          { text: 'محصول', callback_data: 'store:new:product' },
-          { text: 'پلن', callback_data: 'store:new:variant' },
+          ...(data === 'store:create'
+            ? [{ text: 'افزودن دسته', callback_data: 'store:new:category' }]
+            : [
+                { text: 'بایگانی', callback_data: 'store:list:a:0' },
+                { text: 'نمای مشتری', callback_data: 'store:preview' },
+                ...(pending === null
+                  ? []
+                  : [{ text: 'ادامه فرم باز', callback_data: 'store:resume' }]),
+                { text: 'افزودن دسته ریشه', callback_data: 'store:new:category' },
+              ]),
           { text: 'مدیریت فروشگاه', callback_data: ADMIN_STORE_CALLBACK },
           backToMenuButton(),
         ]),
@@ -1563,6 +1574,24 @@ export class TelegramCommerceBot {
     if (data === 'store:publish') {
       const session = await this.catalogChat.getPendingSession(adminId);
       if (session === null) throw new DomainConflictError('CATALOG_ADMIN_SESSION_NOT_FOUND');
+      await this.present(
+        target,
+        [
+          '<b>پیش‌نمایش انتشار</b>',
+          'تغییرهای پیش‌نویس هنوز روی فروشگاه مشتری اعمال نشده‌اند.',
+          'با تأیید، انتشار با قفل نسخه (CAS) انجام می‌شود.',
+        ].join('\n'),
+        columnKeyboard([
+          { text: 'تأیید انتشار', callback_data: 'store:publish:confirm' },
+          { text: 'انصراف', callback_data: ADMIN_STORE_CALLBACK },
+          backToMenuButton(),
+        ]),
+      );
+      return;
+    }
+    if (data === 'store:publish:confirm') {
+      const session = await this.catalogChat.getPendingSession(adminId);
+      if (session === null) throw new DomainConflictError('CATALOG_ADMIN_SESSION_NOT_FOUND');
       const published = await this.catalogChat.publishSession({
         id: session.id,
         adminTelegramUserId: adminId,
@@ -1607,6 +1636,40 @@ export class TelegramCommerceBot {
     }
     if (data === 'store:new:variant') {
       await this.startStoreVariant(target, adminId);
+      return;
+    }
+    if (/^store:add:p:\d+$/u.test(data)) {
+      const categoryId = data.slice('store:add:p:'.length);
+      const category = (await this.catalogChat.getReadModel()).categories.find(
+        (item) => item.id === categoryId,
+      );
+      if (category === undefined) throw new DomainConflictError('CATEGORY_NOT_FOUND');
+      await this.startStoreSession(target, adminId, {
+        kind: 'product',
+        step: 'product-fields',
+        field: 'select',
+        mode: 'edit',
+        values: { code: generatedCatalogCode('prd'), categoryCode: category.code },
+      });
+      return;
+    }
+    if (/^store:add:v:\d+$/u.test(data)) {
+      const productId = data.slice('store:add:v:'.length);
+      const product = (await this.catalogChat.getReadModel()).products.find(
+        (item) => item.id === productId,
+      );
+      if (product === undefined) throw new DomainConflictError('PRODUCT_NOT_FOUND');
+      await this.present(
+        target,
+        `پلن جدید برای «${escapeHtml(product.name)}»`,
+        columnKeyboard([
+          { text: 'حجمی', callback_data: `store:template:volume:${product.id}` },
+          { text: 'نامحدود', callback_data: `store:template:unlimited:${product.id}` },
+          { text: 'مولتی‌کانکشن', callback_data: `store:template:multi:${product.id}` },
+          { text: 'سفارشی', callback_data: `store:template:custom:${product.id}` },
+          { text: 'لغو', callback_data: 'store:cancel' },
+        ]),
+      );
       return;
     }
     if (data === 'store:new:settings') {
@@ -1809,7 +1872,7 @@ export class TelegramCommerceBot {
         ? await this.storeReviewText(state)
         : `${this.storePrompt(state)}${resumed ? '\n\nفرم ذخیره‌شده ادامه دارد.' : ''}`,
       state.kind === 'review'
-        ? storeWizardKeyboard([{ text: 'انتشار نهایی', callback_data: 'store:publish' }])
+        ? storeWizardKeyboard([{ text: 'انتشار', callback_data: 'store:publish' }])
         : storeWizardKeyboard(),
     );
   }
@@ -2493,18 +2556,42 @@ export class TelegramCommerceBot {
     if (row === undefined) throw new DomainConflictError('CATALOG_ENTITY_NOT_FOUND');
     const active = 'sellable' in row ? row.active && row.sellable : row.active;
     const action = active ? 'archive' : 'restore';
-    const children =
+    const childRows =
       kind === 'c'
-        ? model.products.filter((item) => item.categoryId === row.id).length
+        ? model.products.filter((item) => item.categoryId === row.id)
         : kind === 'p'
-          ? model.variants.filter((item) => item.productId === row.id).length
-          : 0;
-    const text = `<b>${escapeHtml(row.name)}</b>\nوضعیت: ${active ? 'فعال' : 'بایگانی'}${kind === 'c' ? `\nمحصول‌های زیرمجموعه: ${String(children)}` : kind === 'p' ? `\nپلن‌های زیرمجموعه: ${String(children)}` : ''}`;
+          ? model.variants.filter((item) => item.productId === row.id)
+          : [];
+    const text = `<b>${escapeHtml(row.name)}</b>\nوضعیت: ${active ? 'فعال' : 'بایگانی'}${kind === 'c' ? `\nمحصول‌ها: ${String(childRows.length)}` : kind === 'p' ? `\nپلن‌ها: ${String(childRows.length)}` : ''}`;
     const variantNeedsSaleEnable = kind === 'v' && 'sellable' in row && row.active && !row.sellable;
+    const childButtons = childRows.slice(0, 8).map((child) => ({
+      text: buttonLabel(child.name),
+      callback_data: `store:detail:${kind === 'c' ? 'p' : 'v'}:${child.id}`,
+    }));
+    const addHere =
+      kind === 'c'
+        ? [{ text: 'افزودن اینجا', callback_data: `store:add:p:${row.id}` }]
+        : kind === 'p'
+          ? [{ text: 'افزودن اینجا', callback_data: `store:add:v:${row.id}` }]
+          : [];
+    const back =
+      kind === 'c'
+        ? { text: 'بازگشت', callback_data: 'store:list:c:0' }
+        : kind === 'p'
+          ? {
+              text: 'بازگشت',
+              callback_data: `store:detail:c:${'categoryId' in row ? row.categoryId : '0'}`,
+            }
+          : {
+              text: 'بازگشت',
+              callback_data: `store:detail:p:${'productId' in row ? row.productId : '0'}`,
+            };
     await this.present(
       target,
       text,
       columnKeyboard([
+        ...childButtons,
+        ...addHere,
         ...(variantNeedsSaleEnable
           ? [{ text: 'فعال‌سازی فروش', callback_data: `store:enable:v:${row.id}` }]
           : [
@@ -2514,10 +2601,11 @@ export class TelegramCommerceBot {
               },
             ]),
         { text: 'ویرایش', callback_data: `store:edit:${kind}:${row.id}` },
-        { text: 'پیش‌نمایش مشتری', callback_data: `store:customer:${kind}:${row.id}` },
-        { text: 'جابجایی به بالا', callback_data: `store:move:${kind}:${row.id}:up` },
-        { text: 'جابجایی به پایین', callback_data: `store:move:${kind}:${row.id}:down` },
-        { text: 'بازگشت', callback_data: `store:list:${kind}:0` },
+        { text: 'نمای مشتری', callback_data: `store:customer:${kind}:${row.id}` },
+        { text: 'بالا', callback_data: `store:move:${kind}:${row.id}:up` },
+        { text: 'پایین', callback_data: `store:move:${kind}:${row.id}:down` },
+        back,
+        { text: 'مدیریت فروشگاه', callback_data: ADMIN_STORE_CALLBACK },
       ]),
     );
   }
