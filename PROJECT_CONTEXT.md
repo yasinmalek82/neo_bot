@@ -1,7 +1,7 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T11:08:25.419Z
-source-fingerprint: b9939e6b4a1b8dfcd9de2122192ded2d93f849cf98a8e2c3211311d4819d05e7
+last-updated: 2026-09-05T11:25:48.978Z
+source-fingerprint: 42c982c4452e2a400a5c6a7d5e8b6aa0a78e4520fed1ef85e0f9cbd37742597e
 current-phase: commercial-wave3
 next-task: owner-authorized-isolated-pilot-gates
 -->
