@@ -12,6 +12,8 @@ import {
   guideInlineKeyboard,
   guideText,
   homeReplyKeyboard,
+  ordersWalletHubKeyboard,
+  guideSupportHubKeyboard,
   homeText,
   matchMenuAction,
   MENU_LABEL,
@@ -158,13 +160,8 @@ describe('telegram menu copy', () => {
     expect(matchMenuAction('مدیریت فروشگاه')).toBe('store');
     expect(homeReplyKeyboard(true)).toEqual({
       keyboard: [
-        [{ text: 'خرید سریع 🛍' }],
-        [{ text: 'سرویس‌های من 📡' }],
-        [{ text: 'راهنمای انتخاب 🧭' }],
-        [{ text: 'پیگیری سفارش 📦' }, { text: 'تمدید سرویس ♻️' }],
-        [{ text: 'شارژ کیف پول 💳' }, { text: 'تیکت پشتیبانی 🎫' }],
-        [{ text: 'دعوت دوستان 🎁' }],
-        [{ text: 'راهنما 📘' }],
+        [{ text: 'خرید سریع 🛍' }, { text: 'سرویس‌های من 📡' }],
+        [{ text: 'سفارش و کیف پول 💼' }, { text: 'راهنما و پشتیبانی 💬' }],
         [{ text: 'منوی اصلی 🏠' }],
         [{ text: 'بخش ادمین 👨‍💻' }],
       ],
@@ -172,6 +169,35 @@ describe('telegram menu copy', () => {
       is_persistent: true,
       input_field_placeholder: 'از دکمه‌های پایین انتخاب کن',
     });
+    expect(homeReplyKeyboard(false, { trialEligible: true }).keyboard).toEqual([
+      [{ text: 'خرید سریع 🛍' }, { text: 'سرویس‌های من 📡' }],
+      [{ text: 'سرویس تست 🎁' }],
+      [{ text: 'سفارش و کیف پول 💼' }, { text: 'راهنما و پشتیبانی 💬' }],
+      [{ text: 'منوی اصلی 🏠' }],
+    ]);
+    expect(ordersWalletHubKeyboard()).toEqual({
+      inline_keyboard: [
+        [
+          { text: 'پیگیری سفارش 📦', callback_data: 'order' },
+          { text: 'تمدید سرویس ♻️', callback_data: 'renew' },
+        ],
+        [{ text: 'شارژ کیف پول 💳', callback_data: 'wallet:topup' }],
+        [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
+      ],
+    });
+    expect(guideSupportHubKeyboard()).toEqual({
+      inline_keyboard: [
+        [{ text: 'راهنمای انتخاب 🧭', callback_data: 'guide' }],
+        [{ text: 'راهنما 📘', callback_data: 'help' }],
+        [{ text: 'تیکت پشتیبانی 🎫', callback_data: 'ticket:new' }],
+        [{ text: 'دعوت دوستان 🤝', callback_data: 'invite' }],
+        [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
+      ],
+    });
+    expect(matchMenuAction(MENU_LABEL.ordersWallet)).toBe('orders-wallet');
+    expect(matchMenuAction(MENU_LABEL.guideSupport)).toBe('guide-support');
+    expect(matchMenuAction(MENU_LABEL.queue)).toBe('queue');
+    expect(matchMenuAction('سفارش‌های باز')).toBe('queue');
     expect(adminReportsKeyboard(true)).toEqual({
       inline_keyboard: [
         [{ text: 'ارسال خلاصه امروز', callback_data: 'admin:summary' }],
@@ -185,13 +211,17 @@ describe('telegram menu copy', () => {
         [{ text: 'وضعیت سیستم ⚙️', callback_data: 'admin:status' }],
         [
           { text: 'گزارش‌ها 📣', callback_data: 'admin:reports' },
-          { text: 'سفارش‌های باز 📋', callback_data: 'admin:queue' },
+          { text: 'صف رسید 📋', callback_data: 'admin:queue' },
+        ],
+        [
+          { text: 'ساخت ناموفق ⚠️', callback_data: 'admin:failed' },
+          { text: 'سلامت کاتالوگ 🗂️', callback_data: 'admin:catalog' },
         ],
         [{ text: 'مدیریت فروشگاه 🏪', callback_data: 'admin:store' }],
-        [{ text: 'ساخت ناموفق ⚠️', callback_data: 'admin:failed' }],
-        [{ text: 'سلامت کاتالوگ 🗂️', callback_data: 'admin:catalog' }],
-        [{ text: 'تنظیمات تجاری 🛠', callback_data: 'admin:ops' }],
-        [{ text: 'خلاصه فروش 📊', callback_data: 'admin:sales' }],
+        [
+          { text: 'تنظیمات تجاری 🛠', callback_data: 'admin:ops' },
+          { text: 'خلاصه فروش 📊', callback_data: 'admin:sales' },
+        ],
         [{ text: 'پیام همگانی 📢', callback_data: 'admin:broadcast' }],
         [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
       ],

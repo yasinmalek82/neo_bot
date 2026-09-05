@@ -366,13 +366,8 @@ describe('TelegramCommerceBot', () => {
       expect.stringContaining('NEO NETWORK'),
       expect.objectContaining({
         keyboard: [
-          [{ text: 'خرید سریع 🛍' }],
-          [{ text: 'سرویس‌های من 📡' }],
-          [{ text: 'راهنمای انتخاب 🧭' }],
-          [{ text: 'پیگیری سفارش 📦' }, { text: 'تمدید سرویس ♻️' }],
-          [{ text: 'شارژ کیف پول 💳' }, { text: 'تیکت پشتیبانی 🎫' }],
-          [{ text: 'دعوت دوستان 🎁' }],
-          [{ text: 'راهنما 📘' }],
+          [{ text: 'خرید سریع 🛍' }, { text: 'سرویس‌های من 📡' }],
+          [{ text: 'سفارش و کیف پول 💼' }, { text: 'راهنما و پشتیبانی 💬' }],
           [{ text: 'منوی اصلی 🏠' }],
         ],
         resize_keyboard: true,
@@ -1457,7 +1452,7 @@ describe('TelegramCommerceBot', () => {
     expect(messenger.editMessageText).toHaveBeenCalledWith(
       '70001',
       '11',
-      expect.stringContaining('سفارش‌های باز'),
+      expect.stringContaining('صف رسید'),
       expect.objectContaining({
         inline_keyboard: [
           [expect.objectContaining({ callback_data: 'admin:order:3' })],

@@ -35,6 +35,8 @@ export const ADMIN_SALES_CALLBACK = 'admin:sales';
 export const ADMIN_BROADCAST_CALLBACK = 'admin:broadcast';
 export const ADMIN_BROADCAST_CANCEL_PREFIX = 'admin:broadcast:cancel:';
 export const INVITE_CALLBACK = 'invite';
+export const ORDERS_WALLET_CALLBACK = 'hub:orders-wallet';
+export const GUIDE_SUPPORT_CALLBACK = 'hub:guide-support';
 
 export const MENU_LABEL = {
   home: 'منوی اصلی 🏠',
@@ -46,11 +48,13 @@ export const MENU_LABEL = {
   ticket: 'تیکت پشتیبانی 🎫',
   trial: 'سرویس تست 🎁',
   services: 'سرویس‌های من 📡',
-  invite: 'دعوت دوستان 🎁',
+  invite: 'دعوت دوستان 🤝',
   help: 'راهنما 📘',
+  ordersWallet: 'سفارش و کیف پول 💼',
+  guideSupport: 'راهنما و پشتیبانی 💬',
   status: 'وضعیت سیستم ⚙️',
   reports: 'گزارش‌ها 📣',
-  queue: 'سفارش‌های باز 📋',
+  queue: 'صف رسید 📋',
   failed: 'ساخت ناموفق ⚠️',
   catalog: 'سلامت کاتالوگ 🗂️',
   store: 'مدیریت فروشگاه 🏪',
@@ -69,6 +73,8 @@ export type MenuAction =
   | 'services'
   | 'invite'
   | 'help'
+  | 'orders-wallet'
+  | 'guide-support'
   | 'status'
   | 'reports'
   | 'queue'
@@ -144,6 +150,12 @@ export function matchMenuAction(text: string): MenuAction | null {
   ) {
     return 'shop';
   }
+  if (normalized === MENU_LABEL.ordersWallet || normalized === 'سفارش و کیف پول') {
+    return 'orders-wallet';
+  }
+  if (normalized === MENU_LABEL.guideSupport || normalized === 'راهنما و پشتیبانی') {
+    return 'guide-support';
+  }
   if (normalized === MENU_LABEL.guide || normalized === 'راهنمای انتخاب') {
     return 'guide';
   }
@@ -181,7 +193,11 @@ export function matchMenuAction(text: string): MenuAction | null {
   if (normalized === MENU_LABEL.services || normalized === 'سرویس‌های من') {
     return 'services';
   }
-  if (normalized === MENU_LABEL.invite || normalized === 'دعوت دوستان') {
+  if (
+    normalized === MENU_LABEL.invite ||
+    normalized === 'دعوت دوستان' ||
+    normalized === 'دعوت دوستان 🎁'
+  ) {
     return 'invite';
   }
   if (
@@ -198,7 +214,11 @@ export function matchMenuAction(text: string): MenuAction | null {
   if (normalized === MENU_LABEL.reports || normalized === 'گزارش‌ها') {
     return 'reports';
   }
-  if (normalized === MENU_LABEL.queue || normalized === 'سفارش‌های باز') {
+  if (
+    normalized === MENU_LABEL.queue ||
+    normalized === 'صف رسید' ||
+    normalized === 'سفارش‌های باز'
+  ) {
     return 'queue';
   }
   if (normalized === MENU_LABEL.admin || normalized === 'بخش ادمین') {
@@ -215,13 +235,16 @@ export function homeText(isAdmin: boolean): string {
     '<b>NEO NETWORK</b>',
     '<i>PRIVATE ACCESS</i>',
     '',
-    'خرید سریع، پرداخت و ارسال رسید همه در همین گفتگو است.',
-    'شارژ کیف پول، سرویس‌های من و تیکت پشتیبانی از دکمه‌های پایین در دسترس است.',
+    'خرید، سرویس‌ها، سفارش، کیف پول و پشتیبانی از همین گفتگو در دسترس است.',
+    'برای سفارش و کیف پول یا راهنما و پشتیبانی، همان دو دکمهٔ هاب را بزن.',
     '',
     'دکمه‌های پایین صفحه را لمس کن؛ لازم نیست دستوری تایپ کنی.',
   ];
   if (isAdmin) {
-    lines.push('', 'برای وضعیت سیستم، گزارش‌ها، صف رسید و مدیریت فروشگاه، «بخش ادمین» را بزن.');
+    lines.push(
+      '',
+      'صف رسید، تنظیمات تجاری، خلاصه فروش، پیام همگانی و مدیریت فروشگاه در «بخش ادمین» است.',
+    );
   }
   return lines.join('\n');
 }
@@ -230,17 +253,17 @@ export function homeReplyKeyboard(
   isAdmin: boolean,
   extras: { readonly trialEligible?: boolean } = {},
 ): TelegramPersistentKeyboardMarkup {
-  const rows: TelegramReplyKeyboardButton[][] = [[{ text: buttonLabel(MENU_LABEL.shop) }]];
+  const rows: TelegramReplyKeyboardButton[][] = [
+    [{ text: buttonLabel(MENU_LABEL.shop) }, { text: buttonLabel(MENU_LABEL.services) }],
+  ];
   if (extras.trialEligible === true) {
     rows.push([{ text: buttonLabel(MENU_LABEL.trial) }]);
   }
   rows.push(
-    [{ text: buttonLabel(MENU_LABEL.services) }],
-    [{ text: buttonLabel(MENU_LABEL.guide) }],
-    [{ text: buttonLabel(MENU_LABEL.order) }, { text: buttonLabel(MENU_LABEL.renew) }],
-    [{ text: buttonLabel(MENU_LABEL.wallet) }, { text: buttonLabel(MENU_LABEL.ticket) }],
-    [{ text: buttonLabel(MENU_LABEL.invite) }],
-    [{ text: buttonLabel(MENU_LABEL.help) }],
+    [
+      { text: buttonLabel(MENU_LABEL.ordersWallet) },
+      { text: buttonLabel(MENU_LABEL.guideSupport) },
+    ],
     [{ text: buttonLabel(MENU_LABEL.home) }],
   );
   if (isAdmin) {
@@ -256,6 +279,41 @@ export function homeReplyKeyboard(
 
 export function shopText(): string {
   return ['<b>خرید سریع</b>', 'یک دسته انتخاب کن تا پلن‌ها و قیمت هر پلن را ببینی.'].join('\n');
+}
+
+export function ordersWalletHubText(): string {
+  return [
+    '<b>سفارش و کیف پول</b>',
+    'وضعیت سفارش، تمدید سرویس یا شارژ کیف پول را از اینجا ادامه بده.',
+  ].join('\n');
+}
+
+export function ordersWalletHubKeyboard(): TelegramInlineKeyboardMarkup {
+  return inlineMenu([
+    [
+      { text: MENU_LABEL.order, callback_data: ORDER_CALLBACK },
+      { text: MENU_LABEL.renew, callback_data: RENEW_CALLBACK },
+    ],
+    [{ text: MENU_LABEL.wallet, callback_data: WALLET_TOPUP_CALLBACK }],
+    backToMenuButton(),
+  ]);
+}
+
+export function guideSupportHubText(): string {
+  return [
+    '<b>راهنما و پشتیبانی</b>',
+    'برای انتخاب پلن، آموزش، تیکت یا دعوت دوستان یکی از گزینه‌ها را بزن.',
+  ].join('\n');
+}
+
+export function guideSupportHubKeyboard(): TelegramInlineKeyboardMarkup {
+  return inlineMenu([
+    [{ text: MENU_LABEL.guide, callback_data: GUIDE_CALLBACK }],
+    [{ text: MENU_LABEL.help, callback_data: HELP_CALLBACK }],
+    [{ text: MENU_LABEL.ticket, callback_data: TICKET_NEW_CALLBACK }],
+    [{ text: MENU_LABEL.invite, callback_data: INVITE_CALLBACK }],
+    backToMenuButton(),
+  ]);
 }
 
 export function homeReturnText(): string {
@@ -798,10 +856,10 @@ export function dailySummaryQueuedText(created: boolean): string {
 export function adminHubText(): string {
   return [
     '<b>NEO NETWORK — بخش ادمین</b>',
-    'مدیریت فروشگاه، تنظیمات پرداخت، گزارش‌ها و صف رسید از همین چت خصوصی انجام می‌شود.',
-    'مدیریت فروشگاه مسیر واحد ساخت، ویرایش، بایگانی و انتشار دسته و پلن است.',
+    'عملیات روزانه: وضعیت، گزارش‌ها، صف رسید و ساخت ناموفق.',
+    'فروشگاه: مدیریت فروشگاه و سلامت کاتالوگ.',
+    'تجاری: تنظیمات تجاری، خلاصه فروش و پیام همگانی.',
     'رسیدها با عکس در چت خصوصی می‌آیند؛ تأیید و رد روی همان پیام است.',
-    'اطلاعات حساس کارت فقط هنگام ورود نمایش داده نمی‌شود و پیش‌نمایش آن ماسک است.',
   ].join('\n');
 }
 
@@ -812,11 +870,15 @@ export function adminHubKeyboard(): TelegramInlineKeyboardMarkup {
       { text: MENU_LABEL.reports, callback_data: ADMIN_REPORTS_CALLBACK },
       { text: MENU_LABEL.queue, callback_data: ADMIN_QUEUE_CALLBACK },
     ],
+    [
+      { text: MENU_LABEL.failed, callback_data: ADMIN_FAILED_CALLBACK },
+      { text: MENU_LABEL.catalog, callback_data: ADMIN_CATALOG_CALLBACK },
+    ],
     { text: MENU_LABEL.store, callback_data: ADMIN_STORE_CALLBACK },
-    { text: MENU_LABEL.failed, callback_data: ADMIN_FAILED_CALLBACK },
-    { text: MENU_LABEL.catalog, callback_data: ADMIN_CATALOG_CALLBACK },
-    { text: 'تنظیمات تجاری 🛠', callback_data: ADMIN_OPS_CALLBACK },
-    { text: 'خلاصه فروش 📊', callback_data: ADMIN_SALES_CALLBACK },
+    [
+      { text: 'تنظیمات تجاری 🛠', callback_data: ADMIN_OPS_CALLBACK },
+      { text: 'خلاصه فروش 📊', callback_data: ADMIN_SALES_CALLBACK },
+    ],
     { text: 'پیام همگانی 📢', callback_data: ADMIN_BROADCAST_CALLBACK },
     backToMenuButton(),
   ]);
@@ -824,9 +886,9 @@ export function adminHubKeyboard(): TelegramInlineKeyboardMarkup {
 
 export function adminQueueText(orders: readonly SalesOrder[]): string {
   if (orders.length === 0) {
-    return ['<b>سفارش باز نیست</b>', 'رسید تازه‌ای در صف بررسی نیست.'].join('\n');
+    return ['<b>صف رسید خالی است</b>', 'رسید تازه‌ای در صف بررسی نیست.'].join('\n');
   }
-  return ['<b>سفارش‌های باز</b>', 'یکی را برای بررسی انتخاب کن.'].join('\n');
+  return ['<b>صف رسید</b>', 'یکی را برای بررسی انتخاب کن.'].join('\n');
 }
 
 export function adminQueueKeyboard(orders: readonly SalesOrder[]): TelegramInlineKeyboardMarkup {
