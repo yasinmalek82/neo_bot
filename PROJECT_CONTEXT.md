@@ -1,6 +1,6 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T07:56:53.520Z
+last-updated: 2026-09-05T07:58:07.520Z
 source-fingerprint: 2c91d658a00b4e1f98768d07ef79d6a3c5d5f8418e9b2f39ade7c3f46b7213d1
 current-phase: durable-interaction-kernel
 next-task: adopt-remaining-operator-input-into-durable-flows
@@ -496,8 +496,9 @@ Keep entries concise and newest first. This is an operational summary, not a tra
   task is unchanged.
 - Validation: local `pnpm why fast-uri` shows only the patched versions; local
   `pnpm audit --audit-level=high` exits `0` with three remaining moderate findings.
-  Full `pnpm check` is being re-run after this stamp. No production migrate, Telegram
-  send, or PasarGuard mutation.
+  `pnpm check` still passes: domain `26`, application `69`, PasarGuard `10`,
+  database `2`, bot-api `132`, admin-web `5` (`244` total). No production migrate,
+  Telegram send, or PasarGuard mutation.
 - Next: keep remaining operator input off process-local Maps; apply `0014` only with
   explicit isolated-database authorization.
 
