@@ -12,21 +12,15 @@ chat or GitHub issues.
 2. Keep the BotFather token and your numeric Telegram user id ready to type **on the server**.
 3. Optional: a private Telegram group with Topics enabled, bot added as admin with Manage Topics.
 4. Ubuntu 22.04/24.04-style VPS with Git, curl, Docker, and Docker Compose v2. Node/pnpm are
-   optional; static apps can build in a Node image. The menu can install the host packages on
+   optional; static apps can build in a Node image. Package installation needs root; use root or sudo. The menu can install host packages on
    Ubuntu/Debian if you type `yes`.
 
 ## One-line install
 
-After merge to `main`:
+The supported one-liner is:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/yasinmalek82/neo_bot/main/deploy/neo-install.sh)
-```
-
-Until that merge, pin the installer branch:
-
-```bash
-NEO_BOT_REF=cursor/vps-installer-menu-59e1 bash <(curl -fsSL https://raw.githubusercontent.com/yasinmalek82/neo_bot/cursor/vps-installer-menu-59e1/deploy/neo-install.sh)
 ```
 
 From an existing checkout:
@@ -37,15 +31,15 @@ cd neo_bot
 bash deploy/neo-install.sh
 ```
 
-`deploy/neo-install.sh` clones or updates the repo (default `/opt/neo_bot` as root, otherwise
-`$HOME/neo_bot`, override with `NEO_BOT_DIR`) and opens the persistent menu. Re-open it later with
+`deploy/neo-install.sh` clones the repo when needed (default `/opt/neo_bot` as root, otherwise
+`$HOME/neo_bot`, override with `NEO_BOT_DIR`) and opens the persistent menu. Re-running the one-liner reuses the checkout and opens the menu; menu option 2 fetches updates, rebuilds, and restarts. Re-open it later with
 `bash deploy/neo`, `bash deploy/menu.sh`, or `neo` if `/usr/local/bin/neo` was linked.
 
 `bash deploy/install.sh` still performs first setup only.
 
 ## Menu
 
-1. Install / first setup
+1. Install / first setup (re-run = keep checkout, open menu)
 2. Update from git (fetch + fast-forward, rebuild, restart; asks for `yes`)
 3. Change settings (token, admins, hostname, PasarGuard, env-backed commercial flags)
 4. Start / stop / restart / status / logs
@@ -63,12 +57,12 @@ The install option asks for:
   edit host `.env` from the settings menu)
 - optional public bot username
 
-It writes a gitignored `.env`, keeps `PILOT_ENABLED=false` and `PROVISIONING_MODE=disabled`, builds
+It writes a gitignored `.env`, keeps `PILOT_ENABLED=false` and `PROVISIONING_MODE=disabled`, leaves `TELEGRAM_WEBHOOK_URL` empty until loopback and public HTTPS health pass, then enables it and restarts `bot-api`, and builds
 customer static assets, then starts `docker-compose.production.yml` (Postgres unpublished, API on
 loopback, Caddy on 80/443 with automatic HTTPS). A second run detects `.env` and offers keep versus
 reconfigure. Reconfigure keeps the existing database password and webhook secret.
 
-When HTTPS answers, restart `bot-api` from menu option 4 so the webhook is registered.
+The installer enables the webhook only after loopback and public HTTPS health pass; use menu option 4 to restart `bot-api` manually after later hostname changes.
 
 Then in Telegram tap `/start`. The customer store is the chat. Use «مدیریت فروشگاه» only from the
 private administrator chat to publish catalog changes.

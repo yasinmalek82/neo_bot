@@ -1,7 +1,7 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T10:51:00.537Z
-source-fingerprint: 4e5e6128e5fd3ee40fc9c9fb87bd2b08f9b96ec9f1f9b027500b71c78089e481
+last-updated: 2026-09-05T10:58:29.573Z
+source-fingerprint: 90a7f53b69b46ea8831f85701956c0cea7435171d66a3f542fd1615aac92a335
 current-phase: commercial-wave2
 next-task: owner-authorized-isolated-pilot-gates
 -->
@@ -106,7 +106,7 @@ Wave 1 commercial-pilot baseline. ADR 0023 and migration `0016` record the durab
 A Mirza-style one-line host installer and interactive menu landed on
 `cursor/vps-installer-menu-59e1` (`deploy/neo-install.sh`, `deploy/neo`, evolved
 `deploy/install.sh`). Local `pnpm check` is green on this branch, including `pnpm test:deploy-cli`
-and shellcheck. This agent did not install on a VPS. Isolated/live evidence is unchanged. Isolated local Slice 1 runtime and first-host evidence
+and shellcheck. Installer hardening landed on `ops/install-harden-vps` (PR #9): safer reconfigure, webhook setup after HTTPS, health failures are nonzero, bilingual prompts, backup `umask`, and a docs one-liner. This agent did not install on a VPS. Isolated/live evidence is unchanged. Isolated local Slice 1 runtime and first-host evidence
 remain unchanged historical records, not a new live check. Feature `004-telegram-home-concept`
 artifacts are not on this remote; the visual baseline used was ADR 0013 ReplyKeyboard home plus
 the existing `telegram-menu` mixed layout.
