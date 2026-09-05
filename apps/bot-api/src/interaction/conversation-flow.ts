@@ -36,6 +36,8 @@ const CUSTOMER_NAVIGATION_CALLBACKS = new Set([
   'trial',
   'services',
   'join:refresh',
+  'hub:orders-wallet',
+  'hub:guide-support',
 ]);
 
 export type ConversationInputKind = 'text' | 'callback';

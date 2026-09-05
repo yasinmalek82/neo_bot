@@ -94,6 +94,12 @@ import {
   ADMIN_BROADCAST_CALLBACK,
   ADMIN_BROADCAST_CANCEL_PREFIX,
   INVITE_CALLBACK,
+  ORDERS_WALLET_CALLBACK,
+  GUIDE_SUPPORT_CALLBACK,
+  ordersWalletHubText,
+  ordersWalletHubKeyboard,
+  guideSupportHubText,
+  guideSupportHubKeyboard,
   trialOfferText,
   trialAlreadyClaimedText,
   trialUnavailableText,
@@ -770,6 +776,10 @@ export class TelegramCommerceBot {
         await this.routeAction('trial', target, customer, false);
       } else if (data === SERVICES_CALLBACK) {
         await this.routeAction('services', target, customer, false);
+      } else if (data === ORDERS_WALLET_CALLBACK) {
+        await this.routeAction('orders-wallet', target, customer, false);
+      } else if (data === GUIDE_SUPPORT_CALLBACK) {
+        await this.routeAction('guide-support', target, customer, false);
       } else if (data === INVITE_CALLBACK) {
         await this.routeAction('invite', target, customer, false);
       } else if (data === JOIN_REFRESH_CALLBACK) {
@@ -1026,6 +1036,12 @@ export class TelegramCommerceBot {
         return;
       case 'invite':
         await this.showInvite(target, customer);
+        return;
+      case 'orders-wallet':
+        await this.present(target, ordersWalletHubText(), ordersWalletHubKeyboard());
+        return;
+      case 'guide-support':
+        await this.present(target, guideSupportHubText(), guideSupportHubKeyboard());
         return;
       case 'guide':
         await this.present(target, guideText(), guideInlineKeyboard());
