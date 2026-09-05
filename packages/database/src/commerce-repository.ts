@@ -1,19 +1,25 @@
 import {
   DomainConflictError,
   isRepresentativePricingSource,
+  parseDurableConversationSession,
   resolveRepresentativePrice,
   validateServiceUsernameBase,
   type CatalogCategory,
   type ClaimedDeliveryJob,
+  type ConversationSessionStatus,
   type CustomerDeliveryJob,
+  type DurableConversationSession,
   type PaymentProofMediaKind,
   type RepresentativeProfile,
   type RepresentativePricingSource,
   type SalesOrder,
   type SellableProductVariant,
+  type SupportTicket,
+  type SupportTicketWriteResult,
   type TelegramCustomer,
   type TelegramCustomerInput,
   type TelegramPaymentProof,
+  type WalletLedgerEntry,
 } from '@neo-bot/domain';
 import type { CommerceRepository } from '@neo-bot/application';
 import type { Pool, PoolClient } from 'pg';
@@ -113,6 +119,37 @@ interface DeliveryJobClaimRow {
   attempt_count: number;
   claim_version: string;
   telegram_message_id: string | null;
+}
+
+interface ConversationSessionRow {
+  id: string;
+  telegram_user_id: string;
+  flow_id: string;
+  step: string;
+  schema_version: number;
+  payload: unknown;
+  status: string;
+  created_at: Date;
+  updated_at: Date;
+  expires_at: Date;
+}
+
+interface WalletLedgerRow {
+  id: string;
+  customer_id: string;
+  amount_irr: string;
+  kind: WalletLedgerEntry['kind'];
+  idempotency_key: string;
+  discount_code: string | null;
+  created_at: Date;
+}
+
+interface SupportTicketRow {
+  id: string;
+  customer_id: string;
+  status: SupportTicket['status'];
+  created_at: Date;
+  updated_at: Date;
 }
 
 export class PostgresCommerceRepository implements CommerceRepository {
@@ -983,6 +1020,205 @@ export class PostgresCommerceRepository implements CommerceRepository {
     );
   }
 
+  public async getPendingConversationSession(
+    telegramUserId: string,
+  ): Promise<DurableConversationSession | null> {
+    const result = await this.pool.query<ConversationSessionRow>(
+      conversationSessionQuery('telegram_user_id = $1::bigint and status = $2'),
+      [telegramUserId, 'pending'],
+    );
+    const row = result.rows[0];
+    return row === undefined ? null : mapConversationSession(row);
+  }
+
+  public putConversationSession(
+    session: DurableConversationSession,
+  ): Promise<DurableConversationSession> {
+    const parsed = parseDurableConversationSession(session);
+    return this.withTransaction(async (client) => {
+      await client.query(
+        `update conversation_sessions
+         set status = 'canceled', updated_at = $2, consumed_at = $2
+         where telegram_user_id = $1::bigint and status = 'pending' and id <> $3`,
+        [parsed.telegramUserId, parsed.updatedAt, parsed.id],
+      );
+      await client.query(
+        `insert into conversation_sessions(
+           id, telegram_user_id, flow_id, step, schema_version, payload, status,
+           created_at, updated_at, expires_at
+         ) values ($1, $2::bigint, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
+         on conflict (id) do update set
+           flow_id = excluded.flow_id,
+           step = excluded.step,
+           schema_version = excluded.schema_version,
+           payload = excluded.payload,
+           status = excluded.status,
+           updated_at = excluded.updated_at,
+           expires_at = excluded.expires_at,
+           consumed_at = null`,
+        [
+          parsed.id,
+          parsed.telegramUserId,
+          parsed.flowId,
+          parsed.step,
+          parsed.schemaVersion,
+          JSON.stringify(parsed.payload),
+          parsed.status,
+          parsed.createdAt,
+          parsed.updatedAt,
+          parsed.expiresAt,
+        ],
+      );
+      return parsed;
+    });
+  }
+
+  public async finishConversationSession(input: {
+    readonly id: string;
+    readonly telegramUserId: string;
+    readonly status: Exclude<ConversationSessionStatus, 'pending'>;
+    readonly now: Date;
+  }): Promise<void> {
+    await this.pool.query(
+      `update conversation_sessions
+       set status = $3, updated_at = $4, consumed_at = $4
+       where id = $1 and telegram_user_id = $2::bigint and status = 'pending'`,
+      [input.id, input.telegramUserId, input.status, input.now],
+    );
+  }
+
+  public async findDiscountCode(code: string): Promise<{ readonly code: string } | null> {
+    const result = await this.pool.query<{ code: string }>(
+      `select code from discount_codes where code = $1 and active = true`,
+      [code],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  public creditWalletTopUp(input: {
+    readonly customerId: string;
+    readonly amountIrr: bigint;
+    readonly idempotencyKey: string;
+    readonly discountCode?: string;
+  }): Promise<WalletLedgerEntry> {
+    return this.withTransaction(async (client) => {
+      const existing = await client.query<WalletLedgerRow>(
+        `select id::text, customer_id::text, amount_irr::text, kind, idempotency_key,
+                discount_code, created_at
+         from customer_wallet_ledger
+         where idempotency_key = $1`,
+        [input.idempotencyKey],
+      );
+      const replay = existing.rows[0];
+      if (replay !== undefined) {
+        if (
+          replay.customer_id !== input.customerId ||
+          BigInt(replay.amount_irr) !== input.amountIrr ||
+          (replay.discount_code ?? undefined) !== input.discountCode
+        ) {
+          throw new DomainConflictError('IDEMPOTENCY_KEY_REUSED');
+        }
+        return mapWalletLedger(replay, true);
+      }
+      await client.query('select id from customers where id = $1::bigint for update', [
+        input.customerId,
+      ]);
+      const inserted = await client.query<WalletLedgerRow>(
+        `insert into customer_wallet_ledger(
+           customer_id, amount_irr, kind, idempotency_key, discount_code
+         ) values ($1::bigint, $2, 'topup', $3, $4)
+         returning id::text, customer_id::text, amount_irr::text, kind, idempotency_key,
+                   discount_code, created_at`,
+        [
+          input.customerId,
+          input.amountIrr.toString(),
+          input.idempotencyKey,
+          input.discountCode ?? null,
+        ],
+      );
+      await client.query(
+        `insert into customer_wallets(customer_id, balance_irr)
+         values ($1::bigint, $2)
+         on conflict (customer_id) do update
+         set balance_irr = customer_wallets.balance_irr + excluded.balance_irr,
+             updated_at = now()`,
+        [input.customerId, input.amountIrr.toString()],
+      );
+      const wallet = await client.query<{ balance_irr: string }>(
+        'select balance_irr::text from customer_wallets where customer_id = $1::bigint',
+        [input.customerId],
+      );
+      if (BigInt(requiredRow(wallet.rows).balance_irr) < 0n) {
+        throw new DomainConflictError('NEGATIVE_WALLET_BALANCE');
+      }
+      return mapWalletLedger(requiredRow(inserted.rows), false);
+    });
+  }
+
+  public createSupportTicket(input: {
+    readonly customerId: string;
+    readonly body: string;
+    readonly idempotencyKey: string;
+  }): Promise<SupportTicketWriteResult> {
+    return this.withTransaction(async (client) => {
+      const existing = await client.query<{ ticket_id: string }>(
+        `select ticket_id::text from support_ticket_messages where idempotency_key = $1`,
+        [input.idempotencyKey],
+      );
+      if (existing.rows[0] !== undefined) {
+        return {
+          ticket: await requiredTicket(client, existing.rows[0].ticket_id, input.customerId),
+          replayed: true,
+        };
+      }
+      const ticket = await client.query<SupportTicketRow>(
+        `insert into support_tickets(customer_id) values ($1::bigint)
+         returning id::text, customer_id::text, status, created_at, updated_at`,
+        [input.customerId],
+      );
+      const created = mapSupportTicket(requiredRow(ticket.rows));
+      await client.query(
+        `insert into support_ticket_messages(ticket_id, customer_id, body, idempotency_key)
+         values ($1::bigint, $2::bigint, $3, $4)`,
+        [created.id, input.customerId, input.body, input.idempotencyKey],
+      );
+      return { ticket: created, replayed: false };
+    });
+  }
+
+  public followUpSupportTicket(input: {
+    readonly customerId: string;
+    readonly ticketId: string;
+    readonly body: string;
+    readonly idempotencyKey: string;
+  }): Promise<SupportTicketWriteResult> {
+    return this.withTransaction(async (client) => {
+      const existing = await client.query<{ ticket_id: string }>(
+        `select ticket_id::text from support_ticket_messages where idempotency_key = $1`,
+        [input.idempotencyKey],
+      );
+      if (existing.rows[0] !== undefined) {
+        if (existing.rows[0].ticket_id !== input.ticketId) {
+          throw new DomainConflictError('IDEMPOTENCY_KEY_REUSED');
+        }
+        return {
+          ticket: await requiredTicket(client, input.ticketId, input.customerId),
+          replayed: true,
+        };
+      }
+      const ticket = await requiredTicket(client, input.ticketId, input.customerId);
+      await client.query(
+        `insert into support_ticket_messages(ticket_id, customer_id, body, idempotency_key)
+         values ($1::bigint, $2::bigint, $3, $4)`,
+        [input.ticketId, input.customerId, input.body, input.idempotencyKey],
+      );
+      await client.query(`update support_tickets set updated_at = now() where id = $1::bigint`, [
+        input.ticketId,
+      ]);
+      return { ticket, replayed: false };
+    });
+  }
+
   public async upsertCategory(input: {
     readonly code: string;
     readonly name: string;
@@ -1450,4 +1686,67 @@ function mapProof(row: ProofRow): TelegramPaymentProof {
     mediaKind: row.media_kind,
     submittedAt: row.submitted_at,
   };
+}
+
+function conversationSessionQuery(where: string): string {
+  return `select id::text, telegram_user_id::text, flow_id, step, schema_version, payload,
+                 status, created_at, updated_at, expires_at
+          from conversation_sessions
+          where ${where}`;
+}
+
+function mapConversationSession(row: ConversationSessionRow): DurableConversationSession {
+  return parseDurableConversationSession({
+    id: row.id,
+    telegramUserId: row.telegram_user_id,
+    flowId: row.flow_id,
+    step: row.step,
+    schemaVersion: row.schema_version,
+    payload: row.payload,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    expiresAt: row.expires_at,
+  });
+}
+
+function mapWalletLedger(row: WalletLedgerRow, replayed: boolean): WalletLedgerEntry {
+  return {
+    id: row.id,
+    customerId: row.customer_id,
+    amountIrr: BigInt(row.amount_irr),
+    kind: row.kind,
+    idempotencyKey: row.idempotency_key,
+    discountCode: row.discount_code,
+    createdAt: row.created_at,
+    replayed,
+  };
+}
+
+function mapSupportTicket(row: SupportTicketRow): SupportTicket {
+  return {
+    id: row.id,
+    customerId: row.customer_id,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function requiredTicket(
+  client: PoolClient,
+  ticketId: string,
+  customerId: string,
+): Promise<SupportTicket> {
+  const result = await client.query<SupportTicketRow>(
+    `select id::text, customer_id::text, status, created_at, updated_at
+     from support_tickets
+     where id = $1::bigint and customer_id = $2::bigint`,
+    [ticketId, customerId],
+  );
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new DomainConflictError('TICKET_NOT_FOUND');
+  }
+  return mapSupportTicket(row);
 }

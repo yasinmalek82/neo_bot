@@ -4,10 +4,16 @@ import type {
   CommerceRepository,
   CommerceUseCase,
   CatalogChatAdminUseCase,
+  ConversationSessionStore,
   CustomerDeliveryTransport,
   CustomerDeliveryUseCase,
   OpsDailySummaryUseCase,
   ReportingUseCase,
+} from '@neo-bot/application';
+import {
+  RepositoryConversationSessionStore,
+  SupportTicketUseCase,
+  WalletUseCase,
 } from '@neo-bot/application';
 import {
   DomainConflictError,
@@ -64,7 +70,25 @@ import {
   guideInlineKeyboard,
   guideText,
   HELP_CALLBACK,
+  helpKeyboard,
   helpText,
+  TICKET_FOLLOW_PREFIX,
+  TICKET_NEW_CALLBACK,
+  WALLET_TOPUP_CALLBACK,
+  conversationCancelledText,
+  conversationExpiredText,
+  conversationMalformedText,
+  discountPromptText,
+  discountSkipButton,
+  flowCancelButton,
+  invalidDiscountText,
+  invalidTicketBodyText,
+  invalidWalletAmountText,
+  ticketCreatePromptText,
+  ticketFollowUpPromptText,
+  ticketSubmittedText,
+  walletAmountPromptText,
+  walletCreditedText,
   HOME_CALLBACK,
   homeReplyKeyboard,
   homeReturnText,
@@ -94,6 +118,17 @@ import {
   variantListLabel,
   variantText,
 } from './telegram-menu.js';
+import { CommerceFlowHandler } from './interaction/commerce-flow.js';
+import {
+  applyFlowTransition,
+  isGlobalCancelInput,
+  recoverConversationSession,
+  type BotScreenModel,
+  type ConversationInput,
+  type FlowTransition,
+} from './interaction/conversation-flow.js';
+import { SupportFlowHandler } from './interaction/support-flow.js';
+import { WalletFlowHandler } from './interaction/wallet-flow.js';
 import { readTelegramIntakeHealth } from './telegram-intake.js';
 import {
   hasUnsupportedReceiptMedia,
@@ -123,10 +158,9 @@ interface CatalogAdminReader {
 
 export class TelegramCommerceBot {
   private readonly config: Extract<TelegramConfig, { readonly enabled: true }>;
-  private readonly pendingPurchaseUsername = new Map<
-    string,
-    { readonly variantId: string; readonly variantName: string }
-  >();
+  private readonly sessions: ConversationSessionStore;
+  private readonly wallet: WalletUseCase;
+  private readonly tickets: SupportTicketUseCase;
 
   public constructor(
     config: Extract<TelegramConfig, { readonly enabled: true }>,
@@ -139,8 +173,12 @@ export class TelegramCommerceBot {
     private readonly reporting: ReportingUseCase | null = null,
     private readonly dailySummary: OpsDailySummaryUseCase | null = null,
     private readonly delivery: CustomerDeliveryUseCase | null = null,
+    sessions?: ConversationSessionStore,
   ) {
     this.config = config;
+    this.sessions = sessions ?? new RepositoryConversationSessionStore(repository);
+    this.wallet = new WalletUseCase(repository);
+    this.tickets = new SupportTicketUseCase(repository);
   }
 
   public isWebhookSecretValid(candidate: string | undefined): boolean {
@@ -205,15 +243,13 @@ export class TelegramCommerceBot {
       return;
     }
     await this.commerce.recordCustomerActivity(customer);
-    const pendingPurchase = this.pendingPurchaseUsername.get(customer.telegramUserId);
-    if (pendingPurchase !== undefined && (message.text ?? '').trim().length > 0) {
-      await this.completePendingPurchase(
-        update,
-        target,
-        customer,
-        message.text ?? '',
-        pendingPurchase,
-      );
+    const flowInput: ConversationInput = {
+      kind: 'text',
+      updateId: String(update.update_id),
+      telegramUserId: customer.telegramUserId,
+      text: message.text ?? '',
+    };
+    if (await this.dispatchCustomerFlow(target, customer, flowInput)) {
       return;
     }
     if (this.isAdmin(customer.telegramUserId) && (message.text ?? '').trim().length > 0) {
@@ -246,43 +282,282 @@ export class TelegramCommerceBot {
     await this.routeAction(action, target, customer, isFreshStartCommand(message.text));
   }
 
-  private async completePendingPurchase(
-    update: TelegramUpdate,
+  private async dispatchCustomerFlow(
     target: MenuTarget,
     customer: TelegramCustomerInput,
-    rawText: string,
-    pending: { readonly variantId: string; readonly variantName: string },
-  ): Promise<void> {
-    const baseName = rawText.trim().toLowerCase();
-    try {
-      const card = await this.readCheckoutCard();
-      const order = await this.commerce.beginCheckout({
-        customer,
-        productVariantId: pending.variantId,
-        idempotencyKey: `telegram:${String(update.update_id)}:buy:${pending.variantId}`,
-        serviceUsernameBase: baseName,
+    input: ConversationInput,
+  ): Promise<boolean> {
+    const session = await this.sessions.getPending(customer.telegramUserId);
+    if (session === null) {
+      return false;
+    }
+    const now = new Date();
+    const recovery = recoverConversationSession(session, now);
+    if (recovery.kind === 'expired' || recovery.kind === 'malformed') {
+      await this.sessions.finish({
+        id: session.id,
+        telegramUserId: session.telegramUserId,
+        status: recovery.kind === 'expired' ? 'expired' : 'canceled',
+        now,
       });
-      this.pendingPurchaseUsername.delete(customer.telegramUserId);
       await this.present(
         target,
-        checkoutText(order, card.cardNumber, card.cardHolder),
-        columnKeyboard([
-          { text: MENU_LABEL.order, callback_data: ORDER_CALLBACK },
-          backToMenuButton(),
-        ]),
+        recovery.kind === 'expired' ? conversationExpiredText() : conversationMalformedText(),
+        columnKeyboard([backToMenuButton()]),
       );
-    } catch (error: unknown) {
-      if (error instanceof DomainConflictError && error.code === 'INVALID_SERVICE_USERNAME_BASE') {
+      return true;
+    }
+    if (isGlobalCancelInput(input)) {
+      await this.sessions.finish({
+        id: session.id,
+        telegramUserId: session.telegramUserId,
+        status: 'canceled',
+        now,
+      });
+      if (input.kind === 'callback' && input.callbackData === HOME_CALLBACK) {
+        await this.routeAction('home', target, customer, false);
+      } else {
+        await this.present(
+          target,
+          conversationCancelledText(),
+          columnKeyboard([backToMenuButton()]),
+        );
+      }
+      return true;
+    }
+    const handler =
+      session.flowId === 'commerce.purchase' || session.flowId === 'commerce.renewal'
+        ? new CommerceFlowHandler(session.flowId, this.commerce, customer)
+        : session.flowId === 'wallet.topup'
+          ? new WalletFlowHandler(
+              {
+                previewDiscount: (code) => this.commerce.previewDiscount(code),
+                creditTopUp: (command) => this.wallet.creditTopUp(command),
+              },
+              customer,
+            )
+          : new SupportFlowHandler(this.tickets, customer);
+    if (!handler.ownsInput(session, input)) {
+      return false;
+    }
+    const transition = await handler.handle(session, input, now);
+    if (transition.kind === 'ignore') {
+      return false;
+    }
+    await applyFlowTransition(this.sessions, session, transition, now);
+    await this.presentFlowTransition(target, customer, transition);
+    return true;
+  }
+
+  private async presentFlowTransition(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+    transition: FlowTransition,
+  ): Promise<void> {
+    if (transition.kind === 'ignore') {
+      return;
+    }
+    await this.presentFlowScreen(target, customer, transition.screen, transition);
+  }
+
+  private async presentFlowScreen(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+    screen: BotScreenModel,
+    transition: FlowTransition,
+  ): Promise<void> {
+    const cancelRow = [flowCancelButton(), backToMenuButton()];
+    switch (screen.id) {
+      case 'purchase.naming':
+        await this.present(
+          target,
+          serviceUsernamePromptText(screen.variantName ?? ''),
+          columnKeyboard([shopBackButton(), flowCancelButton(), backToMenuButton()]),
+        );
+        return;
+      case 'purchase.invalid-username':
         await this.present(
           target,
           invalidServiceUsernameBaseText(),
-          columnKeyboard([shopBackButton(), backToMenuButton()]),
+          columnKeyboard([shopBackButton(), ...cancelRow]),
         );
         return;
-      }
-      this.pendingPurchaseUsername.delete(customer.telegramUserId);
-      throw error;
+      case 'purchase.coupon':
+      case 'renewal.coupon':
+      case 'wallet.coupon':
+        await this.present(
+          target,
+          discountPromptText(),
+          columnKeyboard([discountSkipButton(), ...cancelRow]),
+        );
+        return;
+      case 'purchase.invalid-coupon':
+      case 'renewal.invalid-coupon':
+      case 'wallet.invalid-coupon':
+        await this.present(
+          target,
+          invalidDiscountText(),
+          columnKeyboard([discountSkipButton(), ...cancelRow]),
+        );
+        return;
+      case 'purchase.checkout':
+      case 'renewal.checkout':
+        await this.presentCheckoutFromTransition(target, transition);
+        return;
+      case 'renewal.preview':
+        await this.present(
+          target,
+          renewalPreviewText(),
+          columnKeyboard([
+            { text: 'تأیید تمدید سرویس', callback_data: RENEW_CONFIRM_CALLBACK },
+            ...cancelRow,
+          ]),
+        );
+        return;
+      case 'wallet.amount':
+        await this.present(target, walletAmountPromptText(), columnKeyboard(cancelRow));
+        return;
+      case 'wallet.invalid-amount':
+        await this.present(target, invalidWalletAmountText(), columnKeyboard(cancelRow));
+        return;
+      case 'wallet.credited':
+        await this.present(target, walletCreditedText(), columnKeyboard([backToMenuButton()]));
+        return;
+      case 'support.create':
+        await this.present(target, ticketCreatePromptText(), columnKeyboard(cancelRow));
+        return;
+      case 'support.followup':
+        await this.present(target, ticketFollowUpPromptText(), columnKeyboard(cancelRow));
+        return;
+      case 'support.invalid-body':
+        await this.present(target, invalidTicketBodyText(), columnKeyboard(cancelRow));
+        return;
+      case 'support.submitted':
+        await this.present(
+          target,
+          ticketSubmittedText(),
+          columnKeyboard([
+            ...(screen.ticketId === undefined
+              ? []
+              : [
+                  {
+                    text: 'پیام بعدی',
+                    callback_data: `${TICKET_FOLLOW_PREFIX}${screen.ticketId}`,
+                  },
+                ]),
+            backToMenuButton(),
+          ]),
+        );
+        return;
+      case 'expired':
+        await this.present(target, conversationExpiredText(), columnKeyboard([backToMenuButton()]));
+        return;
+      case 'malformed':
+        await this.present(
+          target,
+          conversationMalformedText(),
+          columnKeyboard([backToMenuButton()]),
+        );
+        return;
+      case 'cancelled':
+        await this.present(
+          target,
+          conversationCancelledText(),
+          columnKeyboard([backToMenuButton()]),
+        );
+        return;
+      case 'home':
+        await this.routeAction('home', target, customer, false);
+        return;
     }
+  }
+
+  private async presentCheckoutFromTransition(
+    target: MenuTarget,
+    transition: FlowTransition,
+  ): Promise<void> {
+    if (transition.kind !== 'complete' || transition.effect?.type !== 'checkout') {
+      return;
+    }
+    const order = await this.repository.getOrder(transition.effect.orderId);
+    if (order === null) {
+      throw new DomainConflictError('ORDER_NOT_FOUND');
+    }
+    const card = await this.readCheckoutCard();
+    await this.present(
+      target,
+      checkoutText(order, card.cardNumber, card.cardHolder),
+      columnKeyboard([
+        { text: MENU_LABEL.order, callback_data: ORDER_CALLBACK },
+        backToMenuButton(),
+      ]),
+    );
+  }
+
+  private async startWalletTopUp(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+  ): Promise<void> {
+    await WalletFlowHandler.start(this.sessions, {
+      telegramUserId: customer.telegramUserId,
+      now: new Date(),
+    });
+    await this.present(
+      target,
+      walletAmountPromptText(),
+      columnKeyboard([flowCancelButton(), backToMenuButton()]),
+    );
+  }
+
+  private async startTicketCreate(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+  ): Promise<void> {
+    await SupportFlowHandler.startCreate(this.sessions, {
+      telegramUserId: customer.telegramUserId,
+      now: new Date(),
+    });
+    await this.present(
+      target,
+      ticketCreatePromptText(),
+      columnKeyboard([flowCancelButton(), backToMenuButton()]),
+    );
+  }
+
+  private async startTicketFollowUp(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+    ticketId: string,
+  ): Promise<void> {
+    await SupportFlowHandler.startFollowUp(this.sessions, {
+      telegramUserId: customer.telegramUserId,
+      ticketId,
+      now: new Date(),
+    });
+    await this.present(
+      target,
+      ticketFollowUpPromptText(),
+      columnKeyboard([flowCancelButton(), backToMenuButton()]),
+    );
+  }
+
+  private async startRenewalCoupon(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+  ): Promise<void> {
+    if (!(await this.commerce.hasActiveService(customer))) {
+      await this.present(target, noActiveServiceText(), columnKeyboard([backToMenuButton()]));
+      return;
+    }
+    await CommerceFlowHandler.startRenewal(this.sessions, {
+      telegramUserId: customer.telegramUserId,
+      now: new Date(),
+    });
+    await this.present(
+      target,
+      discountPromptText(),
+      columnKeyboard([discountSkipButton(), flowCancelButton(), backToMenuButton()]),
+    );
   }
 
   private async handleReceiptFile(
@@ -333,7 +608,21 @@ export class TelegramCommerceBot {
         : {}),
     };
     try {
-      if (data === HOME_CALLBACK) {
+      const flowInput: ConversationInput = {
+        kind: 'callback',
+        updateId: String(update.update_id),
+        telegramUserId: customer.telegramUserId,
+        callbackData: data,
+      };
+      if (data === WALLET_TOPUP_CALLBACK) {
+        await this.startWalletTopUp(target, customer);
+      } else if (data === TICKET_NEW_CALLBACK) {
+        await this.startTicketCreate(target, customer);
+      } else if (data.startsWith(TICKET_FOLLOW_PREFIX)) {
+        await this.startTicketFollowUp(target, customer, data.slice(TICKET_FOLLOW_PREFIX.length));
+      } else if (await this.dispatchCustomerFlow(target, customer, flowInput)) {
+        // Owned by the durable customer flow; acknowledgement still happens below.
+      } else if (data === HOME_CALLBACK) {
         await this.routeAction('home', target, customer, false);
       } else if (data === SHOP_CALLBACK) {
         await this.routeAction('shop', target, customer, false);
@@ -383,14 +672,16 @@ export class TelegramCommerceBot {
       } else if (/^buy:\d+$/u.test(data)) {
         const variantId = data.slice(4);
         const variant = await this.commerce.getVariantForCustomer(variantId, customer);
-        this.pendingPurchaseUsername.set(customer.telegramUserId, {
+        await CommerceFlowHandler.startPurchase(this.sessions, {
+          telegramUserId: customer.telegramUserId,
           variantId,
           variantName: variant.name,
+          now: new Date(),
         });
         await this.present(
           target,
           serviceUsernamePromptText(variant.name),
-          columnKeyboard([shopBackButton(), backToMenuButton()]),
+          columnKeyboard([shopBackButton(), flowCancelButton(), backToMenuButton()]),
         );
       } else if (/^admin:retry:\d+$/u.test(data)) {
         this.requireAdmin(actorId);
@@ -470,13 +761,13 @@ export class TelegramCommerceBot {
         await this.present(target, guideText(), guideInlineKeyboard());
         return;
       case 'help':
-        await this.present(target, helpText(), columnKeyboard([backToMenuButton()]));
+        await this.present(target, helpText(), helpKeyboard());
         return;
       case 'order':
         await this.showOrder(target, customer);
         return;
       case 'renew':
-        await this.showRenewalPreview(target, customer);
+        await this.startRenewalCoupon(target, customer);
         return;
       case 'status':
       case 'reports':

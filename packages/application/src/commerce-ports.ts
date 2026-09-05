@@ -2,15 +2,20 @@ import type {
   CatalogCategory,
   ClaimedDeliveryJob,
   CustomerDeliveryJob,
+  ConversationSessionStatus,
+  DurableConversationSession,
   PaymentProofMediaKind,
   RepresentativeProfile,
   RepresentativePricingSource,
   SalesOrder,
   SellableProductVariant,
   ServiceBinding,
+  SupportTicket,
+  SupportTicketWriteResult,
   TelegramCustomer,
   TelegramCustomerInput,
   TelegramPaymentProof,
+  WalletLedgerEntry,
 } from '@neo-bot/domain';
 
 export interface CommerceRepository {
@@ -96,6 +101,36 @@ export interface CommerceRepository {
   reserveTelegramUpdate(updateId: string): Promise<boolean>;
   completeTelegramUpdate(updateId: string): Promise<void>;
   failTelegramUpdate(updateId: string, errorCode: string): Promise<void>;
+
+  getPendingConversationSession(telegramUserId: string): Promise<DurableConversationSession | null>;
+  putConversationSession(session: DurableConversationSession): Promise<DurableConversationSession>;
+  finishConversationSession(input: {
+    readonly id: string;
+    readonly telegramUserId: string;
+    readonly status: Exclude<ConversationSessionStatus, 'pending'>;
+    readonly now: Date;
+  }): Promise<void>;
+
+  findDiscountCode(code: string): Promise<{ readonly code: string } | null>;
+
+  creditWalletTopUp(input: {
+    readonly customerId: string;
+    readonly amountIrr: bigint;
+    readonly idempotencyKey: string;
+    readonly discountCode?: string;
+  }): Promise<WalletLedgerEntry>;
+
+  createSupportTicket(input: {
+    readonly customerId: string;
+    readonly body: string;
+    readonly idempotencyKey: string;
+  }): Promise<SupportTicketWriteResult>;
+  followUpSupportTicket(input: {
+    readonly customerId: string;
+    readonly ticketId: string;
+    readonly body: string;
+    readonly idempotencyKey: string;
+  }): Promise<SupportTicketWriteResult & { readonly ticket: SupportTicket }>;
 
   findRepresentativeByTelegramUserId?(
     telegramUserId: string,

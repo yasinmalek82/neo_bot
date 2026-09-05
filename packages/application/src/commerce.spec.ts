@@ -1,4 +1,5 @@
 import type {
+  DurableConversationSession,
   SalesOrder,
   ServiceBinding,
   TelegramCustomer,
@@ -647,6 +648,26 @@ describe('CommerceUseCase', () => {
     ).rejects.toThrow('INVALID_SERVICE_USERNAME_BASE');
     expect(repository.createOrder).not.toHaveBeenCalled();
   });
+
+  it('rejects an unknown checkout discount before creating an order', async () => {
+    const repository = createRepository();
+    const useCase = new CommerceUseCase(repository, { create: vi.fn(), renew: vi.fn() });
+
+    await expect(
+      useCase.beginCheckout({
+        customer: {
+          telegramUserId: '10001',
+          privateChatId: '10001',
+          displayName: 'خریدار',
+        },
+        productVariantId: '30',
+        idempotencyKey: 'telegram:100:buy',
+        serviceUsernameBase: 'buyer_one',
+        discountCode: 'MISSING',
+      }),
+    ).rejects.toThrow('INVALID_DISCOUNT_CODE');
+    expect(repository.createOrder).not.toHaveBeenCalled();
+  });
 });
 
 function createRepository(): CommerceRepository {
@@ -698,5 +719,14 @@ function createRepository(): CommerceRepository {
     reserveTelegramUpdate: vi.fn().mockResolvedValue(true),
     completeTelegramUpdate: vi.fn().mockResolvedValue(undefined),
     failTelegramUpdate: vi.fn().mockResolvedValue(undefined),
+    getPendingConversationSession: vi.fn().mockResolvedValue(null),
+    putConversationSession: vi.fn().mockImplementation(async (session: DurableConversationSession) => {
+      return session;
+    }),
+    finishConversationSession: vi.fn().mockResolvedValue(undefined),
+    findDiscountCode: vi.fn().mockResolvedValue(null),
+    creditWalletTopUp: vi.fn(),
+    createSupportTicket: vi.fn(),
+    followUpSupportTicket: vi.fn(),
   };
 }

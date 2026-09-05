@@ -9,6 +9,7 @@ import {
 import {
   DomainConflictError,
   type CatalogAdminSession,
+  type DurableConversationSession,
   type SalesOrder,
   type SellableProductVariant,
   type ServiceBinding,
@@ -1876,21 +1877,23 @@ describe('TelegramCommerceBot', () => {
     };
     const bot = createBot(repository, messenger, null, provisioner);
 
-    await expect(
+    const renewCallback = (updateId: number, id: string, data: string) =>
       bot.handleUpdate({
-        update_id: 125,
+        update_id: updateId,
         callback_query: {
-          id: 'cb-renew',
+          id,
           from: { id: 10001, first_name: 'خریدار' },
           message: {
             message_id: 14,
             chat: { id: 10001, type: 'private' },
             text: 'منو',
           },
-          data: 'renew',
+          data,
         },
-      }),
-    ).resolves.toBeUndefined();
+      });
+
+    await expect(renewCallback(125, 'cb-renew', 'renew')).resolves.toBeUndefined();
+    await expect(renewCallback(1251, 'cb-renew-skip', 'flow:skip-coupon')).resolves.toBeUndefined();
 
     expect(repository.completeTelegramUpdate).toHaveBeenCalledWith('125');
     expect(repository.failTelegramUpdate).not.toHaveBeenCalled();
@@ -2349,14 +2352,90 @@ describe('TelegramCommerceBot', () => {
         text: 'rep_user',
       },
     });
+    expect(repository.createOrder).not.toHaveBeenCalled();
+    await bot.handleUpdate({
+      update_id: 1296,
+      callback_query: {
+        id: 'cb-skip-coupon',
+        from: { id: 40005, first_name: 'نماینده' },
+        message: {
+          message_id: 186,
+          chat: { id: 40005, type: 'private' },
+          text: 'کد تخفیف',
+        },
+        data: 'flow:skip-coupon',
+      },
+    });
 
     expect(repository.createOrder).toHaveBeenCalledWith(
       customer.id,
       '2',
-      'telegram:1295:buy:2',
+      'telegram:1296:buy:2',
       '9',
       'rep_user',
     );
+  });
+
+  it('resumes purchase naming after bot reconstruction without a duplicate checkout', async () => {
+    const repository = createRepository();
+    repository.createOrder = vi.fn().mockResolvedValue(order);
+    repository.getOrder = vi.fn().mockResolvedValue(order);
+    const first = createBot(repository, createMessenger());
+    await first.handleUpdate({
+      update_id: 1401,
+      callback_query: {
+        id: 'cb-buy-restart',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: {
+          message_id: 201,
+          chat: { id: 10001, type: 'private' },
+          text: 'فروشگاه',
+        },
+        data: 'buy:2',
+      },
+    });
+    const reconstructed = createBot(repository, createMessenger());
+    await reconstructed.handleUpdate({
+      update_id: 1402,
+      message: {
+        message_id: 202,
+        chat: { id: 10001, type: 'private' },
+        from: { id: 10001, first_name: 'خریدار' },
+        text: 'ali_reza',
+      },
+    });
+    expect(repository.createOrder).not.toHaveBeenCalled();
+    await reconstructed.handleUpdate({
+      update_id: 1403,
+      callback_query: {
+        id: 'cb-skip-restart',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: {
+          message_id: 203,
+          chat: { id: 10001, type: 'private' },
+          text: 'کد تخفیف',
+        },
+        data: 'flow:skip-coupon',
+      },
+    });
+    expect(repository.createOrder).toHaveBeenCalledTimes(1);
+    expect(repository.createOrder).toHaveBeenCalledWith(
+      customer.id,
+      '2',
+      'telegram:1403:buy:2',
+      undefined,
+      'ali_reza',
+    );
+    await reconstructed.handleUpdate({
+      update_id: 1404,
+      message: {
+        message_id: 204,
+        chat: { id: 10001, type: 'private' },
+        from: { id: 10001, first_name: 'خریدار' },
+        text: 'unrelated after complete',
+      },
+    });
+    expect(repository.createOrder).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -2440,6 +2519,7 @@ function createMessenger(): TelegramMessenger {
 }
 
 function createRepository(): CommerceRepository {
+  const sessions = new Map<string, DurableConversationSession>();
   const proof: TelegramPaymentProof = {
     id: '20',
     orderId: order.id,
@@ -2494,5 +2574,43 @@ function createRepository(): CommerceRepository {
     reserveTelegramUpdate: vi.fn().mockResolvedValue(true),
     completeTelegramUpdate: vi.fn().mockResolvedValue(undefined),
     failTelegramUpdate: vi.fn().mockResolvedValue(undefined),
+    getPendingConversationSession: vi.fn(async (telegramUserId: string) => {
+      return (
+        [...sessions.values()].find(
+          (session) => session.telegramUserId === telegramUserId && session.status === 'pending',
+        ) ?? null
+      );
+    }),
+    putConversationSession: vi.fn(async (session: DurableConversationSession) => {
+      for (const [id, existing] of sessions) {
+        if (
+          existing.telegramUserId === session.telegramUserId &&
+          existing.status === 'pending' &&
+          existing.id !== session.id
+        ) {
+          sessions.set(id, { ...existing, status: 'canceled' });
+        }
+      }
+      sessions.set(session.id, session);
+      return session;
+    }),
+    finishConversationSession: vi.fn(
+      async (input: {
+        readonly id: string;
+        readonly telegramUserId: string;
+        readonly status: DurableConversationSession['status'];
+        readonly now: Date;
+      }) => {
+        const existing = sessions.get(input.id);
+        if (existing === undefined) {
+          return;
+        }
+        sessions.set(input.id, { ...existing, status: input.status, updatedAt: input.now });
+      },
+    ),
+    findDiscountCode: vi.fn().mockResolvedValue(null),
+    creditWalletTopUp: vi.fn(),
+    createSupportTicket: vi.fn(),
+    followUpSupportTicket: vi.fn(),
   };
 }

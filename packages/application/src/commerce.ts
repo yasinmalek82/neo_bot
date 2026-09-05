@@ -2,6 +2,7 @@ import {
   DomainConflictError,
   PAYMENT_PROOF_MEDIA_KINDS,
   selectStorefrontEvidenceBadges,
+  validateDiscountCode,
   validatePaymentProofReference,
   validateServiceUsernameBase,
   validateTelegramCustomerInput,
@@ -148,15 +149,28 @@ export class CommerceUseCase {
     return { customer, firstContact: created };
   }
 
+  public async previewDiscount(code: string): Promise<string> {
+    const normalized = validateDiscountCode(code);
+    const found = await this.repository.findDiscountCode(normalized);
+    if (found === null) {
+      throw new DomainConflictError('INVALID_DISCOUNT_CODE');
+    }
+    return found.code;
+  }
+
   public async beginCheckout(command: {
     readonly customer: TelegramCustomerInput;
     readonly productVariantId: string;
     readonly idempotencyKey: string;
     readonly serviceUsernameBase: string;
+    readonly discountCode?: string;
   }): Promise<SalesOrder> {
     validateTelegramCustomerInput(command.customer);
     validateServiceUsernameBase(command.serviceUsernameBase);
     requireIdempotencyKey(command.idempotencyKey);
+    if (command.discountCode !== undefined) {
+      await this.previewDiscount(command.discountCode);
+    }
     const { customer, created } = await this.repository.upsertTelegramCustomer(command.customer);
     if (created) {
       await this.publish({
@@ -208,9 +222,13 @@ export class CommerceUseCase {
   public async beginRenewal(command: {
     readonly customer: TelegramCustomerInput;
     readonly idempotencyKey: string;
+    readonly discountCode?: string;
   }): Promise<SalesOrder> {
     validateTelegramCustomerInput(command.customer);
     requireIdempotencyKey(command.idempotencyKey);
+    if (command.discountCode !== undefined) {
+      await this.previewDiscount(command.discountCode);
+    }
     const { customer, created } = await this.repository.upsertTelegramCustomer(command.customer);
     if (created) {
       await this.publish({

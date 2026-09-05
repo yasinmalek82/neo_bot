@@ -1,9 +1,9 @@
 <!--
 context-schema: 1
-last-updated: 2026-08-28T20:03:30.757Z
-source-fingerprint: e0d4b07b434a9f5a938112f165e4f0f26d7b3e22fcc6977cb65401ddb6d09148
-current-phase: revival-slice-1-mutation-safety
-next-task: activate-local-telegram-intake-and-run-slice-1-smoke
+last-updated: 2026-09-05T07:50:21.576Z
+source-fingerprint: 3517ffec5dc80d0f696ce316a79ef0088a99f2088f32fe1fdacc51ff46c193aa
+current-phase: durable-interaction-kernel
+next-task: adopt-remaining-operator-input-into-durable-flows
 -->
 
 # neo_bot Project Context
@@ -92,13 +92,15 @@ Authoritative decisions are recorded in:
 - `docs/adr/0012-telegram-chat-catalog-administration.md`
 - `docs/adr/0013-flexible-chat-storefront-presentation.md`
 - `docs/adr/0014-role-aware-commerce-and-service-operations.md`
+- `docs/adr/0021-durable-interaction-kernel.md`
 
 Create a new ADR before materially changing one of these decisions.
 
 ## Current verified snapshot
 
-Last evidence refresh: `2026-08-28`, reviewed the isolated local Slice 1 runtime plus the previously
-authorized first-host chat-store-redesign deploy.
+Last evidence refresh: `2026-09-05`, reviewed the durable customer-flow implementation on the
+August 2026 remote baseline. Isolated local Slice 1 runtime and first-host evidence below are
+unchanged historical records, not a new live check.
 
 - Production-MVP readiness estimate: the customer store and catalog administration are both chat
   paths; live administrator publication, live purchase, and the seven-day pilot remain owner-side.
@@ -235,6 +237,9 @@ off-host backup restoration or public security.
   durable fulfilled-order delivery jobs; not deployed.
 - `0013_customer_delivery_claim_fencing.sql`: additive claim-version upgrade for existing `0012`
   installations so stale delivery workers cannot publish a second secret-bearing anchor; not deployed.
+- `0014_durable_customer_flows.sql`: local candidate for versioned customer conversation sessions,
+  optional discount codes, a non-negative prepaid wallet ledger, and Telegram-update-scoped support
+  tickets; not deployed.
 
 ### Runtime boundaries
 
@@ -268,7 +273,7 @@ off-host backup restoration or public security.
 | PasarGuard health and group sync     | Implemented | Valid/invalid connectivity and group snapshots covered.                                                                                                                                                                                                                                                                                                                            |
 | Direct service create/read/renew     | Implemented | Numeric IDs, idempotency and read-after-write covered.                                                                                                                                                                                                                                                                                                                             |
 | Durable card-to-card order lifecycle | Implemented | Checkout, proof, approval/rejection, retry provisioning and catalog card source.                                                                                                                                                                                                                                                                                                   |
-| Telegram chat purchase flow          | Partial     | ReplyKeyboard-only home plus category -> product -> three-plan comparison -> detail -> payment -> receipt is deployed. Free copy, typed sale facts, evidence badges and bounded HTML rendering are covered; live phone and receipt-to-delivery validation remain outstanding.                                                                                                      |
+| Telegram chat purchase flow          | Partial     | ReplyKeyboard-only home plus category -> product -> three-plan comparison -> detail -> payment -> receipt. Purchase naming and optional discount, renewal discount, wallet top-up, and ticket input now use durable conversation sessions; live phone and receipt-to-delivery validation remain outstanding.                                                                       |
 | Customer visual identity             | Partial     | Versioned master, welcome and successful-delivery PNGs use the approved charcoal/ivory/signal-orange `NN / NEO NETWORK / PRIVATE ACCESS` direction. Welcome and delivery assets were uploaded privately to Telegram, their file IDs are configured on first-host, and runtime presence is verified; phone `/start` and real successful-delivery rendering are not both proven yet. |
 | Receipt review                       | Partial     | Admin private-chat review; image documents accepted; receipts topic gets a redacted text summary. Customer copy consistently promises a maximum 60-minute review, but durable SLA tracking and escalation are not implemented yet.                                                                                                                                                 |
 | Admin reporting group and topics     | Partial     | Local outbox delivered first-contact, activity, order.created, and one daily summary; receipt/approval unconfirmed.                                                                                                                                                                                                                                                                |
@@ -280,7 +285,7 @@ off-host backup restoration or public security.
 | Customer Mini App checkout           | Abandoned   | `POST /customer/orders` and `POST /customer/renew` return gone. Chat menu button is commands.                                                                                                                                                                                                                                                                                      |
 | Telegram WebApp customer identity    | Implemented | Retained customer statics validate Telegram `initData`; catalog administrator authorization is numeric allowlist plus private-chat enforcement inside the bot.                                                                                                                                                                                                                     |
 | Production deployment and operations | Partial     | First-host `bot-api` was rebuilt/recreated after a root-only source/env/database backup. Migration `0010`, public/loopback health, webhook readiness, report queues, schema objects, read model, retired-route 404s and disabled pilot provisioning were verified. Caddy/Postgres were not recreated; no purchase or PasarGuard mutation was performed.                            |
-| Resellers, wallet and debt           | Partial     | Schema, listing, checkout snapshot, customer assignment, and current-price audit exist. Override then base then public. No wallet, debt, or admin price UI. Dedicated `reseller.*` notices are not published yet.                                                                                                                                                                  |
+| Resellers, wallet and debt           | Partial     | Schema, listing, checkout snapshot, customer assignment, and current-price audit exist. Override then base then public. A non-negative customer wallet top-up ledger and restart-safe amount/coupon input exist locally; representative debt, admin price UI, and `reseller.*` notices are not published.                                                                          |
 | Legacy import and cutover            | Not started | Must begin read-only with backup, preflight, rollback and controlled cutover.                                                                                                                                                                                                                                                                                                      |
 
 ## Confirmed admin reporting requirement
@@ -401,29 +406,23 @@ Status: approved on 2026-08-25 and active after the local checkpoint.
 
 ## Current priority and next task
 
-Current phase: **Phase 6 / Slice 1 - Mutation safety**. The owner explicitly replaced the prior
-phone-only next task with the four-slice NEO NETWORK revival plan recorded in ADR 0014.
+Current phase: **durable-interaction-kernel**. The owner explicitly directed feature `005`
+Phase 4 customer restart-safe flows (`implement-spec-005-customer-flows`, tasks T019–T026).
+That work landed on this remote, which still had the August 2026 Slice 1 baseline and no
+earlier 005 artifacts.
 
-Next task: use the isolated Mac runtime for Slice 1 testing. The owner removed the old Mini App VPS
-from the current test path; production-host connectivity is no longer a prerequisite for local
-verification, though a reachable backed-up host will still be required for a later production
-release. After the local profile and gates are committed, explicitly switch this test bot to local
-polling as its sole intake, keep provisioning disabled, and run the current customer/admin purchase
-and paid-renewal smoke paths. Isolated or live PasarGuard mutation remains a separate product-risk
-decision.
+Next task: adopt any remaining operator/staff memory-only Telegram input into the same durable
+flow registry, or run Spec Kit converge against feature 005 if later kernel phases are specified.
+Do not treat local unit evidence as phone or production proof. Isolated or live PasarGuard
+mutation remains a separate product-risk decision.
 
 Expected sequence:
 
-1. Keep the isolated `neo_bot_local_test` database and disabled-mode API healthy; never reuse or
-   delete the preserved default local volume implicitly.
-2. Complete local static, integration, context and Graphify gates; commit and push the reproducible
-   profile under the owner's standing checkpoint authorization.
-3. Enable local polling only as the sole Telegram intake, verify polling health and run bounded
-   customer/admin Slice 1 smoke tests without provider mutation.
-4. Continue with customer services, staff control plane, and representative workspace as separate
-   slices. Android/iPhone evidence remains mandatory before customer-facing visual completion.
-5. Before a future production release, restore host reachability, collect read-only counts, create
-   fresh rollback artifacts and review the fulfilled-order delivery backfill.
+1. Keep customer purchase naming/coupon, renewal coupon, wallet top-up, and ticket flows on
+   durable sessions; do not reintroduce process-local Maps for those inputs.
+2. Apply migration `0014` only with explicit authorization on an isolated database.
+3. Continue Slice 1 local polling smoke and later slices as separately authorized work.
+4. Android/iPhone evidence remains mandatory before customer-facing visual completion.
 
 Owner-only remaining gates: public HTTPS webhook URL, live isolated PasarGuard group, TLS host,
 off-host backup storage, seven-day pilot.
@@ -486,6 +485,18 @@ handoff entry.
 ## Handoff log
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
+
+### 2026-09-05 - Feature 005 Phase 4 customer restart-safe flows
+
+- Outcome: customer purchase naming/coupon, renewal coupon, wallet top-up amount/coupon, and
+  ticket create/follow-up now use a versioned conversation-session kernel. Ticket bodies stay
+  out of session history and are written only with Telegram-update idempotency. ADR 0021 and
+  migration `0014` record the durable decision. This remote had no earlier 005 artifacts.
+- Validation: domain unit suite `26`, application `69` including wallet/ticket
+  idempotency, and targeted bot-api `81` covering commerce/wallet/support flows plus
+  bot reconstruction. No production migrate, Telegram send, or PasarGuard mutation.
+- Next: keep remaining operator input off process-local Maps; apply `0014` only with explicit
+  isolated-database authorization.
 
 ### 2026-08-28 - Isolated local test runtime replaces the Mini App VPS path
 

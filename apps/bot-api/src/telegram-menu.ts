@@ -22,6 +22,11 @@ export const ADMIN_SUMMARY_CALLBACK = 'admin:summary';
 export const ADMIN_FAILED_CALLBACK = 'admin:failed';
 export const ADMIN_CATALOG_CALLBACK = 'admin:catalog';
 export const ADMIN_STORE_CALLBACK = 'admin:store';
+export const FLOW_CANCEL_CALLBACK = 'flow:cancel';
+export const FLOW_SKIP_COUPON_CALLBACK = 'flow:skip-coupon';
+export const WALLET_TOPUP_CALLBACK = 'wallet:topup';
+export const TICKET_NEW_CALLBACK = 'ticket:new';
+export const TICKET_FOLLOW_PREFIX = 'ticket:follow:';
 
 export const MENU_LABEL = {
   shop: 'خرید سریع 🛍',
@@ -366,7 +371,84 @@ export function helpText(): string {
     'مبلغ نمایش‌داده‌شده را کارت‌به‌کارت کن و عکس رسید را در همین چت خصوصی بفرست.',
     'PDF و ویدیو پذیرفته نمی‌شود. بررسی رسید و اعلام نتیجه حداکثر ۶۰ دقیقه زمان می‌برد.',
     'پس از تأیید، لینک سرویس در همین گفتگوی خصوصی ارسال می‌شود.',
+    'برای شارژ کیف پول یا ثبت تیکت پشتیبانی از دکمه‌های همین پیام استفاده کن.',
   ].join('\n');
+}
+
+export function helpKeyboard(): TelegramInlineKeyboardMarkup {
+  return columnKeyboard([
+    { text: 'شارژ کیف پول', callback_data: WALLET_TOPUP_CALLBACK },
+    { text: 'تیکت پشتیبانی', callback_data: TICKET_NEW_CALLBACK },
+    backToMenuButton(),
+  ]);
+}
+
+export function discountPromptText(): string {
+  return [
+    '<b>کد تخفیف</b>',
+    'اگر کد تخفیف داری همین‌جا بفرست.',
+    'اگر نداری «بدون کد تخفیف» را بزن.',
+  ].join('\n');
+}
+
+export function invalidDiscountText(): string {
+  return 'این کد تخفیف معتبر نیست. دوباره بفرست یا بدون کد ادامه بده.';
+}
+
+export function walletAmountPromptText(): string {
+  return [
+    '<b>مبلغ شارژ کیف پول</b>',
+    'مبلغ را به تومان و فقط با عدد بفرست.',
+    'برای انصراف «منوی اصلی» را بزن.',
+  ].join('\n');
+}
+
+export function invalidWalletAmountText(): string {
+  return 'مبلغ نامعتبر است. یک عدد مثبت به تومان بفرست.';
+}
+
+export function walletCreditedText(): string {
+  return 'شارژ کیف پول ثبت شد. اگر همین پیام تکرار شود، مبلغ دوباره کم یا زیاد نمی‌شود.';
+}
+
+export function ticketCreatePromptText(): string {
+  return [
+    '<b>تیکت پشتیبانی</b>',
+    'شرح مشکل را همین‌جا بفرست.',
+    'متن تیکت فقط در ثبت امن ذخیره می‌شود و در تاریخچه جلسه نمی‌ماند.',
+  ].join('\n');
+}
+
+export function ticketFollowUpPromptText(): string {
+  return 'پیام بعدی این تیکت را بفرست.';
+}
+
+export function invalidTicketBodyText(): string {
+  return 'متن تیکت خالی یا خیلی طولانی است. دوباره بفرست.';
+}
+
+export function ticketSubmittedText(): string {
+  return 'تیکت ثبت شد. اگر لازم بود از دکمه «پیام بعدی» ادامه بده.';
+}
+
+export function conversationExpiredText(): string {
+  return 'این مرحله منقضی شد. از منو دوباره شروع کن.';
+}
+
+export function conversationMalformedText(): string {
+  return 'این مرحله قابل ادامه نیست. از منو دوباره شروع کن.';
+}
+
+export function conversationCancelledText(): string {
+  return 'این مرحله لغو شد.';
+}
+
+export function discountSkipButton(): { readonly text: string; readonly callback_data: string } {
+  return { text: 'بدون کد تخفیف', callback_data: FLOW_SKIP_COUPON_CALLBACK };
+}
+
+export function flowCancelButton(): { readonly text: string; readonly callback_data: string } {
+  return { text: 'لغو', callback_data: FLOW_CANCEL_CALLBACK };
 }
 
 export function guideText(): string {
