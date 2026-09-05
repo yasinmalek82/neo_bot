@@ -1,8 +1,9 @@
 # Production host runbook
 
 This is the in-repo procedure for the first single-owner host. It is not evidence that production
-is already deployed. Beginners should start with `docs/runbooks/first-host.md` and
-`bash deploy/install.sh`.
+is already deployed. Beginners should start with `docs/runbooks/first-host.md` and the one-line
+installer `bash deploy/neo-install.sh` (or `bash deploy/neo` after the checkout exists).
+`bash deploy/install.sh` still runs first setup only.
 
 ## Before DNS and TLS
 
@@ -18,8 +19,8 @@ is already deployed. Beginners should start with `docs/runbooks/first-host.md` a
 
 ## Bring the process up
 
-Prefer `bash deploy/install.sh` so `.env`, customer static assets, Compose, and Caddy TLS
-are created together. Manual equivalent:
+Prefer `bash deploy/neo-install.sh` so the repo, `.env`, customer static assets, Compose, and
+Caddy TLS are created together and the management menu stays available. Manual equivalent:
 
 ```bash
 docker compose -f docker-compose.production.yml up -d --build
