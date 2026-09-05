@@ -89,7 +89,7 @@ neo_write_production_env \
 
 [[ "$(neo_env_get TELEGRAM_PUBLIC_HOST)" == 'bot.example.com' ]] || fail 'hostname was not written'
 [[ "$(neo_env_get TELEGRAM_ADMIN_IDS)" == '10001,20002' ]] || fail 'admin ids were not written'
-[[ "$(neo_env_get TELEGRAM_WEBHOOK_URL)" == 'https://bot.example.com/telegram/webhook' ]] || fail 'webhook url was not written'
+[[ -z "$(neo_env_get TELEGRAM_WEBHOOK_URL)" ]] || fail 'webhook URL must stay empty until public HTTPS health passes'
 [[ "$(neo_env_get PILOT_ENABLED)" == 'false' ]] || fail 'pilot must stay false on first write'
 [[ "$(neo_env_get PROVISIONING_MODE)" == 'disabled' ]] || fail 'provisioning must start disabled'
 [[ "$(neo_env_get TELEGRAM_BOT_USERNAME)" == 'NeoNetworkBot' ]] || fail 'bot username was not written'
@@ -97,11 +97,11 @@ first_password="$(neo_env_get POSTGRES_PASSWORD)"
 first_webhook="$(neo_env_get TELEGRAM_WEBHOOK_SECRET)"
 [[ ${#first_password} -ge 16 ]] || fail 'postgres password was not generated'
 [[ ${#first_webhook} -ge 16 ]] || fail 'webhook secret was not generated'
-[[ "$(stat -c '%a' "$(neo_env_file)")" == '600' ]] || fail '.env mode must be 600'
+env_mode="$(stat -c '%a' "$(neo_env_file)" 2>/dev/null || stat -f '%Lp' "$(neo_env_file)")"; [[ "$env_mode" == '600' ]] || fail '.env mode must be 600'
 
 masked="$(neo_env_display TELEGRAM_BOT_TOKEN)"
 [[ "$masked" != *'ABCDEFGHIJKLMNOPQRSTUVWXYZ12'* ]] || fail 'token must stay masked'
-[[ "$masked" == *'YZ12' ]] || fail 'mask should keep a short suffix'
+[[ "$masked" == '********' ]] || fail 'mask must not expose a token suffix'
 
 neo_write_production_env \
   'bot.example.com' \

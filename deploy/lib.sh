@@ -93,9 +93,14 @@ neo_prompt_secret() {
   local value=""
   printf '%s' "$1" >&2
   if [[ -t 0 ]]; then
-    stty -echo
+    if ! stty -echo; then
+      neo_err "Could not hide input on this terminal; aborting secret prompt."
+      return 1
+    fi
+    trap "stty echo 2>/dev/null || true" INT TERM HUP
     IFS= read -r value || true
     stty echo
+    trap - INT TERM HUP
     printf '\n' >&2
   else
     IFS= read -r value || true
@@ -264,14 +269,16 @@ neo_url_safe_password() {
   openssl rand -hex 16
 }
 
-neo_mask() {
-  local value="$1"
-  local length="${#value}"
-  if [[ "$length" -le 4 ]]; then
-    printf '%s' '********'
-    return 0
+neo_validate_postgres_password() {
+  if [[ -z "$1" || ! "$1" =~ ^[A-Za-z0-9._~-]+$ ]]; then
+    neo_err "POSTGRES_PASSWORD must contain only URL-safe characters (letters, digits, . _ - ~)."
+    return 1
   fi
-  printf '%s%s' '********' "${value: -4}"
+  return 0
+}
+
+neo_mask() {
+  printf "%s" "********"
 }
 
 neo_env_file() {
@@ -280,6 +287,15 @@ neo_env_file() {
 
 neo_env_exists() {
   [[ -f "$(neo_env_file)" ]]
+}
+
+neo_env_is_complete() {
+  local key value
+  for key in TELEGRAM_PUBLIC_HOST TELEGRAM_BOT_TOKEN TELEGRAM_ADMIN_IDS POSTGRES_PASSWORD DATABASE_URL PASARGUARD_BASE_URL PASARGUARD_API_KEY TELEGRAM_WEBHOOK_SECRET WEB_ORIGINS; do
+    value="$(neo_env_get "$key" || true)"
+    [[ -n "$value" ]] || return 1
+  done
+  return 0
 }
 
 neo_env_get() {
@@ -377,6 +393,18 @@ neo_env_unset() {
 
 # --- host tools --------------------------------------------------------------
 
+neo_host_preflight() {
+  if ! docker info >/dev/null 2>&1; then
+    neo_die "Docker is installed but the daemon is not ready. Start Docker, then try again."
+  fi
+  local port
+  for port in 80 443 3100; do
+    if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+      neo_err "Warning: port ${port} is already occupied; Compose may not be able to start neo_bot."
+    fi
+  done
+}
+
 neo_detect_compose() {
   if docker compose version >/dev/null 2>&1; then
     NEO_COMPOSE=(docker compose)
@@ -438,13 +466,14 @@ neo_require_host_tools() {
     missing=1
   fi
   if [[ "$missing" -eq 0 ]]; then
+    neo_host_preflight
     return 0
   fi
   local family
   family="$(neo_os_family)"
   neo_err 'Ubuntu/Debian example: apt-get install -y git curl openssl docker.io docker-compose-v2'
   if [[ "$family" == 'ubuntu' || "$family" == 'debian' ]]; then
-    if neo_confirm 'Install missing packages now? type yes to continue: '; then
+    if neo_confirm 'Install missing packages? Type yes / نصب بسته‌ها؟ yes: '; then
       neo_install_host_packages
       neo_need_cmd git
       neo_need_cmd curl
@@ -453,6 +482,7 @@ neo_require_host_tools() {
       if ! neo_detect_compose; then
         neo_die 'Install Docker Compose v2 (docker compose).'
       fi
+      neo_host_preflight
       return 0
     fi
   fi
@@ -464,6 +494,9 @@ neo_compose() {
     if ! neo_detect_compose; then
       neo_die 'Install Docker Compose v2 (docker compose).'
     fi
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    neo_die 'Docker is installed but the daemon is not reachable. Start Docker, then try again.'
   fi
   (
     cd "$NEO_ROOT" || exit 1
@@ -519,17 +552,24 @@ neo_wait_loopback_health() {
   fi
   if ! command -v curl >/dev/null 2>&1; then
     neo_say 'curl is not installed; check `docker compose -f docker-compose.production.yml ps` yourself.'
-    return 0
+    return 1
   fi
   neo_say 'Waiting for loopback /health…'
   local i
   for ((i = 0; i < 30; i += 1)); do
-    if curl -fsS http://127.0.0.1:3100/health >/dev/null 2>&1; then
+    if curl -fsS --connect-timeout 3 --max-time 10 http://127.0.0.1:3100/health >/dev/null 2>&1; then
       return 0
     fi
     sleep 2
   done
-  neo_die 'bot-api did not become healthy on loopback. Check compose logs on the host.'
+  neo_err 'bot-api did not become healthy on loopback. Check compose logs on the host.'
+  return 1
+}
+
+neo_require_static_dist() {
+  if [[ ! -f "${NEO_ROOT}/apps/admin-web/dist/client/index.html" ]]; then
+    neo_die 'Customer static assets are missing. Re-run install/update without NEO_SKIP_BUILD=1.'
+  fi
 }
 
 neo_start_stack() {
@@ -537,6 +577,7 @@ neo_start_stack() {
     neo_say 'Skipping Compose start (NEO_SKIP_COMPOSE=1).'
     return 0
   fi
+  neo_require_static_dist
   neo_say 'Starting Postgres, bot-api, and Caddy…'
   neo_compose up -d --build
   neo_wait_loopback_health
@@ -553,16 +594,40 @@ neo_write_production_env() {
   local webhook_secret=""
   local postgres_password=""
   local bot_username="${8:-}"
+  local previous_pilot=""
+  local previous_mode=""
+  local previous_env=""
+  if [[ "$reuse_secrets" == '1' ]] && neo_env_exists; then
+    previous_env="$(mktemp "${TMPDIR:-/tmp}/neo-env-previous.XXXXXX")"
+    cp "$(neo_env_file)" "$previous_env"
+  fi
 
   if [[ "$reuse_secrets" == '1' ]] && neo_env_exists; then
     webhook_secret="$(neo_env_get TELEGRAM_WEBHOOK_SECRET || true)"
     postgres_password="$(neo_env_get POSTGRES_PASSWORD || true)"
+    previous_pilot="$(neo_env_get PILOT_ENABLED || true)"
+    previous_mode="$(neo_env_get PROVISIONING_MODE || true)"
   fi
   if [[ -z "$webhook_secret" ]]; then
     webhook_secret="$(neo_url_safe_secret)"
   fi
   if [[ -z "$postgres_password" ]]; then
     postgres_password="$(neo_url_safe_password)"
+  fi
+  if ! neo_validate_postgres_password "$postgres_password"; then
+    neo_err "Existing PostgreSQL password is not URL-safe for DATABASE_URL."
+    neo_err "Changing .env alone can break the live database; rotate the DB password first."
+    if ! neo_confirm "DB password already rotated? Type yes / رمز DB چرخانده شده؟ yes: "; then
+
+
+      return 1
+    fi
+    while true; do
+      postgres_password="$(neo_prompt_secret "New URL-safe PostgreSQL password / رمز جدید (hidden): ")"
+      if neo_validate_postgres_password "$postgres_password"; then
+        break
+      fi
+    done
   fi
   bot_username="${bot_username#@}"
 
@@ -594,7 +659,7 @@ neo_write_production_env() {
     printf '%s\n' 'TELEGRAM_ENABLED=true'
     printf 'TELEGRAM_BOT_TOKEN=%s\n' "$token"
     printf 'TELEGRAM_WEBHOOK_SECRET=%s\n' "$webhook_secret"
-    printf 'TELEGRAM_WEBHOOK_URL=https://%s/telegram/webhook\n' "$host"
+    printf '%s\n' 'TELEGRAM_WEBHOOK_URL='
     printf 'TELEGRAM_ADMIN_IDS=%s\n' "$admin_ids"
     if [[ -n "$report_group" ]]; then
       printf 'TELEGRAM_REPORT_GROUP_CHAT_ID=%s\n' "$report_group"
@@ -605,6 +670,22 @@ neo_write_production_env() {
   } >"$(neo_env_file)"
   chmod 600 "$(neo_env_file)"
   umask "$old_umask"
+  if [[ -n "$previous_env" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ "$line" == *=* ]] || continue
+      key="${line%%=*}"
+      neo_valid_env_key "$key" || continue
+      case "$key" in
+        NODE_ENV|HOST|PORT|LOG_LEVEL|TELEGRAM_PUBLIC_HOST|WEB_ORIGINS|POSTGRES_PASSWORD|DATABASE_URL|PASARGUARD_BASE_URL|PASARGUARD_API_KEY|PASARGUARD_TIMEOUT_MS|PASARGUARD_MAX_RETRIES|PILOT_PROVIDER_CODE|PILOT_VARIANT_CODE|PILOT_VARIANT_NAME|PILOT_GROUP_ID|PILOT_DURATION_DAYS|PILOT_DATA_LIMIT_BYTES|PILOT_DEVICE_LIMIT|PILOT_ENABLED|PROVISIONING_MODE|TELEGRAM_ENABLED|TELEGRAM_BOT_TOKEN|TELEGRAM_WEBHOOK_SECRET|TELEGRAM_WEBHOOK_URL|TELEGRAM_ADMIN_IDS|TELEGRAM_REPORT_GROUP_CHAT_ID|TELEGRAM_BOT_USERNAME) ;;
+        *) neo_env_set "$key" "${line#*=}" ;;
+      esac
+    done <"$previous_env"
+    rm -f "$previous_env"
+  fi
+  if [[ "$reuse_secrets" == '1' ]]; then
+    [[ -n "$previous_pilot" ]] && neo_env_set PILOT_ENABLED "$previous_pilot"
+    [[ -n "$previous_mode" ]] && neo_env_set PROVISIONING_MODE "$previous_mode"
+  fi
   neo_say 'Wrote host .env (gitignored).'
 }
 
@@ -625,7 +706,7 @@ neo_collect_setup_answers() {
 
   local host token admin_ids report_group panel_url panel_key bot_username
   while true; do
-    host="$(neo_prompt_default 'Public hostname (DNS A record must already point here, no https://)' "$current_host")"
+    host="$(neo_prompt_default 'Public hostname / نام دامنه عمومی (DNS A record; no https://)' "$current_host")"
     if neo_validate_hostname "$host"; then
       break
     fi
@@ -633,12 +714,12 @@ neo_collect_setup_answers() {
 
   while true; do
     if [[ "$reuse" == '1' ]] && neo_env_get TELEGRAM_BOT_TOKEN >/dev/null; then
-      token="$(neo_prompt_secret 'BotFather token (hidden; empty keeps current): ')"
+      token="$(neo_prompt_secret 'BotFather token / توکن BotFather (hidden; empty keeps current): ')"
       if [[ -z "$token" ]]; then
         token="$(neo_env_get TELEGRAM_BOT_TOKEN)"
       fi
     else
-      token="$(neo_prompt_secret 'BotFather token (input hidden): ')"
+      token="$(neo_prompt_secret 'BotFather token / توکن BotFather (input hidden): ')"
     fi
     if neo_validate_bot_token "$token"; then
       break
@@ -646,7 +727,7 @@ neo_collect_setup_answers() {
   done
 
   while true; do
-    admin_ids="$(neo_prompt_default 'Numeric admin Telegram IDs (comma-separated)' "$current_admins")"
+    admin_ids="$(neo_prompt_default 'Admin Telegram IDs / شناسه عددی مدیران (comma-separated)' "$current_admins")"
     admin_ids="$(neo_normalize_admin_ids "$admin_ids")"
     if neo_validate_admin_ids "$admin_ids"; then
       break
@@ -654,14 +735,14 @@ neo_collect_setup_answers() {
   done
 
   while true; do
-    report_group="$(neo_prompt_default 'Report group chat ID (empty skips forum topics)' "$current_report")"
+    report_group="$(neo_prompt_default 'Report group chat ID / شناسه گروه گزارش (empty skips topics)' "$current_report")"
     if neo_validate_report_chat_id "$report_group"; then
       break
     fi
   done
 
   while true; do
-    panel_url="$(neo_prompt_default 'PasarGuard base URL (empty keeps a placeholder)' "$current_panel")"
+    panel_url="$(neo_prompt_default 'PasarGuard URL / آدرس PasarGuard (empty keeps placeholder)' "$current_panel")"
     if [[ -z "$panel_url" ]]; then
       panel_url="$NEO_PLACEHOLDER_PANEL"
       break
@@ -673,12 +754,12 @@ neo_collect_setup_answers() {
 
   while true; do
     if [[ "$reuse" == '1' ]] && neo_env_get PASARGUARD_API_KEY >/dev/null; then
-      panel_key="$(neo_prompt_secret 'PasarGuard API key (hidden; empty keeps current): ')"
+      panel_key="$(neo_prompt_secret 'PasarGuard API key / کلید API (hidden; empty keeps current): ')"
       if [[ -z "$panel_key" ]]; then
         panel_key="$(neo_env_get PASARGUARD_API_KEY)"
       fi
     else
-      panel_key="$(neo_prompt_secret 'PasarGuard API key (hidden; empty keeps a placeholder): ')"
+      panel_key="$(neo_prompt_secret 'PasarGuard API key / کلید API (hidden; empty keeps placeholder): ')"
       if [[ -z "$panel_key" ]]; then
         panel_key="$NEO_PLACEHOLDER_KEY"
       fi
@@ -689,7 +770,7 @@ neo_collect_setup_answers() {
   done
 
   while true; do
-    bot_username="$(neo_prompt_default 'Public bot username without @ (empty skips invite links)' "$current_username")"
+    bot_username="$(neo_prompt_default 'Public bot username / نام کاربری ربات بدون @ (empty skips invite links)' "$current_username")"
     bot_username="${bot_username#@}"
     if neo_validate_bot_username "$bot_username"; then
       break
@@ -712,23 +793,21 @@ neo_install_or_reconfigure() {
 
   local mode='write'
   if neo_env_exists; then
-    neo_say '.env already exists.'
-    neo_say '  [k] keep current secrets and rebuild/start'
-    neo_say '  [r] reconfigure values (keeps DB password and webhook secret)'
-    neo_say '  [q] quit without changes'
-    local choice
-    choice="$(neo_prompt 'Choose k, r, or q: ')"
-    case "$choice" in
-      k | K | keep)
-        mode='keep'
-        ;;
-      r | R | reconfigure | yes)
-        mode='write'
-        ;;
-      *)
-        neo_die 'Stopped without changing .env.'
-        ;;
-    esac
+    if ! neo_env_is_complete; then
+      neo_say '.env exists but is incomplete / فایل .env ناقص است؛ continuing with reconfigure.'
+    else
+      neo_say '.env already exists / فایل .env از قبل وجود دارد.'
+      neo_say '  [k] keep current values and rebuild/start / حفظ مقادیر'
+      neo_say '  [r] reconfigure values / تغییر تنظیمات (secrets are preserved)'
+      neo_say '  [q] quit without changes / خروج'
+      local choice
+      choice="$(neo_prompt 'Choose k, r, or q / انتخاب: ')"
+      case "$choice" in
+        k | K | keep) mode='keep' ;;
+        r | R | reconfigure | yes) mode='write' ;;
+        *) neo_die 'Stopped without changing .env / بدون تغییر متوقف شد.' ;;
+      esac
+    fi
   fi
 
   if [[ "$mode" == 'write' ]]; then
@@ -753,11 +832,30 @@ neo_install_or_reconfigure() {
 
   neo_build_static
   neo_start_stack
+  if [[ "${NEO_SKIP_COMPOSE:-}" != '1' ]]; then
+    if ! neo_health_check; then
+      neo_err 'Install incomplete: API or Caddy/TLS health failed; no success claim was made.'
+      return 1
+    fi
+    neo_env_set TELEGRAM_WEBHOOK_URL "https://${NEO_SETUP_HOST}/telegram/webhook"
+    if ! neo_compose restart bot-api; then
+      neo_err 'Install incomplete: bot-api restart after webhook bootstrap failed.'
+      return 1
+    fi
+    if ! neo_wait_loopback_health; then
+      neo_err 'Install incomplete: bot-api failed loopback health after webhook bootstrap.'
+      return 1
+    fi
+  else
+    neo_say 'Setup written; Compose was skipped, so health remains unverified.'
+  fi
   neo_link_cli
-  neo_say 'Install finished. Caddy will request TLS certificates for the hostname you typed.'
-  neo_say 'When HTTPS answers, restart bot-api so the webhook is registered:'
-  neo_say '  bash deploy/neo   (option 4 → restart)'
-  neo_say '  docker compose -f docker-compose.production.yml restart bot-api'
+  if [[ "${NEO_SKIP_COMPOSE:-}" == '1' ]]; then
+    neo_say 'Setup written; installation is not finished because Compose health was skipped.'
+  else
+    neo_say 'Install finished: API loopback and Caddy/TLS public health passed.'
+    neo_say 'Webhook URL was enabled only after HTTPS health passed.'
+  fi
   neo_say 'Do not paste the BotFather token, .env, or webhook secret into chat.'
 }
 
@@ -777,7 +875,7 @@ neo_settings_menu() {
     return 1
   fi
   while true; do
-    neo_title 'Change settings'
+    neo_title 'Change settings / تغییر تنظیمات'
     neo_say "1) Hostname          $(neo_env_display TELEGRAM_PUBLIC_HOST)"
     neo_say "2) BotFather token   $(neo_env_display TELEGRAM_BOT_TOKEN)"
     neo_say "3) Admin IDs         $(neo_env_display TELEGRAM_ADMIN_IDS)"
@@ -789,13 +887,13 @@ neo_settings_menu() {
     neo_say "9) Provisioning mode $(neo_env_display PROVISIONING_MODE)"
     neo_say "10) Isolated group   $(neo_env_display PROVISIONING_ISOLATED_GROUP_ID)"
     neo_say "11) PILOT_ENABLED    $(neo_env_display PILOT_ENABLED)"
-    neo_say '0) Back'
+    neo_say '0) Back / بازگشت'
     local choice
-    choice="$(neo_prompt 'Settings choice: ')"
+    choice="$(neo_prompt 'Settings choice / انتخاب تنظیمات: ')"
     case "$choice" in
       1)
         local host
-        host="$(neo_prompt 'New public hostname (DNS only): ')"
+        host="$(neo_prompt 'New public hostname / نام دامنه جدید (DNS only): ')"
         if neo_apply_hostname "$host"; then
           neo_say 'Updated hostname, WEB_ORIGINS, and webhook URL.'
         fi
@@ -810,7 +908,7 @@ neo_settings_menu() {
         ;;
       3)
         local ids
-        ids="$(neo_normalize_admin_ids "$(neo_prompt 'Numeric admin Telegram IDs (comma-separated): ')")"
+        ids="$(neo_normalize_admin_ids "$(neo_prompt 'Admin Telegram IDs / شناسه عددی مدیران (comma-separated): ')")"
         if neo_validate_admin_ids "$ids"; then
           neo_env_set TELEGRAM_ADMIN_IDS "$ids"
           neo_say 'Updated admin IDs.'
@@ -872,7 +970,7 @@ neo_settings_menu() {
         mode="$(neo_prompt 'PROVISIONING_MODE (disabled/isolated/live): ')"
         if neo_validate_provisioning_mode "$mode"; then
           if [[ "$mode" == 'live' ]]; then
-            if ! neo_confirm 'Live mode mutates PasarGuard. Type yes to continue: '; then
+            if ! neo_confirm 'Live mode mutates PasarGuard. Type yes / حالت live تغییر می‌دهد؛ yes: '; then
               neo_err 'Kept previous provisioning mode.'
               continue
             fi
@@ -901,7 +999,7 @@ neo_settings_menu() {
         pilot="$(neo_prompt 'PILOT_ENABLED (true/false): ')"
         if neo_validate_bool "$pilot"; then
           if [[ "$pilot" == 'true' ]]; then
-            if ! neo_confirm 'Pilot mutations require an isolated group. Type yes to continue: '; then
+            if ! neo_confirm 'Pilot mutations require an isolated group. Type yes / نیازمند گروه isolated؛ yes: '; then
               neo_err 'Kept PILOT_ENABLED unchanged.'
               continue
             fi
@@ -911,7 +1009,7 @@ neo_settings_menu() {
         fi
         ;;
       0 | q | Q)
-        if neo_confirm 'Restart bot-api to apply .env changes? type yes: '; then
+        if neo_confirm 'Restart bot-api to apply .env? Type yes / راه‌اندازی مجدد؟ yes: '; then
           neo_compose restart bot-api || true
         fi
         return 0
@@ -938,7 +1036,7 @@ neo_update_from_git() {
   ref="$(neo_git_ref)"
   neo_say "Current checkout: ${NEO_ROOT}"
   neo_say "Requested ref: ${ref}"
-  if ! neo_confirm 'Fetch and fast-forward this checkout, then rebuild? type yes: '; then
+  if ! neo_confirm 'Fetch, fast-forward, rebuild? Type yes / دریافت و بازسازی؟ yes: '; then
     neo_say 'Update cancelled.'
     return 0
   fi
@@ -974,14 +1072,14 @@ neo_service_menu() {
   neo_require_host_tools
   while true; do
     neo_title 'Services'
-    neo_say '1) Start'
-    neo_say '2) Stop (keeps volumes)'
-    neo_say '3) Restart'
-    neo_say '4) Status'
-    neo_say '5) Logs (last 80 lines)'
-    neo_say '0) Back'
+    neo_say '1) Start / شروع'
+    neo_say '2) Stop (keeps volumes) / توقف (حجم‌ها حفظ می‌شوند)'
+    neo_say '3) Restart / راه‌اندازی مجدد'
+    neo_say '4) Status / وضعیت'
+    neo_say '5) Logs (last 80 lines) / گزارش‌ها'
+    neo_say '0) Back / بازگشت'
     local choice
-    choice="$(neo_prompt 'Service choice: ')"
+    choice="$(neo_prompt 'Service choice / انتخاب سرویس: ')"
     case "$choice" in
       1) neo_compose up -d ;;
       2) neo_compose stop ;;
@@ -1017,13 +1115,16 @@ neo_backup_db() {
 
 neo_health_check() {
   if ! command -v curl >/dev/null 2>&1; then
-    neo_die 'curl is required for the health check.'
+    neo_err 'curl is required for the health check.'
+    return 1
   fi
+  local failed=0
   neo_say 'Loopback GET /health:'
-  if curl -fsS http://127.0.0.1:3100/health; then
+  if curl -fsS --connect-timeout 3 --max-time 10 http://127.0.0.1:3100/health; then
     printf '\n'
   else
-    neo_err 'Loopback /health failed. Is bot-api running?'
+    neo_err 'API health failed on loopback. Is bot-api running?'
+    failed=1
   fi
   local host=""
   if neo_env_exists; then
@@ -1031,15 +1132,20 @@ neo_health_check() {
   fi
   if [[ -n "$host" ]]; then
     neo_say "Public HTTPS GET /health on ${host}:"
-    if curl -fsS "https://${host}/health"; then
+    if curl -fsS --connect-timeout 5 --max-time 15 "https://${host}/health"; then
       printf '\n'
       neo_say 'If Telegram should use the webhook, restart bot-api after HTTPS works.'
     else
-      neo_err 'Public HTTPS /health is not ready yet. Check DNS A and Caddy logs.'
+      neo_err 'Caddy/TLS public HTTPS health failed. Check DNS, ports 80/443, and Caddy logs.'
+      failed=1
     fi
+  else
+    neo_err 'Public HTTPS health was not checked: TELEGRAM_PUBLIC_HOST is missing.'
+    failed=1
   fi
   if command -v docker >/dev/null 2>&1 && neo_detect_compose && neo_env_exists; then
     neo_compose ps || true
   fi
   neo_say 'Do not paste tokens, .env, or webhook secrets into chat.'
+  return "$failed"
 }

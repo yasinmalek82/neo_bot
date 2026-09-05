@@ -39,19 +39,14 @@ Copy `.env.example` to `.env`, change only local values, then start PostgreSQL a
 Owner path for one Ubuntu/Debian VPS. Do not invent a hostname. Point a DNS **A** record at the
 server first. Let’s Encrypt will not issue a certificate for a raw IP.
 
-Prerequisites: Ubuntu 22.04/24.04-style host, Git, curl, Docker Engine, Docker Compose v2. The
-menu can install those packages on Ubuntu/Debian if you type `yes`.
+Prerequisites: Ubuntu 22.04/24.04-style host, Git, curl, Docker Engine, Docker Compose v2. Installing
+missing packages changes the host and requires root; run as root or re-run with `sudo` when prompted.
+The menu can install those packages on Ubuntu/Debian if you type `yes`.
 
-After this branch is merged to `main`:
+The supported one-liner is:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/yasinmalek82/neo_bot/main/deploy/neo-install.sh)
-```
-
-Until merge, pin the PR branch (replace the ref if you checked out a different name):
-
-```bash
-NEO_BOT_REF=cursor/vps-installer-menu-59e1 bash <(curl -fsSL https://raw.githubusercontent.com/yasinmalek82/neo_bot/cursor/vps-installer-menu-59e1/deploy/neo-install.sh)
 ```
 
 Or clone first, then open the same menu:
@@ -62,8 +57,7 @@ cd neo_bot
 bash deploy/neo-install.sh
 ```
 
-The bootstrap clones or updates `/opt/neo_bot` (or `$HOME/neo_bot`), then opens `deploy/neo`.
-Type values only on the server:
+The bootstrap clones a checkout when needed (default `/opt/neo_bot` as root, otherwise `$HOME/neo_bot`, override with `NEO_BOT_DIR`) and opens the persistent menu. Re-running the one-liner reuses the checkout and opens the menu; menu option 2 fetches, fast-forwards, rebuilds, and restarts it. Type values only on the server:
 
 - public DNS hostname (no `https://`)
 - BotFather token (hidden)
@@ -72,17 +66,9 @@ Type values only on the server:
 - optional PasarGuard URL and API key (placeholders are fine until checkout provisioning)
 - optional public bot username for invite links
 
-It writes a gitignored `.env`, generates database and webhook secrets, keeps `PILOT_ENABLED=false`
-and `PROVISIONING_MODE=disabled`, builds customer static assets, and starts
-`docker-compose.production.yml` (Postgres unpublished, API on loopback, Caddy on 80/443).
-Running install again detects an existing `.env` and offers keep-and-rebuild versus reconfigure
-(reconfigure keeps the database password and webhook secret).
+It writes a gitignored `.env`, generates database and webhook secrets, keeps `PILOT_ENABLED=false` and `PROVISIONING_MODE=disabled`, and starts `docker-compose.production.yml` after building customer static assets. The first start leaves `TELEGRAM_WEBHOOK_URL` empty until loopback and public HTTPS health pass, then enables it and restarts `bot-api`. Running install again detects `.env` and offers keep-and-rebuild versus reconfigure; reconfigure preserves the database password, webhook secret, and provisioning gates.
 
-After HTTPS answers, use the menu (`bash deploy/neo` or `neo` when the symlink exists) to restart
-`bot-api`, then confirm `GET https://<hostname>/health` and tap `/start` in Telegram. The customer
-store is the chat. Details: `docs/runbooks/first-host.md`.
-Never commit `.env` or paste tokens, webhook secrets, or subscription URLs into chat or GitHub
-issues. `bash deploy/install.sh` still runs first setup only, without the management menu.
+After health passes, confirm `GET https://<hostname>/health` and tap `/start` in Telegram. The customer store is the chat. Details: `docs/runbooks/first-host.md`.
 
 ## Local verification
 

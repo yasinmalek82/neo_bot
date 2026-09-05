@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Public one-line VPS entry: clone or update the repo, then open the menu.
+# Public one-line VPS entry: clone a checkout when needed, then open the menu.
 #
 # After merge to main:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/yasinmalek82/neo_bot/main/deploy/neo-install.sh)
@@ -7,7 +7,7 @@
 # From a local checkout:
 #   bash deploy/neo-install.sh
 #
-# Override clone target / branch:
+# Override clone target / branch (also enables bootstrap updates for an existing checkout):
 #   NEO_BOT_DIR=/opt/neo_bot NEO_BOT_REF=main bash deploy/neo-install.sh
 #
 # Never run with `bash -x` or `set -x`; the menu prompts include secrets.
@@ -148,10 +148,14 @@ fi
 if [[ -n "${NEO_BOT_REF:-}" ]]; then
   git -C "$ROOT" fetch --tags origin
   if git -C "$ROOT" show-ref --verify --quiet "refs/remotes/origin/${REF}"; then
-    git -C "$ROOT" checkout "$REF"
-    git -C "$ROOT" merge --ff-only "origin/${REF}" || true
+    if ! git -C "$ROOT" checkout "$REF"; then
+      neo_die "Could not check out ${REF}; resolve local checkout changes before retrying."
+    fi
+    if ! git -C "$ROOT" merge --ff-only "origin/${REF}"; then
+      neo_die "Could not fast-forward ${REF}; refusing to continue with stale code. Commit or stash local changes, then retry."
+    fi
   else
-    neo_err "Remote does not have ref ${REF} yet. Using the current checkout."
+    neo_die "Remote does not have ref ${REF}; refusing to continue with stale code. Set NEO_BOT_REF to a real branch."
   fi
 fi
 

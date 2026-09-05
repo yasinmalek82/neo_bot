@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 cd "$(dirname "$0")/.."
 
@@ -11,6 +12,15 @@ fi
 mkdir -p backups
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 outfile="backups/neo_bot-${stamp}.dump"
+tmpfile="${outfile}.tmp.$$"
+backup_complete=0
+cleanup_backup() {
+  rm -f -- "$tmpfile"
+  if [[ "$backup_complete" -ne 1 && -n "$outfile" ]]; then
+    rm -f -- "$outfile"
+  fi
+}
+trap cleanup_backup EXIT
 
 compose_cmd() {
   if [[ -n "${COMPOSE_FILE:-}" ]]; then
@@ -28,11 +38,11 @@ compose_cmd() {
 }
 
 dump_with_client() {
-  pg_dump --no-owner --format=custom --file="${outfile}" "${DATABASE_URL}"
+  pg_dump --no-owner --format=custom --file="${tmpfile}" "${DATABASE_URL}"
 }
 
 dump_with_compose() {
-  compose_cmd exec -T postgres pg_dump -U neo_bot -d neo_bot --no-owner --format=custom >"${outfile}"
+  compose_cmd exec -T postgres pg_dump -U neo_bot -d neo_bot --no-owner --format=custom >"${tmpfile}"
 }
 
 is_compose_network_url() {
@@ -58,7 +68,7 @@ if is_compose_network_url && command -v docker >/dev/null 2>&1; then
     dumped=1
   else
     printf '%s\n' 'docker compose dump failed. For host postgres use docker-compose.production.yml.' >&2
-    rm -f "${outfile}"
+    rm -f "${tmpfile}"
     exit 1
   fi
 fi
@@ -72,10 +82,14 @@ if [[ "${dumped}" -eq 0 ]]; then
   fi
 fi
 
-if [[ ! -s "${outfile}" ]]; then
+if [[ ! -s "${tmpfile}" ]]; then
   printf '%s\n' 'Backup file was empty.' >&2
-  rm -f "${outfile}"
+  rm -f "${tmpfile}"
   exit 1
 fi
 
-printf 'Wrote %s\n' "${outfile}"
+mv "$tmpfile" "$outfile"
+chmod 600 "$outfile"
+backup_complete=1
+printf 'Wrote %s\n' "$outfile"
+printf 'Warning: this dump is local only; copy it to separate off-host storage.\n'
