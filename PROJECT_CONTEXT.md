@@ -1,7 +1,7 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T07:52:07.380Z
-source-fingerprint: 080570569ddb3040e48d81750abd97f50b86455b5b5ebb76b643451d83029521
+last-updated: 2026-09-05T07:56:53.520Z
+source-fingerprint: 2c91d658a00b4e1f98768d07ef79d6a3c5d5f8418e9b2f39ade7c3f46b7213d1
 current-phase: durable-interaction-kernel
 next-task: adopt-remaining-operator-input-into-durable-flows
 -->
@@ -98,9 +98,9 @@ Create a new ADR before materially changing one of these decisions.
 
 ## Current verified snapshot
 
-Last evidence refresh: `2026-09-05`, reviewed the durable customer-flow implementation on the
-August 2026 remote baseline. Isolated local Slice 1 runtime and first-host evidence below are
-unchanged historical records, not a new live check.
+Last evidence refresh: `2026-09-05`, after pinning patched transitive `fast-uri` so CI
+`pnpm audit --audit-level=high` can pass. Isolated local Slice 1 runtime and first-host
+evidence below are unchanged historical records, not a new live check.
 
 - Production-MVP readiness estimate: the customer store and catalog administration are both chat
   paths; live administrator publication, live purchase, and the seven-day pilot remain owner-side.
@@ -184,8 +184,11 @@ unchanged historical records, not a new live check.
   tests), dead-code, high-severity audit and diff checks pass. Graphify was fully re-extracted and
   updated after the ignore change (`1545` nodes, `3056` edges). This is tooling validation, not
   production evidence.
-- CI `pnpm audit --audit-level=high` is required. One moderate `uuid` advisory remains in
-  Testcontainers only.
+- CI `pnpm audit --audit-level=high` is required. GitHub check on this branch failed because
+  transitive `fast-uri` `3.1.5` and `4.1.2` (via `@nestjs/platform-fastify` -> `fastify`)
+  were below the patched lines. Workspace overrides now pin `3.1.6` and `4.1.3`; local
+  `pnpm audit --audit-level=high` exits `0`. Three moderate advisories remain and do not
+  fail that gate.
 - Live test forum: eight purpose topics exist. The local outbox delivered first-contact, returning
   activity, one `order.created`, and one `ops.daily_summary` (four deliveries, none failed). One
   sales order is `awaiting_receipt` with zero payment proofs. Receipt, approval and provisioning
@@ -485,6 +488,18 @@ handoff entry.
 ## Handoff log
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
+
+### 2026-09-05 - Pin patched fast-uri for the high-severity CI audit
+
+- Outcome: `pnpm-workspace.yaml` now overrides transitive `fast-uri@^3` to `3.1.6` and
+  `fast-uri@^4` to `4.1.3`. pnpm 11 ignores `package.json#pnpm.overrides`. Product next
+  task is unchanged.
+- Validation: local `pnpm why fast-uri` shows only the patched versions; local
+  `pnpm audit --audit-level=high` exits `0` with three remaining moderate findings.
+  Full `pnpm check` is being re-run after this stamp. No production migrate, Telegram
+  send, or PasarGuard mutation.
+- Next: keep remaining operator input off process-local Maps; apply `0014` only with
+  explicit isolated-database authorization.
 
 ### 2026-09-05 - Feature 005 Phase 4 customer restart-safe flows
 
