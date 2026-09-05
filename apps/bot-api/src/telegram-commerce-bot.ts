@@ -2574,17 +2574,21 @@ export class TelegramCommerceBot {
         : kind === 'p'
           ? [{ text: 'افزودن اینجا', callback_data: `store:add:v:${row.id}` }]
           : [];
+    const categoryId =
+      'categoryId' in row && typeof row.categoryId === 'string' ? row.categoryId : '0';
+    const productId =
+      'productId' in row && typeof row.productId === 'string' ? row.productId : '0';
     const back =
       kind === 'c'
         ? { text: 'بازگشت', callback_data: 'store:list:c:0' }
         : kind === 'p'
           ? {
               text: 'بازگشت',
-              callback_data: `store:detail:c:${'categoryId' in row ? row.categoryId : '0'}`,
+              callback_data: `store:detail:c:${categoryId}`,
             }
           : {
               text: 'بازگشت',
-              callback_data: `store:detail:p:${'productId' in row ? row.productId : '0'}`,
+              callback_data: `store:detail:p:${productId}`,
             };
     await this.present(
       target,
