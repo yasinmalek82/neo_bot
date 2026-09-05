@@ -12,3 +12,5 @@ export * from './support-ticket.js';
 export * from './referral.js';
 export * from './usage-sync.js';
 export * from './wallet.js';
+
+export * from './representative-wallet.js';

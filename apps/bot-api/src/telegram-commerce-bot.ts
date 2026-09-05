@@ -10,6 +10,7 @@ import type {
   CustomerDeliveryUseCase,
   OpsDailySummaryUseCase,
   ReportingUseCase,
+  RepresentativeWalletRepository,
 } from '@neo-bot/application';
 import {
   CommercialOpsUseCase,
@@ -19,6 +20,7 @@ import {
   SupportTicketUseCase,
   UsageSyncUseCase,
   WalletUseCase,
+  RepresentativeWalletUseCase,
   type UsageReader,
 } from '@neo-bot/application';
 import {
@@ -34,6 +36,7 @@ import {
   type TelegramCustomerInput,
   parseNonNegativeIrr,
   type AdminOpsField,
+  type RepresentativeWalletLedgerEntry,
 } from '@neo-bot/domain';
 
 import type { TelegramConfig } from './config.js';
@@ -92,6 +95,7 @@ import {
   ADMIN_OPS_CALLBACK,
   ADMIN_SALES_CALLBACK,
   ADMIN_BROADCAST_CALLBACK,
+  ADMIN_REP_WALLET_CALLBACK,
   ADMIN_BROADCAST_CANCEL_PREFIX,
   INVITE_CALLBACK,
   ORDERS_WALLET_CALLBACK,
@@ -158,6 +162,7 @@ import {
   variantText,
 } from './telegram-menu.js';
 import { AdminBroadcastFlowHandler, AdminOpsFlowHandler } from './interaction/admin-ops-flow.js';
+import { AdminRepWalletCreditFlowHandler } from './interaction/admin-rep-wallet-flow.js';
 import { CommerceFlowHandler } from './interaction/commerce-flow.js';
 import {
   applyFlowTransition,
@@ -208,6 +213,7 @@ export class TelegramCommerceBot {
   private readonly commercial: CommercialOpsUseCase;
   private readonly referral: ReferralUseCase;
   private readonly usageSync: UsageSyncUseCase;
+  private readonly repWallet: RepresentativeWalletUseCase;
 
   public constructor(
     config: Extract<TelegramConfig, { readonly enabled: true }>,
@@ -222,6 +228,7 @@ export class TelegramCommerceBot {
     private readonly delivery: CustomerDeliveryUseCase | null = null,
     usageReader: UsageReader | null = null,
     sessions?: ConversationSessionStore,
+    representativeWallet: RepresentativeWalletUseCase | null = null,
   ) {
     this.config = config;
     this.sessions = sessions ?? new RepositoryConversationSessionStore(repository);
@@ -229,6 +236,9 @@ export class TelegramCommerceBot {
     this.tickets = new SupportTicketUseCase(repository);
     this.referral = new ReferralUseCase(repository, reporting);
     this.usageSync = new UsageSyncUseCase(repository, usageReader);
+    this.repWallet =
+      representativeWallet ??
+      new RepresentativeWalletUseCase(repository as unknown as RepresentativeWalletRepository);
     this.commercial = new CommercialOpsUseCase(
       repository,
       messenger.getChatMember === undefined
@@ -367,6 +377,11 @@ export class TelegramCommerceBot {
 
   private customerFlowRegistry(customer: TelegramCustomerInput): ConversationFlowRegistry {
     const registry = new ConversationFlowRegistry();
+    registry.register(
+      new AdminRepWalletCreditFlowHandler({
+        ownerCredit: (command) => this.ownerCreditRepresentative(command),
+      }),
+    );
     registry.register(new CommerceFlowHandler('commerce.purchase', this.commerce, customer));
     registry.register(new CommerceFlowHandler('commerce.renewal', this.commerce, customer));
     registry.register(
@@ -521,6 +536,44 @@ export class TelegramCommerceBot {
           ]),
         );
         return;
+      case 'admin.rep-wallet.lookup':
+        await this.present(
+          target,
+          'شناسه نماینده را به‌صورت کد یا شناسه تلگرام بفرست.',
+          columnKeyboard(cancelRow),
+        );
+        return;
+      case 'admin.rep-wallet.amount':
+        await this.present(
+          target,
+          'مبلغ شارژ را به ریال و فقط با عدد مثبت بفرست.',
+          columnKeyboard(cancelRow),
+        );
+        return;
+      case 'admin.rep-wallet.invalid-lookup':
+        await this.present(
+          target,
+          'کد یا شناسه تلگرام نماینده پیدا نشد یا فعال نیست. دوباره بفرست.',
+          columnKeyboard(cancelRow),
+        );
+        return;
+      case 'admin.rep-wallet.invalid-amount':
+        await this.present(
+          target,
+          'مبلغ شارژ معتبر نیست. عدد مثبت به ریال بفرست.',
+          columnKeyboard(cancelRow),
+        );
+        return;
+      case 'admin.rep-wallet.credited':
+        await this.present(target, 'شارژ کیف پول نماینده ثبت شد.', adminScreenKeyboard());
+        return;
+      case 'admin.rep-wallet.failed':
+        await this.present(
+          target,
+          'شارژ کیف پول نماینده انجام نشد؛ موجودی یا وضعیت نماینده را بررسی کن.',
+          columnKeyboard(cancelRow),
+        );
+        return;
       case 'wallet.amount':
         await this.present(target, walletAmountPromptText(), columnKeyboard(cancelRow));
         return;
@@ -637,6 +690,21 @@ export class TelegramCommerceBot {
         { text: MENU_LABEL.order, callback_data: ORDER_CALLBACK },
         backToMenuButton(),
       ]),
+    );
+  }
+
+  private async startAdminRepWallet(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+  ): Promise<void> {
+    await AdminRepWalletCreditFlowHandler.start(this.sessions, {
+      telegramUserId: customer.telegramUserId,
+      now: new Date(),
+    });
+    await this.present(
+      target,
+      'شناسه نماینده را به‌صورت کد یا شناسه تلگرام بفرست.',
+      columnKeyboard([flowCancelButton(), backToMenuButton()]),
     );
   }
 
@@ -802,6 +870,10 @@ export class TelegramCommerceBot {
         );
       } else if (/^svc:qr:\d+$/u.test(data)) {
         await this.sendServiceQr(target, customer, data.slice('svc:qr:'.length));
+      } else if (data === ADMIN_REP_WALLET_CALLBACK) {
+        this.requireAdmin(actorId);
+        this.requirePrivateTarget(target, customer);
+        await this.startAdminRepWallet(target, customer);
       } else if (data === ADMIN_OPS_CALLBACK) {
         this.requireAdmin(actorId);
         await this.showCommercialSettings(target);
@@ -3458,6 +3530,23 @@ export class TelegramCommerceBot {
     await this.present(target, 'پیام همگانی لغو شد.', adminScreenKeyboard());
   }
 
+  private async ownerCreditRepresentative(command: {
+    readonly code?: string;
+    readonly telegramUserId?: number;
+    readonly amountIrr: bigint;
+    readonly idempotencyKey: string;
+  }): Promise<RepresentativeWalletLedgerEntry> {
+    const entry = await this.repWallet.ownerCredit(command);
+    if (this.reporting !== null) {
+      await this.reporting.record({
+        type: 'reseller.wallet_credited',
+        occurrenceKey: `reseller:wallet-credit:${command.idempotencyKey}`,
+        payload: { representativeId: entry.representativeId, ledgerId: entry.id },
+      });
+    }
+    return entry;
+  }
+
   private isAdmin(telegramUserId: string): boolean {
     return this.config.adminTelegramUserIds.has(telegramUserId);
   }
@@ -3585,6 +3674,10 @@ function customerSafeError(error: unknown): string {
         return 'یک سفارش در حال بررسی داری.';
       case 'NO_ACTIVE_SERVICE':
         return 'سرویس فعالی برای تمدید پیدا نشد.';
+      case 'INSUFFICIENT_REPRESENTATIVE_WALLET':
+        return 'موجودی کیف پول نماینده کافی نیست.';
+      case 'REPRESENTATIVE_NOT_FOUND':
+        return 'نماینده پیدا نشد.';
       case 'ADMIN_ACCESS_DENIED':
         return 'اجازهٔ این عملیات را نداری.';
       case 'PRODUCT_VARIANT_NOT_SELLABLE':

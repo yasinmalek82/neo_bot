@@ -89,6 +89,8 @@ export const EVENT_PURPOSE: Readonly<Record<ReportingEventType, ReportTopicPurpo
   'trial.claimed': 'sales',
   'broadcast.queued': 'daily_summaries',
   'referral.rewarded': 'sales',
+  'reseller.wallet_credited': 'resellers',
+  'reseller.wallet_debited': 'resellers',
 };
 
 export class ReportingUseCase implements ReportingPublisher {
@@ -365,6 +367,19 @@ export function formatReportText(type: ReportingEventType, payload: ReportingPay
         `محصول: ${payload['productName'] ?? ''} — ${payload['variantName'] ?? ''}`.trim(),
         `مبلغ: ${payload['amountIrr'] ?? 'نامشخص'} ریال`,
         `نوع: ${payload['pricingKind'] ?? 'نامشخص'}`,
+      ].join('\n');
+    case 'reseller.wallet_credited':
+      return [
+        'شارژ کیف پول نماینده',
+        `نماینده: ${payload['representativeId'] ?? 'نامشخص'}`,
+        `دفترکل: ${payload['ledgerId'] ?? 'نامشخص'}`,
+      ].join('\n');
+    case 'reseller.wallet_debited':
+      return [
+        'برداشت کیف پول نماینده',
+        `نماینده: ${payload['representativeId'] ?? 'نامشخص'}`,
+        `دفترکل: ${payload['ledgerId'] ?? 'نامشخص'}`,
+        `سفارش: ${payload['orderId'] ?? 'نامشخص'}`,
       ].join('\n');
     case 'trial.claimed':
       return [

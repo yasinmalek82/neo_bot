@@ -18,6 +18,8 @@ export const REPORTING_EVENT_TYPES = [
   'trial.claimed',
   'broadcast.queued',
   'referral.rewarded',
+  'reseller.wallet_credited',
+  'reseller.wallet_debited',
 ] as const;
 
 export type ReportingEventType = (typeof REPORTING_EVENT_TYPES)[number];

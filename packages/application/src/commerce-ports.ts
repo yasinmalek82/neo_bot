@@ -17,6 +17,8 @@ import type {
   TelegramPaymentProof,
   TrialClaim,
   WalletLedgerEntry,
+  RepresentativeWallet,
+  RepresentativeWalletLedgerEntry,
 } from '@neo-bot/domain';
 
 export interface CommerceRepository {
@@ -179,6 +181,31 @@ export interface CommerceRepository {
     readonly representativeId: string;
     readonly variantId: string;
   }): Promise<void>;
+  findRepresentativeByCodeOrTelegram?(input: {
+    readonly code?: string;
+    readonly telegramUserId?: number;
+  }): Promise<{
+    readonly id: string;
+    readonly code: string;
+    readonly telegramUserId: number;
+    readonly active: boolean;
+  } | null>;
+  getRepresentativeWallet?(representativeId: string): Promise<RepresentativeWallet | null>;
+  creditRepresentativeWallet?(input: {
+    readonly representativeId: string;
+    readonly amountIrr: bigint;
+    readonly kind: 'owner_credit' | 'adjustment';
+    readonly idempotencyKey: string;
+    readonly note?: string;
+  }): Promise<RepresentativeWalletLedgerEntry>;
+  debitRepresentativeWallet?(input: {
+    readonly representativeId: string;
+    readonly amountIrr: bigint;
+    readonly kind: 'purchase_debit' | 'adjustment';
+    readonly idempotencyKey: string;
+    readonly salesOrderId?: string;
+    readonly note?: string;
+  }): Promise<RepresentativeWalletLedgerEntry>;
   listRepresentativePriceAudit?(): Promise<
     readonly {
       representativeCode: string;

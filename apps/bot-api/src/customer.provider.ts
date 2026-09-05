@@ -4,6 +4,7 @@ import {
   DirectServiceUseCase,
   ProvisioningModeGate,
   ReportingUseCase,
+  RepresentativeWalletUseCase,
 } from '@neo-bot/application';
 import {
   PostgresCommerceRepository,
@@ -45,7 +46,14 @@ export const customerOrderServiceProvider = {
         isolatedGroupId: providerConfig.isolatedGroupId,
       }),
     );
-    const commerce = new CommerceUseCase(commerceRepository, directService, reporting);
+    const representativeWallet = new RepresentativeWalletUseCase(commerceRepository);
+    const commerce = new CommerceUseCase(
+      commerceRepository,
+      directService,
+      reporting,
+      null,
+      representativeWallet,
+    );
     return new CustomerOrderService(
       commerce,
       catalog,

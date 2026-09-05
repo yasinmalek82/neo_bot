@@ -1,8 +1,8 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T10:58:29.573Z
-source-fingerprint: 90a7f53b69b46ea8831f85701956c0cea7435171d66a3f542fd1615aac92a335
-current-phase: commercial-wave2
+last-updated: 2026-09-05T11:25:48.978Z
+source-fingerprint: 42c982c4452e2a400a5c6a7d5e8b6aa0a78e4520fed1ef85e0f9cbd37742597e
+current-phase: commercial-wave3
 next-task: owner-authorized-isolated-pilot-gates
 -->
 
@@ -95,6 +95,7 @@ Authoritative decisions are recorded in:
 - `docs/adr/0021-durable-interaction-kernel.md`
 - `docs/adr/0022-commercial-wave1.md`
 - `docs/adr/0023-commercial-wave2.md`
+- `docs/adr/0024-representative-prepaid-wallet.md`
 
 Create a new ADR before materially changing one of these decisions.
 

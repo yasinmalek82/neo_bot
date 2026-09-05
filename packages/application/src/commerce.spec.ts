@@ -797,6 +797,71 @@ describe('CommerceUseCase', () => {
     ).rejects.toThrow('INVALID_DISCOUNT_CODE');
     expect(repository.createOrder).not.toHaveBeenCalled();
   });
+
+  it('debits representative wallet before provisioning and blocks insufficient balance', async () => {
+    const representativeOrder = {
+      ...order,
+      status: 'provisioning' as const,
+      representativeId: '9',
+      pricingSource: 'representative_base' as const,
+    };
+    const fulfilled = {
+      ...representativeOrder,
+      status: 'fulfilled' as const,
+      serviceId: service.id,
+    };
+    const repository = createRepository();
+    vi.mocked(repository.reserveProvisioning).mockResolvedValue(representativeOrder);
+    vi.mocked(repository.completeOrder).mockResolvedValue(fulfilled);
+    const provision = vi.fn().mockResolvedValue(service);
+    const debit = vi.fn().mockResolvedValue({
+      id: 'ledger-1',
+      representativeId: '9',
+      amountIrr: -representativeOrder.amountIrr,
+      direction: 'debit',
+      kind: 'purchase_debit',
+      idempotencyKey: `order:${representativeOrder.id}:rep-wallet-debit`,
+      salesOrderId: representativeOrder.id,
+      note: null,
+      createdAt: new Date(),
+      replayed: false,
+      balanceAfterIrr: 0n,
+    });
+    const useCase = new CommerceUseCase(
+      repository,
+      { create: provision, renew: vi.fn() },
+      null,
+      null,
+      { debitForPurchase: debit } as never,
+    );
+    await expect(useCase.approveOrder(representativeOrder.id, '70001')).resolves.toEqual(fulfilled);
+    expect(debit).toHaveBeenCalledWith({
+      representativeId: '9',
+      amountIrr: representativeOrder.amountIrr,
+      salesOrderId: representativeOrder.id,
+      idempotencyKey: `order:${representativeOrder.id}:rep-wallet-debit`,
+    });
+
+    const blockedRepository = createRepository();
+    vi.mocked(blockedRepository.reserveProvisioning).mockResolvedValue(representativeOrder);
+    const blockedProvision = vi.fn().mockResolvedValue(service);
+    const blocked = new CommerceUseCase(
+      blockedRepository,
+      { create: blockedProvision, renew: vi.fn() },
+      null,
+      null,
+      {
+        debitForPurchase: vi
+          .fn()
+          .mockRejectedValue(new Error('INSUFFICIENT_REPRESENTATIVE_WALLET')),
+      } as never,
+    );
+    await expect(blocked.approveOrder(representativeOrder.id, '70001')).rejects.toThrow(
+      'INSUFFICIENT_REPRESENTATIVE_WALLET',
+    );
+    expect(blockedProvision).not.toHaveBeenCalled();
+    expect(blockedRepository.completeOrder).not.toHaveBeenCalled();
+  });
 });
 
 function createRepository(): CommerceRepository {
