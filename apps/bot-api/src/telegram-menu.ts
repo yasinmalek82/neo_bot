@@ -114,9 +114,7 @@ export function pairedKeyboard(buttons: readonly InlineButton[]): TelegramInline
 export function parseTelegramStartCommand(
   text: string,
 ): { readonly payload: string | null } | null {
-  const match = text
-    .trim()
-    .match(/^\/start(?:@[A-Za-z0-9_]+)?(?:\s+([A-Za-z0-9_-]{1,64}))?$/u);
+  const match = /^\/start(?:@[A-Za-z0-9_]+)?(?:\s+([A-Za-z0-9_-]{1,64}))?$/u.exec(text.trim());
   if (match === null) {
     return null;
   }

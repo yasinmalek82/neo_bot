@@ -1,6 +1,6 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T09:55:35.842Z
+last-updated: 2026-09-05T09:56:20.601Z
 source-fingerprint: 8c5561cbeeb0d6e93fe473fafa9bae06b3da39c6f7ea9eb5c48d16a6c8ebf5f3
 current-phase: commercial-wave2
 next-task: owner-authorized-isolated-pilot-gates
