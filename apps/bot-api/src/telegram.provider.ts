@@ -5,6 +5,7 @@ import {
   DirectServiceUseCase,
   OpsDailySummaryUseCase,
   ProvisioningModeGate,
+  ReferralUseCase,
   ReportingUseCase,
 } from '@neo-bot/application';
 import {
@@ -77,7 +78,8 @@ export const telegramCommerceBotProvider = {
         isolatedGroupId: providerConfig.isolatedGroupId,
       }),
     );
-    const commerce = new CommerceUseCase(commerceRepository, directService, reporting);
+    const referral = new ReferralUseCase(commerceRepository, reporting);
+    const commerce = new CommerceUseCase(commerceRepository, directService, reporting, referral);
     const dailySummary = new OpsDailySummaryUseCase(commerceRepository, reporting);
     const delivery = new CustomerDeliveryUseCase(
       commerceRepository,
@@ -95,6 +97,7 @@ export const telegramCommerceBotProvider = {
       reporting,
       dailySummary,
       delivery,
+      pasarGuard,
     );
   },
 };

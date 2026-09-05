@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { CommerceRepository } from './commerce-ports.js';
 import { CommerceUseCase } from './commerce.js';
+import { ReferralUseCase } from './referral.js';
 
 const customer: TelegramCustomer = {
   id: '1',
@@ -78,6 +79,63 @@ describe('CommerceUseCase', () => {
       idempotencyKey: `order:${order.id}:provision`,
       serviceUsernameBase: 'buyer',
     });
+  });
+
+  it('grants a referral reward after paid fulfillment and skips a trial', async () => {
+    const fulfilled = { ...order, status: 'fulfilled' as const, serviceId: service.id };
+    const repository = createRepository();
+    const grantReferralRewardForPaidOrder = vi.fn().mockResolvedValue({
+      referredCustomerId: customer.id,
+      referrerCustomerId: '9',
+      orderId: order.id,
+      referrerCreditIrr: 25_000n,
+      replayed: false,
+      createdAt: fulfilled.updatedAt,
+    });
+    const referral = new ReferralUseCase({
+      attributeReferralStart: vi.fn(),
+      getReferralAttribution: vi.fn(),
+      grantReferralRewardForPaidOrder,
+    });
+    vi.mocked(repository.reserveProvisioning).mockResolvedValue(order);
+    vi.mocked(repository.completeOrder).mockResolvedValue(fulfilled);
+    const paid = new CommerceUseCase(
+      repository,
+      { create: vi.fn().mockResolvedValue(service), renew: vi.fn() },
+      null,
+      referral,
+    );
+    await expect(paid.approveOrder(order.id, '70001')).resolves.toEqual(fulfilled);
+    expect(grantReferralRewardForPaidOrder).toHaveBeenCalledWith(fulfilled);
+
+    const trialFulfilled = {
+      ...order,
+      kind: 'trial' as const,
+      amountIrr: 0n,
+      status: 'fulfilled' as const,
+      serviceId: service.id,
+    };
+    grantReferralRewardForPaidOrder.mockClear();
+    const trialRepo = createRepository();
+    vi.mocked(trialRepo.reserveProvisioning).mockResolvedValue({
+      ...order,
+      kind: 'trial' as const,
+      amountIrr: 0n,
+      status: 'provisioning' as const,
+    });
+    vi.mocked(trialRepo.completeOrder).mockResolvedValue(trialFulfilled);
+    const trial = new CommerceUseCase(
+      trialRepo,
+      { create: vi.fn().mockResolvedValue(service), renew: vi.fn() },
+      null,
+      new ReferralUseCase({
+        attributeReferralStart: vi.fn(),
+        getReferralAttribution: vi.fn(),
+        grantReferralRewardForPaidOrder,
+      }),
+    );
+    await trial.approveOrder(order.id, '70001');
+    expect(grantReferralRewardForPaidOrder).not.toHaveBeenCalled();
   });
 
   it('records first contact once through the reporting publisher', async () => {

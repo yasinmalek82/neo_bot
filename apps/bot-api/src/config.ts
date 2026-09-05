@@ -47,6 +47,11 @@ const telegramEnvironmentSchema = z.object({
     .min(0)
     .max(300_000)
     .default(15_000),
+  TELEGRAM_USAGE_SYNC_INTERVAL_MS: z.coerce.number().int().min(0).max(300_000).default(60_000),
+  TELEGRAM_BOT_USERNAME: z
+    .string()
+    .regex(/^[A-Za-z][A-Za-z0-9_]{4,31}$/u)
+    .optional(),
 });
 
 const pilotEnvironmentSchema = databaseEnvironmentSchema.extend({
@@ -126,6 +131,8 @@ export type TelegramConfig =
       readonly deliveryDispatchIntervalMs: number;
       readonly reminderDispatchIntervalMs: number;
       readonly broadcastDispatchIntervalMs: number;
+      readonly usageSyncIntervalMs: number;
+      readonly botUsername: string | null;
     };
 
 export function loadDatabaseConfig(environment: NodeJS.ProcessEnv = process.env): DatabaseConfig {
@@ -214,6 +221,8 @@ export function loadTelegramConfig(environment: NodeJS.ProcessEnv = process.env)
     deliveryDispatchIntervalMs: parsed.data.TELEGRAM_DELIVERY_DISPATCH_INTERVAL_MS,
     reminderDispatchIntervalMs: parsed.data.TELEGRAM_REMINDER_DISPATCH_INTERVAL_MS,
     broadcastDispatchIntervalMs: parsed.data.TELEGRAM_BROADCAST_DISPATCH_INTERVAL_MS,
+    usageSyncIntervalMs: parsed.data.TELEGRAM_USAGE_SYNC_INTERVAL_MS,
+    botUsername: parsed.data.TELEGRAM_BOT_USERNAME ?? null,
   };
 }
 

@@ -40,6 +40,7 @@ describe('ReportingOutboxHost', () => {
       dispatchDueDeliveries: vi.fn().mockResolvedValue(undefined),
       dispatchDueReminders: vi.fn().mockResolvedValue(undefined),
       dispatchDueBroadcasts: vi.fn().mockResolvedValue(undefined),
+      dispatchDueUsageSync: vi.fn().mockResolvedValue(undefined),
     };
     const host = new ReportingOutboxHost(bot as never);
 
@@ -70,6 +71,7 @@ describe('ReportingOutboxHost', () => {
       dispatchDueDeliveries: vi.fn().mockResolvedValue(undefined),
       dispatchDueReminders: vi.fn().mockResolvedValue(undefined),
       dispatchDueBroadcasts: vi.fn().mockResolvedValue(undefined),
+      dispatchDueUsageSync: vi.fn().mockResolvedValue(undefined),
     };
     const host = new ReportingOutboxHost(bot as never);
 
@@ -98,6 +100,7 @@ describe('ReportingOutboxHost', () => {
       dispatchDueDeliveries: vi.fn().mockResolvedValue(undefined),
       dispatchDueReminders: vi.fn().mockResolvedValue(undefined),
       dispatchDueBroadcasts: vi.fn().mockResolvedValue(undefined),
+      dispatchDueUsageSync: vi.fn().mockResolvedValue(undefined),
     };
     const host = new ReportingOutboxHost(bot as never);
 

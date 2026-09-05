@@ -88,6 +88,7 @@ export const EVENT_PURPOSE: Readonly<Record<ReportingEventType, ReportTopicPurpo
   'reseller.pricing_updated': 'resellers',
   'trial.claimed': 'sales',
   'broadcast.queued': 'daily_summaries',
+  'referral.rewarded': 'sales',
 };
 
 export class ReportingUseCase implements ReportingPublisher {
@@ -378,6 +379,14 @@ export function formatReportText(type: ReportingEventType, payload: ReportingPay
         `کار: ${payload['jobId'] ?? 'نامشخص'}`,
         `گیرنده: ${payload['recipientCount'] ?? '0'}`,
         `اثرانگشت متن: ${payload['bodyHash'] ?? 'نامشخص'}`,
+      ].join('\n');
+    case 'referral.rewarded':
+      return [
+        'پاداش دعوت',
+        `سفارش: ${payload['orderId'] ?? 'نامشخص'}`,
+        `دعوت‌کننده: ${payload['referrerCustomerId'] ?? 'نامشخص'}`,
+        `دعوت‌شده: ${payload['referredCustomerId'] ?? 'نامشخص'}`,
+        `اعتبار: ${payload['creditIrr'] ?? '0'} ریال`,
       ].join('\n');
   }
 }

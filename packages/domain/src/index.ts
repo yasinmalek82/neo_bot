@@ -9,4 +9,6 @@ export * from './service.js';
 export * from './storefront.js';
 export * from './service-username.js';
 export * from './support-ticket.js';
+export * from './referral.js';
+export * from './usage-sync.js';
 export * from './wallet.js';

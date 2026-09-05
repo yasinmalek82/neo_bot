@@ -371,6 +371,7 @@ describe('TelegramCommerceBot', () => {
           [{ text: 'راهنمای انتخاب 🧭' }],
           [{ text: 'پیگیری سفارش 📦' }, { text: 'تمدید سرویس ♻️' }],
           [{ text: 'شارژ کیف پول 💳' }, { text: 'تیکت پشتیبانی 🎫' }],
+          [{ text: 'دعوت دوستان 🎁' }],
           [{ text: 'راهنما 📘' }],
           [{ text: 'منوی اصلی 🏠' }],
         ],
@@ -2678,6 +2679,10 @@ describe('TelegramCommerceBot', () => {
       remindersEnabled: true,
       expiryReminderDays: 3,
       lowTrafficPercent: 15,
+      referralEnabled: false,
+      referralReferrerCreditIrr: 0n,
+      referralInviteeDiscountIrr: 0n,
+      referralMaxRewardsPerReferrer: 50,
       updatedAt: new Date('2026-09-05T00:00:00.000Z'),
     });
     vi.mocked(repository.getTrialClaim).mockResolvedValue({
@@ -2715,6 +2720,10 @@ describe('TelegramCommerceBot', () => {
       remindersEnabled: true,
       expiryReminderDays: 3,
       lowTrafficPercent: 15,
+      referralEnabled: false,
+      referralReferrerCreditIrr: 0n,
+      referralInviteeDiscountIrr: 0n,
+      referralMaxRewardsPerReferrer: 50,
       updatedAt: new Date('2026-09-05T00:00:00.000Z'),
     });
     const messenger = createMessenger();
@@ -2750,6 +2759,10 @@ describe('TelegramCommerceBot', () => {
       remindersEnabled: true,
       expiryReminderDays: 3,
       lowTrafficPercent: 15,
+      referralEnabled: false,
+      referralReferrerCreditIrr: 0n,
+      referralInviteeDiscountIrr: 0n,
+      referralMaxRewardsPerReferrer: 50,
       updatedAt: new Date('2026-09-05T00:00:00.000Z'),
     });
     const messenger = createMessenger();
@@ -2844,6 +2857,113 @@ describe('TelegramCommerceBot', () => {
     expect(listCall?.[1]).not.toContain('https://');
     expect(JSON.stringify(listCall?.[2])).toContain('svc:4');
   });
+
+  it('attributes a personal start payload and never treats it as a username', async () => {
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1801,
+      message: {
+        message_id: 601,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: '/start r70001',
+      },
+    });
+    expect(repository.attributeReferralStart).toHaveBeenCalledWith({
+      customerId: customer.id,
+      inviteeTelegramUserId: '10001',
+      referrerTelegramUserId: '70001',
+    });
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('NEO NETWORK'),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('shows a personal invite start link without a subscription URL', async () => {
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1802,
+      message: {
+        message_id: 602,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: MENU_LABEL.invite,
+      },
+    });
+    const call = vi.mocked(messenger.sendMessage).mock.calls.at(-1);
+    expect(call?.[1]).toContain('https://t.me/NeoShopBot?start=r10001');
+    expect(call?.[1]).toContain('اولین خرید موفق پرداخت‌شده');
+    expect(call?.[1]).not.toContain('https://panel');
+  });
+
+  it('renders an admin sales snapshot from Postgres counts only', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.getAdminSalesSnapshot).mockResolvedValue({
+      timezone: 'Asia/Tehran',
+      today: {
+        ordersByStatus: {
+          awaiting_receipt: 1,
+          receipt_submitted: 2,
+          provisioning: 0,
+          provisioning_failed: 0,
+          fulfilled: 3,
+          rejected: 0,
+          cancelled: 0,
+        },
+        orderCount: 6,
+        revenueIrr: 450_000n,
+        newCustomers: 2,
+      },
+      last7d: {
+        ordersByStatus: {
+          awaiting_receipt: 1,
+          receipt_submitted: 2,
+          provisioning: 0,
+          provisioning_failed: 1,
+          fulfilled: 8,
+          rejected: 1,
+          cancelled: 0,
+        },
+        orderCount: 13,
+        revenueIrr: 1_200_000n,
+        newCustomers: 5,
+      },
+      openTickets: 4,
+      pendingReceiptReviews: 2,
+    });
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1803,
+      callback_query: {
+        id: 'cb-sales',
+        from: { id: 70001, first_name: 'ادمین' },
+        message: { message_id: 603, chat: { id: 70001, type: 'private' }, text: 'ادمین' },
+        data: 'admin:sales',
+      },
+    });
+    const call = vi.mocked(messenger.editMessageText).mock.calls.at(-1);
+    expect(call?.[2]).toContain('خلاصه فروش');
+    expect(call?.[2]).toContain('Asia/Tehran');
+    expect(call?.[2]).toContain('تیکت باز: 4');
+    expect(call?.[2]).toContain('رسید در انتظار بررسی: 2');
+    expect(call?.[2]).not.toMatch(/https?:\/\//u);
+  });
+
+  it('keeps usage sync gated when no PasarGuard reader is injected', async () => {
+    const repository = createRepository();
+    const bot = createBot(repository, createMessenger());
+    await bot.dispatchDueUsageSync();
+    expect(repository.listServicesDueForUsageSync).not.toHaveBeenCalled();
+    expect(repository.persistServiceUsedTraffic).not.toHaveBeenCalled();
+  });
 });
 
 function createBot(
@@ -2872,6 +2992,8 @@ function createBot(
     deliveryDispatchIntervalMs: 15_000,
     reminderDispatchIntervalMs: 15_000,
     broadcastDispatchIntervalMs: 15_000,
+    usageSyncIntervalMs: 60_000,
+    botUsername: 'NeoShopBot',
     ...configOverrides,
   };
   const commerce = new CommerceUseCase(repository, provisioner, reporting);
@@ -3028,6 +3150,10 @@ function createRepository(): CommerceRepository & CommercialRepository {
       remindersEnabled: true,
       expiryReminderDays: 3,
       lowTrafficPercent: 15,
+      referralEnabled: false,
+      referralReferrerCreditIrr: 0n,
+      referralInviteeDiscountIrr: 0n,
+      referralMaxRewardsPerReferrer: 50,
       updatedAt: new Date('2026-09-05T00:00:00.000Z'),
     }),
     updateCommercialSettings: vi.fn(),
@@ -3053,6 +3179,46 @@ function createRepository(): CommerceRepository & CommercialRepository {
       remindersPending: 0,
       broadcastsPending: 0,
       broadcastsRunning: 0,
+      usageSyncDue: 0,
     }),
+    attributeReferralStart: vi.fn().mockResolvedValue(null),
+    getReferralAttribution: vi.fn().mockResolvedValue(null),
+    grantReferralRewardForPaidOrder: vi.fn().mockResolvedValue(null),
+    getAdminSalesSnapshot: vi.fn().mockResolvedValue({
+      timezone: 'Asia/Tehran',
+      today: {
+        ordersByStatus: {
+          awaiting_receipt: 0,
+          receipt_submitted: 0,
+          provisioning: 0,
+          provisioning_failed: 0,
+          fulfilled: 0,
+          rejected: 0,
+          cancelled: 0,
+        },
+        orderCount: 0,
+        revenueIrr: 0n,
+        newCustomers: 0,
+      },
+      last7d: {
+        ordersByStatus: {
+          awaiting_receipt: 0,
+          receipt_submitted: 0,
+          provisioning: 0,
+          provisioning_failed: 0,
+          fulfilled: 0,
+          rejected: 0,
+          cancelled: 0,
+        },
+        orderCount: 0,
+        revenueIrr: 0n,
+        newCustomers: 0,
+      },
+      openTickets: 0,
+      pendingReceiptReviews: 0,
+    }),
+    listServicesDueForUsageSync: vi.fn().mockResolvedValue([]),
+    persistServiceUsedTraffic: vi.fn(),
+    countDueUsageSync: vi.fn().mockResolvedValue(0),
   };
 }

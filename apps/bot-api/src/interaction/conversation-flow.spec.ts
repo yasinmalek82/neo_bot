@@ -15,6 +15,9 @@ describe('conversation navigation helpers', () => {
       true,
     );
     expect(
+      isHomeInput({ kind: 'text', updateId: '1', telegramUserId: '1', text: '/start r70001' }),
+    ).toBe(true);
+    expect(
       isGlobalCancelInput({
         kind: 'callback',
         updateId: '1',

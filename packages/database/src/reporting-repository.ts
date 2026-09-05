@@ -262,6 +262,9 @@ export class PostgresReportingRepository implements ReportingRepository {
            when 'reseller.order_created' then 'resellers'
            when 'reseller.assignment_updated' then 'resellers'
            when 'reseller.pricing_updated' then 'resellers'
+           when 'trial.claimed' then 'sales'
+           when 'broadcast.queued' then 'daily_summaries'
+           when 'referral.rewarded' then 'sales'
            else 'errors'
          end as purpose,
          destination.id::text as destination_id,
@@ -289,6 +292,9 @@ export class PostgresReportingRepository implements ReportingRepository {
            when 'reseller.order_created' then 'resellers'
            when 'reseller.assignment_updated' then 'resellers'
            when 'reseller.pricing_updated' then 'resellers'
+           when 'trial.claimed' then 'sales'
+           when 'broadcast.queued' then 'daily_summaries'
+           when 'referral.rewarded' then 'sales'
            else 'errors'
          end`,
       [limit, now],

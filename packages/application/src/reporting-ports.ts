@@ -17,6 +17,7 @@ export const REPORTING_EVENT_TYPES = [
   'reseller.pricing_updated',
   'trial.claimed',
   'broadcast.queued',
+  'referral.rewarded',
 ] as const;
 
 export type ReportingEventType = (typeof REPORTING_EVENT_TYPES)[number];

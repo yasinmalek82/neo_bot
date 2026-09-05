@@ -328,6 +328,28 @@ describe('ReportingUseCase', () => {
     expect(EVENT_PURPOSE['reseller.pricing_updated']).toBe('resellers');
   });
 
+  it('formats a referral reward without a subscription URL', () => {
+    expect(EVENT_PURPOSE['referral.rewarded']).toBe('sales');
+    expect(
+      formatReportText('referral.rewarded', {
+        orderId: '30',
+        referrerCustomerId: '1',
+        referredCustomerId: '2',
+        creditIrr: '25000',
+        replayed: 'false',
+      }),
+    ).toContain('پاداش دعوت');
+    expect(
+      formatReportText('referral.rewarded', {
+        orderId: '30',
+        referrerCustomerId: '1',
+        referredCustomerId: '2',
+        creditIrr: '25000',
+        replayed: 'false',
+      }),
+    ).not.toMatch(/https?:\/\//u);
+  });
+
   it('formats trial and broadcast notices without leaking a message body or subscription URL', () => {
     expect(EVENT_PURPOSE['trial.claimed']).toBe('sales');
     expect(EVENT_PURPOSE['broadcast.queued']).toBe('daily_summaries');

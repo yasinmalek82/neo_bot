@@ -148,6 +148,14 @@ function createRepository(): CommercialRepository {
       remindersPending: 0,
       broadcastsPending: 0,
       broadcastsRunning: 0,
+      usageSyncDue: 0,
     }),
+    attributeReferralStart: vi.fn(),
+    getReferralAttribution: vi.fn(),
+    grantReferralRewardForPaidOrder: vi.fn(),
+    getAdminSalesSnapshot: vi.fn(),
+    listServicesDueForUsageSync: vi.fn().mockResolvedValue([]),
+    persistServiceUsedTraffic: vi.fn(),
+    countDueUsageSync: vi.fn().mockResolvedValue(0),
   };
 }

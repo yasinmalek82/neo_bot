@@ -1,6 +1,6 @@
 import { DomainConflictError } from './errors.js';
 
-export const WALLET_LEDGER_KINDS = ['topup'] as const;
+export const WALLET_LEDGER_KINDS = ['topup', 'referral'] as const;
 
 export type WalletLedgerKind = (typeof WALLET_LEDGER_KINDS)[number];
 

@@ -8,6 +8,7 @@ import {
   remainingTrafficPercent,
   validateBroadcastBody,
   validateStorefrontOpsSettingsPatch,
+  type AdminSalesSnapshot,
   type BroadcastJob,
   type CustomerServiceSummary,
   type ForcedJoinChannel,
@@ -222,8 +223,13 @@ export class CommercialOpsUseCase {
     readonly remindersPending: number;
     readonly broadcastsPending: number;
     readonly broadcastsRunning: number;
+    readonly usageSyncDue: number;
   }> {
     return this.repository.countCommercialQueues();
+  }
+
+  public salesSnapshot(): Promise<AdminSalesSnapshot> {
+    return this.repository.getAdminSalesSnapshot(this.now());
   }
 }
 

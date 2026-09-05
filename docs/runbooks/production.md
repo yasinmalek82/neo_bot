@@ -35,8 +35,10 @@ zero for several minutes (dispatch lag) or when `reports.retrying` climbs while 
 remains zero (transient Telegram pressure). `provisioning.mode` and `provisioning.pilotEnabled`
 are flags only: `disabled` never calls PasarGuard mutating APIs, `isolated` requires
 `PROVISIONING_ISOLATED_GROUP_ID`, and `PILOT_ENABLED=true` is still an owner-only switch for
-the isolated pilot CLI. `commercial.remindersPending` and `commercial.broadcastsPending` are
-queue counts; they never include message bodies or subscription URLs.
+the isolated pilot CLI. `commercial.remindersPending`, `commercial.broadcastsPending`, and
+`commercial.usageSyncDue` are queue counts; they never include message bodies or
+subscription URLs. Usage sync is a read-only PasarGuard GET of `used_traffic` and
+never mutates entitlements.
 
 Owner-only live gates before a paid cohort: public HTTPS webhook, TLS on the host, a prepared
 isolated PasarGuard group, off-host backups, and a phone smoke of `/start` → shop or trial →

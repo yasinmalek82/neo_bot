@@ -11,6 +11,7 @@ export class ReportingOutboxHost implements OnModuleInit, OnModuleDestroy {
   private deliveryScheduler: ReportingOutboxScheduler | null = null;
   private reminderScheduler: ReportingOutboxScheduler | null = null;
   private broadcastScheduler: ReportingOutboxScheduler | null = null;
+  private usageSyncScheduler: ReportingOutboxScheduler | null = null;
 
   public constructor(
     @Inject(telegramCommerceBotToken)
@@ -42,10 +43,15 @@ export class ReportingOutboxHost implements OnModuleInit, OnModuleDestroy {
       () => bot.dispatchDueBroadcasts(),
       config.broadcastDispatchIntervalMs,
     );
+    this.usageSyncScheduler = new ReportingOutboxScheduler(
+      () => bot.dispatchDueUsageSync(),
+      config.usageSyncIntervalMs,
+    );
     this.reportScheduler.start();
     this.deliveryScheduler.start();
     this.reminderScheduler.start();
     this.broadcastScheduler.start();
+    this.usageSyncScheduler.start();
   }
 
   public async onModuleDestroy(): Promise<void> {
@@ -53,11 +59,13 @@ export class ReportingOutboxHost implements OnModuleInit, OnModuleDestroy {
     this.deliveryScheduler?.stop();
     this.reminderScheduler?.stop();
     this.broadcastScheduler?.stop();
+    this.usageSyncScheduler?.stop();
     await Promise.all([
       this.reportScheduler?.waitForIdle(),
       this.deliveryScheduler?.waitForIdle(),
       this.reminderScheduler?.waitForIdle(),
       this.broadcastScheduler?.waitForIdle(),
+      this.usageSyncScheduler?.waitForIdle(),
     ]);
   }
 }

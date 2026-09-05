@@ -26,6 +26,7 @@ interface HealthResponse {
     readonly remindersPending: number;
     readonly broadcastsPending: number;
     readonly broadcastsRunning: number;
+    readonly usageSyncDue: number;
   };
 }
 
@@ -112,6 +113,7 @@ interface CommercialCountRow {
   readonly reminders_pending: number;
   readonly broadcasts_pending: number;
   readonly broadcasts_running: number;
+  readonly usage_sync_due: number;
 }
 
 function commercialCounts(row: CommercialCountRow | undefined): HealthResponse['commercial'] {
@@ -119,6 +121,7 @@ function commercialCounts(row: CommercialCountRow | undefined): HealthResponse['
     remindersPending: nonNegativeInt(row?.reminders_pending),
     broadcastsPending: nonNegativeInt(row?.broadcasts_pending),
     broadcastsRunning: nonNegativeInt(row?.broadcasts_running),
+    usageSyncDue: nonNegativeInt(row?.usage_sync_due),
   };
 }
 
@@ -128,10 +131,14 @@ async function readCommercialCounts(pool: Pool): Promise<{ rows: CommercialCount
       `select
          (select count(*)::int from service_reminder_deliveries where status = 'pending') as reminders_pending,
          (select count(*)::int from broadcast_recipients where status = 'pending') as broadcasts_pending,
-         (select count(*)::int from broadcast_jobs where status in ('queued', 'running')) as broadcasts_running`,
+         (select count(*)::int from broadcast_jobs where status in ('queued', 'running')) as broadcasts_running,
+         (select count(*)::int from services
+           where status = 'active'
+             and (usage_synced_at is null or usage_synced_at <= now() - interval '10 minutes')
+         ) as usage_sync_due`,
     );
   } catch (error: unknown) {
-    if (isUndefinedTableError(error)) {
+    if (isUndefinedTableError(error) || isUndefinedColumnError(error)) {
       return { rows: [] };
     }
     throw error;
@@ -139,12 +146,18 @@ async function readCommercialCounts(pool: Pool): Promise<{ rows: CommercialCount
 }
 
 function isUndefinedTableError(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { readonly code?: string }).code === '42P01'
-  );
+  return postgresCode(error) === '42P01';
+}
+
+function isUndefinedColumnError(error: unknown): boolean {
+  return postgresCode(error) === '42703';
+}
+
+function postgresCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return undefined;
+  }
+  return (error as { readonly code?: string }).code;
 }
 
 function provisioningSnapshot(): HealthResponse['provisioning'] {

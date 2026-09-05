@@ -14,9 +14,12 @@ import type {
 import {
   CommercialOpsUseCase,
   joinUrlForChannel,
+  ReferralUseCase,
   RepositoryConversationSessionStore,
   SupportTicketUseCase,
+  UsageSyncUseCase,
   WalletUseCase,
+  type UsageReader,
 } from '@neo-bot/application';
 import {
   DomainConflictError,
@@ -29,6 +32,7 @@ import {
   type StorefrontCatalog,
   type SellableProductVariant,
   type TelegramCustomerInput,
+  parseNonNegativeIrr,
   type AdminOpsField,
 } from '@neo-bot/domain';
 
@@ -86,8 +90,10 @@ import {
   SERVICES_CALLBACK,
   JOIN_REFRESH_CALLBACK,
   ADMIN_OPS_CALLBACK,
+  ADMIN_SALES_CALLBACK,
   ADMIN_BROADCAST_CALLBACK,
   ADMIN_BROADCAST_CANCEL_PREFIX,
+  INVITE_CALLBACK,
   trialOfferText,
   trialAlreadyClaimedText,
   trialUnavailableText,
@@ -97,6 +103,9 @@ import {
   serviceAccessText,
   platformGuideText,
   commercialSettingsText,
+  inviteText,
+  adminSalesSnapshotText,
+  parseTelegramStartCommand,
   broadcastPromptText,
   broadcastQueuedText,
   reminderNoticeText,
@@ -191,6 +200,8 @@ export class TelegramCommerceBot {
   private readonly wallet: WalletUseCase;
   private readonly tickets: SupportTicketUseCase;
   private readonly commercial: CommercialOpsUseCase;
+  private readonly referral: ReferralUseCase;
+  private readonly usageSync: UsageSyncUseCase;
 
   public constructor(
     config: Extract<TelegramConfig, { readonly enabled: true }>,
@@ -203,12 +214,15 @@ export class TelegramCommerceBot {
     private readonly reporting: ReportingUseCase | null = null,
     private readonly dailySummary: OpsDailySummaryUseCase | null = null,
     private readonly delivery: CustomerDeliveryUseCase | null = null,
+    usageReader: UsageReader | null = null,
     sessions?: ConversationSessionStore,
   ) {
     this.config = config;
     this.sessions = sessions ?? new RepositoryConversationSessionStore(repository);
     this.wallet = new WalletUseCase(repository);
     this.tickets = new SupportTicketUseCase(repository);
+    this.referral = new ReferralUseCase(repository, reporting);
+    this.usageSync = new UsageSyncUseCase(repository, usageReader);
     this.commercial = new CommercialOpsUseCase(
       repository,
       messenger.getChatMember === undefined
@@ -287,7 +301,15 @@ export class TelegramCommerceBot {
       await this.present(target, receiptPhotoHint(), columnKeyboard([backToMenuButton()]));
       return;
     }
-    await this.commerce.recordCustomerActivity(customer);
+    const recorded = await this.commerce.recordCustomerActivity(customer);
+    const start = parseTelegramStartCommand(message.text ?? '');
+    if (start?.payload !== undefined && start.payload !== null) {
+      await this.referral.attributeStart({
+        customer,
+        customerId: recorded.customer.id,
+        payload: start.payload,
+      });
+    }
     const flowInput: ConversationInput = {
       kind: 'text',
       updateId: String(update.update_id),
@@ -748,6 +770,8 @@ export class TelegramCommerceBot {
         await this.routeAction('trial', target, customer, false);
       } else if (data === SERVICES_CALLBACK) {
         await this.routeAction('services', target, customer, false);
+      } else if (data === INVITE_CALLBACK) {
+        await this.routeAction('invite', target, customer, false);
       } else if (data === JOIN_REFRESH_CALLBACK) {
         await this.routeAction('shop', target, customer, false);
       } else if (data === 'trial:claim') {
@@ -774,11 +798,17 @@ export class TelegramCommerceBot {
       } else if (data === 'ops:trial') {
         this.requireAdmin(actorId);
         await this.toggleTrial(target);
+      } else if (data === 'ops:referral') {
+        this.requireAdmin(actorId);
+        await this.toggleReferral(target);
       } else if (
         data === 'ops:channel' ||
         data === 'ops:variant' ||
         data === 'ops:reminders' ||
-        data === 'ops:block'
+        data === 'ops:block' ||
+        data === 'ops:referralCredit' ||
+        data === 'ops:referralDiscount' ||
+        data === 'ops:referralCap'
       ) {
         this.requireAdmin(actorId);
         await this.startAdminOpsField(
@@ -790,7 +820,13 @@ export class TelegramCommerceBot {
               ? 'trialVariant'
               : data === 'ops:reminders'
                 ? 'reminderDays'
-                : 'blockCustomer',
+                : data === 'ops:referralCredit'
+                  ? 'referralCredit'
+                  : data === 'ops:referralDiscount'
+                    ? 'referralDiscount'
+                    : data === 'ops:referralCap'
+                      ? 'referralCap'
+                      : 'blockCustomer',
         );
       } else if (data === ADMIN_BROADCAST_CALLBACK) {
         this.requireAdmin(actorId);
@@ -842,6 +878,9 @@ export class TelegramCommerceBot {
       } else if (data === ADMIN_SUMMARY_CALLBACK) {
         this.requireAdmin(actorId);
         await this.publishAdminDailySummary(target);
+      } else if (data === ADMIN_SALES_CALLBACK) {
+        this.requireAdmin(actorId);
+        await this.showAdminSalesSnapshot(target);
       } else if (/^admin:order:\d+$/u.test(data)) {
         this.requireAdmin(actorId);
         await this.showAdminOrder(target, data.slice('admin:order:'.length));
@@ -951,6 +990,10 @@ export class TelegramCommerceBot {
     });
   }
 
+  public async dispatchDueUsageSync(): Promise<void> {
+    await this.usageSync.syncDue();
+  }
+
   public async publishDailySummary(): Promise<boolean> {
     if (this.dailySummary === null) {
       return false;
@@ -980,6 +1023,9 @@ export class TelegramCommerceBot {
         return;
       case 'services':
         await this.showCustomerServices(target, customer);
+        return;
+      case 'invite':
+        await this.showInvite(target, customer);
         return;
       case 'guide':
         await this.present(target, guideText(), guideInlineKeyboard());
@@ -3252,6 +3298,10 @@ export class TelegramCommerceBot {
         remindersEnabled: settings.remindersEnabled,
         expiryReminderDays: settings.expiryReminderDays,
         lowTrafficPercent: settings.lowTrafficPercent,
+        referralEnabled: settings.referralEnabled,
+        referralReferrerCreditIrr: settings.referralReferrerCreditIrr,
+        referralInviteeDiscountIrr: settings.referralInviteeDiscountIrr,
+        referralMaxRewardsPerReferrer: settings.referralMaxRewardsPerReferrer,
       }),
       adminScreenKeyboard([
         {
@@ -3261,6 +3311,13 @@ export class TelegramCommerceBot {
         { text: 'تعیین پلن تست', callback_data: 'ops:variant' },
         { text: 'افزودن کانال اجباری', callback_data: 'ops:channel' },
         { text: 'روز یادآوری انقضا', callback_data: 'ops:reminders' },
+        {
+          text: settings.referralEnabled ? 'خاموش کردن دعوت' : 'روشن کردن دعوت',
+          callback_data: 'ops:referral',
+        },
+        { text: 'پاداش دعوت‌کننده', callback_data: 'ops:referralCredit' },
+        { text: 'تخفیف دعوت‌شده', callback_data: 'ops:referralDiscount' },
+        { text: 'سقف پاداش دعوت', callback_data: 'ops:referralCap' },
         { text: 'مسدود/آزاد کردن خرید', callback_data: 'ops:block' },
       ]),
     );
@@ -3270,6 +3327,22 @@ export class TelegramCommerceBot {
     const settings = await this.commercial.getSettings();
     await this.commercial.updateSettings({ trialEnabled: !settings.trialEnabled });
     await this.showCommercialSettings(target);
+  }
+
+  private async toggleReferral(target: MenuTarget): Promise<void> {
+    const settings = await this.commercial.getSettings();
+    await this.commercial.updateSettings({ referralEnabled: !settings.referralEnabled });
+    await this.showCommercialSettings(target);
+  }
+
+  private async showInvite(target: MenuTarget, customer: TelegramCustomerInput): Promise<void> {
+    const invite = this.referral.inviteFor(customer.telegramUserId, this.config.botUsername);
+    await this.present(target, inviteText(invite), columnKeyboard([backToMenuButton()]));
+  }
+
+  private async showAdminSalesSnapshot(target: MenuTarget): Promise<void> {
+    const snapshot = await this.commercial.salesSnapshot();
+    await this.present(target, adminSalesSnapshotText(snapshot), adminScreenKeyboard());
   }
 
   private async startAdminOpsField(
@@ -3299,6 +3372,15 @@ export class TelegramCommerceBot {
     if (field === 'reminderDays') {
       return 'تعداد روز یادآوری انقضا را بین ۱ تا ۳۰ بفرست.';
     }
+    if (field === 'referralCredit') {
+      return 'مبلغ پاداش دعوت‌کننده را به ریال بفرست. صفر یعنی بدون اعتبار کیف پول.';
+    }
+    if (field === 'referralDiscount') {
+      return 'مبلغ تخفیف اولین خرید دعوت‌شده را به ریال بفرست. صفر یعنی بدون تخفیف.';
+    }
+    if (field === 'referralCap') {
+      return 'سقف پاداش هر دعوت‌کننده را بین ۱ تا ۵۰۰ بفرست.';
+    }
     return 'شناسه تلگرام مشتری را با + برای مسدود یا - برای آزاد بفرست. مثال: +10001';
   }
 
@@ -3313,6 +3395,24 @@ export class TelegramCommerceBot {
     }
     if (field === 'reminderDays') {
       await this.commercial.updateSettings({ expiryReminderDays: Number(text.trim()) });
+      return;
+    }
+    if (field === 'referralCredit') {
+      await this.commercial.updateSettings({
+        referralReferrerCreditIrr: parseNonNegativeIrr(text),
+      });
+      return;
+    }
+    if (field === 'referralDiscount') {
+      await this.commercial.updateSettings({
+        referralInviteeDiscountIrr: parseNonNegativeIrr(text),
+      });
+      return;
+    }
+    if (field === 'referralCap') {
+      await this.commercial.updateSettings({
+        referralMaxRewardsPerReferrer: Number(text.trim()),
+      });
       return;
     }
     const trimmed = text.trim();
@@ -3381,7 +3481,7 @@ export class TelegramCommerceBot {
 }
 
 function isFreshStartCommand(text: string | undefined): boolean {
-  return /^\/start(?:@[A-Za-z0-9_]+)?$/u.test(text?.trim() ?? '');
+  return parseTelegramStartCommand(text ?? '') !== null;
 }
 
 export function createTelegramDeliveryTransport(

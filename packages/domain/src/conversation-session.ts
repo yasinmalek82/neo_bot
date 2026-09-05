@@ -79,6 +79,9 @@ export const ADMIN_OPS_FIELDS = [
   'reminderDays',
   'trialVariant',
   'blockCustomer',
+  'referralCredit',
+  'referralDiscount',
+  'referralCap',
 ] as const;
 
 export type AdminOpsField = (typeof ADMIN_OPS_FIELDS)[number];

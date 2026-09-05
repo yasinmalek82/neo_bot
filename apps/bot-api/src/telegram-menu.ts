@@ -31,8 +31,10 @@ export const TRIAL_CALLBACK = 'trial';
 export const SERVICES_CALLBACK = 'services';
 export const JOIN_REFRESH_CALLBACK = 'join:refresh';
 export const ADMIN_OPS_CALLBACK = 'admin:ops';
+export const ADMIN_SALES_CALLBACK = 'admin:sales';
 export const ADMIN_BROADCAST_CALLBACK = 'admin:broadcast';
 export const ADMIN_BROADCAST_CANCEL_PREFIX = 'admin:broadcast:cancel:';
+export const INVITE_CALLBACK = 'invite';
 
 export const MENU_LABEL = {
   home: 'منوی اصلی 🏠',
@@ -44,6 +46,7 @@ export const MENU_LABEL = {
   ticket: 'تیکت پشتیبانی 🎫',
   trial: 'سرویس تست 🎁',
   services: 'سرویس‌های من 📡',
+  invite: 'دعوت دوستان 🎁',
   help: 'راهنما 📘',
   status: 'وضعیت سیستم ⚙️',
   reports: 'گزارش‌ها 📣',
@@ -64,6 +67,7 @@ export type MenuAction =
   | 'ticket'
   | 'trial'
   | 'services'
+  | 'invite'
   | 'help'
   | 'status'
   | 'reports'
@@ -107,11 +111,22 @@ export function pairedKeyboard(buttons: readonly InlineButton[]): TelegramInline
   return inlineMenu(pairButtons(buttons));
 }
 
+export function parseTelegramStartCommand(
+  text: string,
+): { readonly payload: string | null } | null {
+  const match = text
+    .trim()
+    .match(/^\/start(?:@[A-Za-z0-9_]+)?(?:\s+([A-Za-z0-9_-]{1,64}))?$/u);
+  if (match === null) {
+    return null;
+  }
+  return { payload: match[1] ?? null };
+}
+
 export function isHomeMenuText(text: string): boolean {
   const normalized = text.trim();
   return (
-    normalized === '/start' ||
-    normalized.startsWith('/start@') ||
+    parseTelegramStartCommand(normalized) !== null ||
     normalized === 'منوی اصلی' ||
     normalized === MENU_LABEL.home
   );
@@ -168,6 +183,9 @@ export function matchMenuAction(text: string): MenuAction | null {
   if (normalized === MENU_LABEL.services || normalized === 'سرویس‌های من') {
     return 'services';
   }
+  if (normalized === MENU_LABEL.invite || normalized === 'دعوت دوستان') {
+    return 'invite';
+  }
   if (
     normalized === '/help' ||
     normalized.startsWith('/help@') ||
@@ -223,6 +241,7 @@ export function homeReplyKeyboard(
     [{ text: buttonLabel(MENU_LABEL.guide) }],
     [{ text: buttonLabel(MENU_LABEL.order) }, { text: buttonLabel(MENU_LABEL.renew) }],
     [{ text: buttonLabel(MENU_LABEL.wallet) }, { text: buttonLabel(MENU_LABEL.ticket) }],
+    [{ text: buttonLabel(MENU_LABEL.invite) }],
     [{ text: buttonLabel(MENU_LABEL.help) }],
     [{ text: buttonLabel(MENU_LABEL.home) }],
   );
@@ -799,6 +818,7 @@ export function adminHubKeyboard(): TelegramInlineKeyboardMarkup {
     { text: MENU_LABEL.failed, callback_data: ADMIN_FAILED_CALLBACK },
     { text: MENU_LABEL.catalog, callback_data: ADMIN_CATALOG_CALLBACK },
     { text: 'تنظیمات تجاری 🛠', callback_data: ADMIN_OPS_CALLBACK },
+    { text: 'خلاصه فروش 📊', callback_data: ADMIN_SALES_CALLBACK },
     { text: 'پیام همگانی 📢', callback_data: ADMIN_BROADCAST_CALLBACK },
     backToMenuButton(),
   ]);
@@ -1042,6 +1062,10 @@ export function commercialSettingsText(input: {
   readonly remindersEnabled: boolean;
   readonly expiryReminderDays: number;
   readonly lowTrafficPercent: number;
+  readonly referralEnabled?: boolean;
+  readonly referralReferrerCreditIrr?: bigint;
+  readonly referralInviteeDiscountIrr?: bigint;
+  readonly referralMaxRewardsPerReferrer?: number;
 }): string {
   return [
     '<b>تنظیمات تجاری</b>',
@@ -1049,7 +1073,76 @@ export function commercialSettingsText(input: {
     `پلن تست: ${input.trialVariantId ?? 'تعیین نشده'}`,
     `کانال اجباری: ${String(input.channelCount)}`,
     `یادآوری: ${input.remindersEnabled ? 'روشن' : 'خاموش'} · ${String(input.expiryReminderDays)} روز مانده · حجم ${String(input.lowTrafficPercent)}٪`,
+    `دعوت: ${input.referralEnabled === true ? 'روشن' : 'خاموش'} · پاداش ${formatTomanAmount(input.referralReferrerCreditIrr ?? 0n)} · تخفیف ${formatTomanAmount(input.referralInviteeDiscountIrr ?? 0n)} · سقف ${String(input.referralMaxRewardsPerReferrer ?? 50)}`,
     'شناسه کانال یا پلن تست را از دکمه‌های زیر بفرست. توکن یا لینک اشتراک اینجا نیست.',
+  ].join('\n');
+}
+
+export function inviteText(input: { readonly token: string; readonly url: string | null }): string {
+  return [
+    '<b>دعوت دوستان</b>',
+    'با لینک شخصی‌ات دوست را بیاور. پاداش بعد از اولین خرید موفق پرداخت‌شده است، نه تست رایگان.',
+    input.url === null
+      ? `کد دعوت: <code>${escapeHtml(input.token)}</code>`
+      : `لینک دعوت: ${escapeHtml(input.url)}`,
+  ].join('\n');
+}
+
+export function adminSalesSnapshotText(input: {
+  readonly timezone: string;
+  readonly today: {
+    readonly ordersByStatus: Readonly<Record<string, number>>;
+    readonly orderCount: number;
+    readonly revenueIrr: bigint;
+    readonly newCustomers: number;
+  };
+  readonly last7d: {
+    readonly ordersByStatus: Readonly<Record<string, number>>;
+    readonly orderCount: number;
+    readonly revenueIrr: bigint;
+    readonly newCustomers: number;
+  };
+  readonly openTickets: number;
+  readonly pendingReceiptReviews: number;
+}): string {
+  return [
+    '<b>خلاصه فروش</b>',
+    `بازه تقویمی: ${escapeHtml(input.timezone)}`,
+    '',
+    formatSalesWindow('امروز', input.today),
+    '',
+    formatSalesWindow('۷ روز', input.last7d),
+    '',
+    `تیکت باز: ${String(input.openTickets)}`,
+    `رسید در انتظار بررسی: ${String(input.pendingReceiptReviews)}`,
+    'مبالغ تقریبی از سفارش‌های انجام‌شده در Postgres است. لینک اشتراک اینجا نیست.',
+  ].join('\n');
+}
+
+function formatSalesWindow(
+  title: string,
+  window: {
+    readonly ordersByStatus: Readonly<Record<string, number>>;
+    readonly orderCount: number;
+    readonly revenueIrr: bigint;
+    readonly newCustomers: number;
+  },
+): string {
+  const statuses = [
+    `در انتظار رسید ${String(window.ordersByStatus['awaiting_receipt'] ?? 0)}`,
+    `بررسی رسید ${String(window.ordersByStatus['receipt_submitted'] ?? 0)}`,
+    `در حال ساخت ${String(window.ordersByStatus['provisioning'] ?? 0)}`,
+    `ساخت ناموفق ${String(window.ordersByStatus['provisioning_failed'] ?? 0)}`,
+    `انجام‌شده ${String(window.ordersByStatus['fulfilled'] ?? 0)}`,
+    `ردشده ${String(window.ordersByStatus['rejected'] ?? 0)}`,
+    `لغو ${String(window.ordersByStatus['cancelled'] ?? 0)}`,
+  ].join(' · ');
+  return [
+    `<b>${title}</b>`,
+    `سفارش: ${String(window.orderCount)}`,
+    statuses,
+    `درآمد تقریبی: ${formatTomanAmount(window.revenueIrr)}`,
+    `مشتری جدید: ${String(window.newCustomers)}`,
   ].join('\n');
 }
 

@@ -17,6 +17,7 @@ import {
 } from '@neo-bot/domain';
 
 import type { CommerceRepository, ServiceProvisioner } from './commerce-ports.js';
+import type { ReferralUseCase } from './referral.js';
 import type { ReportingPublisher } from './reporting-ports.js';
 import { utcDateStamp } from './reporting.js';
 
@@ -25,6 +26,7 @@ export class CommerceUseCase {
     private readonly repository: CommerceRepository,
     private readonly serviceProvisioner: ServiceProvisioner,
     private readonly reporting: ReportingPublisher | null = null,
+    private readonly referral: ReferralUseCase | null = null,
   ) {}
 
   public listCategories(parentId: string | null): Promise<readonly CatalogCategory[]> {
@@ -354,6 +356,7 @@ export class CommerceUseCase {
     });
     if (order.status === 'fulfilled') {
       await this.publishProvisioningSucceeded(order, customer?.telegramUserId ?? 'unknown');
+      await this.grantReferralReward(order);
       return order;
     }
     return this.fulfillReservedOrder(order);
@@ -371,6 +374,7 @@ export class CommerceUseCase {
     if (order.status === 'fulfilled') {
       const customer = await this.repository.getCustomerForOrder(order.id);
       await this.publishProvisioningSucceeded(order, customer?.telegramUserId ?? 'unknown');
+      await this.grantReferralReward(order);
       return order;
     }
     if (order.status !== 'provisioning' && order.status !== 'provisioning_failed') {
@@ -443,7 +447,15 @@ export class CommerceUseCase {
     // Failures after completeOrder must not rewrite the fulfilled order into a
     // provisioning failure; the durable delivery job owns customer notification.
     await this.publishProvisioningSucceeded(fulfilled, customer?.telegramUserId ?? 'unknown');
+    await this.grantReferralReward(fulfilled);
     return fulfilled;
+  }
+
+  private async grantReferralReward(order: SalesOrder): Promise<void> {
+    if (this.referral === null) {
+      return;
+    }
+    await this.referral.grantForFulfilledPaidOrder(order);
   }
 
   private async publishProvisioningSucceeded(

@@ -1,12 +1,17 @@
 import type {
+  AdminSalesSnapshot,
   BroadcastJob,
   CustomerServiceSummary,
   ForcedJoinChannel,
+  ReferralAttribution,
+  ReferralReward,
   ServiceReminderDelivery,
   StorefrontOpsSettings,
   StorefrontOpsSettingsPatch,
   TelegramCustomer,
   TrialClaim,
+  UsageSyncTarget,
+  UsageSyncWrite,
 } from '@neo-bot/domain';
 import type { SalesOrder } from '@neo-bot/domain';
 
@@ -63,7 +68,19 @@ export interface CommercialRepository {
     readonly remindersPending: number;
     readonly broadcastsPending: number;
     readonly broadcastsRunning: number;
+    readonly usageSyncDue: number;
   }>;
+  attributeReferralStart(input: {
+    readonly customerId: string;
+    readonly inviteeTelegramUserId: string;
+    readonly referrerTelegramUserId: string;
+  }): Promise<ReferralAttribution | null>;
+  getReferralAttribution(customerId: string): Promise<ReferralAttribution | null>;
+  grantReferralRewardForPaidOrder(order: SalesOrder): Promise<ReferralReward | null>;
+  getAdminSalesSnapshot(now: Date): Promise<AdminSalesSnapshot>;
+  listServicesDueForUsageSync(limit: number, staleBefore: Date): Promise<readonly UsageSyncTarget[]>;
+  persistServiceUsedTraffic(input: UsageSyncWrite): Promise<boolean>;
+  countDueUsageSync(staleBefore: Date): Promise<number>;
 }
 
 export interface ChannelGateDecision {

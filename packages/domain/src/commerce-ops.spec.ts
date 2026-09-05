@@ -31,6 +31,22 @@ describe('commercial wave 1 domain rules', () => {
     expect(() => validateStorefrontOpsSettingsPatch({ expiryReminderDays: 0 })).toThrow(
       'INVALID_REMINDER_DAYS',
     );
+    expect(
+      validateStorefrontOpsSettingsPatch({
+        referralEnabled: true,
+        referralReferrerCreditIrr: 25_000n,
+        referralInviteeDiscountIrr: 10_000n,
+        referralMaxRewardsPerReferrer: 20,
+      }),
+    ).toEqual({
+      referralEnabled: true,
+      referralReferrerCreditIrr: 25_000n,
+      referralInviteeDiscountIrr: 10_000n,
+      referralMaxRewardsPerReferrer: 20,
+    });
+    expect(() =>
+      validateStorefrontOpsSettingsPatch({ referralReferrerCreditIrr: -1n }),
+    ).toThrow('INVALID_REFERRAL_CREDIT');
   });
 
   it('treats creator, administrator, member and restricted-is-member as joined', () => {

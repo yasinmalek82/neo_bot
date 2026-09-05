@@ -1,4 +1,10 @@
 import { DomainConflictError } from './errors.js';
+import {
+  REFERRAL_MAX_REWARDS_DEFAULT,
+  validateReferralCreditIrr,
+  validateReferralMaxRewards,
+} from './referral.js';
+import type { SalesOrderStatus } from './commerce.js';
 
 export const FORCED_JOIN_CHANNEL_LIMIT = 8;
 export const BROADCAST_BODY_MAX = 3500;
@@ -15,6 +21,10 @@ export interface StorefrontOpsSettings {
   readonly remindersEnabled: boolean;
   readonly expiryReminderDays: number;
   readonly lowTrafficPercent: number;
+  readonly referralEnabled: boolean;
+  readonly referralReferrerCreditIrr: bigint;
+  readonly referralInviteeDiscountIrr: bigint;
+  readonly referralMaxRewardsPerReferrer: number;
   readonly updatedAt: Date;
 }
 
@@ -25,6 +35,35 @@ export interface StorefrontOpsSettingsPatch {
   readonly remindersEnabled?: boolean;
   readonly expiryReminderDays?: number;
   readonly lowTrafficPercent?: number;
+  readonly referralEnabled?: boolean;
+  readonly referralReferrerCreditIrr?: bigint;
+  readonly referralInviteeDiscountIrr?: bigint;
+  readonly referralMaxRewardsPerReferrer?: number;
+}
+
+export const SALES_SNAPSHOT_STATUSES = [
+  'awaiting_receipt',
+  'receipt_submitted',
+  'provisioning',
+  'provisioning_failed',
+  'fulfilled',
+  'rejected',
+  'cancelled',
+] as const;
+
+export interface AdminSalesWindowSnapshot {
+  readonly ordersByStatus: Readonly<Record<SalesOrderStatus, number>>;
+  readonly orderCount: number;
+  readonly revenueIrr: bigint;
+  readonly newCustomers: number;
+}
+
+export interface AdminSalesSnapshot {
+  readonly timezone: 'Asia/Tehran';
+  readonly today: AdminSalesWindowSnapshot;
+  readonly last7d: AdminSalesWindowSnapshot;
+  readonly openTickets: number;
+  readonly pendingReceiptReviews: number;
 }
 
 export interface TrialClaim {
@@ -98,6 +137,10 @@ export function defaultStorefrontOpsSettings(now = new Date()): StorefrontOpsSet
     remindersEnabled: true,
     expiryReminderDays: 3,
     lowTrafficPercent: 15,
+    referralEnabled: false,
+    referralReferrerCreditIrr: 0n,
+    referralInviteeDiscountIrr: 0n,
+    referralMaxRewardsPerReferrer: REFERRAL_MAX_REWARDS_DEFAULT,
     updatedAt: now,
   };
 }
@@ -194,6 +237,22 @@ export function validateStorefrontOpsSettingsPatch(
     ...(patch.lowTrafficPercent === undefined
       ? {}
       : { lowTrafficPercent: patch.lowTrafficPercent }),
+    ...(patch.referralEnabled === undefined ? {} : { referralEnabled: patch.referralEnabled }),
+    ...(patch.referralReferrerCreditIrr === undefined
+      ? {}
+      : { referralReferrerCreditIrr: validateReferralCreditIrr(patch.referralReferrerCreditIrr) }),
+    ...(patch.referralInviteeDiscountIrr === undefined
+      ? {}
+      : {
+          referralInviteeDiscountIrr: validateReferralCreditIrr(patch.referralInviteeDiscountIrr),
+        }),
+    ...(patch.referralMaxRewardsPerReferrer === undefined
+      ? {}
+      : {
+          referralMaxRewardsPerReferrer: validateReferralMaxRewards(
+            patch.referralMaxRewardsPerReferrer,
+          ),
+        }),
   };
 }
 
@@ -211,6 +270,13 @@ export function mergeStorefrontOpsSettings(
     remindersEnabled: validated.remindersEnabled ?? current.remindersEnabled,
     expiryReminderDays: validated.expiryReminderDays ?? current.expiryReminderDays,
     lowTrafficPercent: validated.lowTrafficPercent ?? current.lowTrafficPercent,
+    referralEnabled: validated.referralEnabled ?? current.referralEnabled,
+    referralReferrerCreditIrr:
+      validated.referralReferrerCreditIrr ?? current.referralReferrerCreditIrr,
+    referralInviteeDiscountIrr:
+      validated.referralInviteeDiscountIrr ?? current.referralInviteeDiscountIrr,
+    referralMaxRewardsPerReferrer:
+      validated.referralMaxRewardsPerReferrer ?? current.referralMaxRewardsPerReferrer,
     updatedAt: now,
   };
 }
