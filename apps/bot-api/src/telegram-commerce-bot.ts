@@ -11,6 +11,7 @@ import type {
   OpsDailySummaryUseCase,
   ReportingUseCase,
   RepresentativeWalletRepository,
+  RepresentativePricingRepository,
 } from '@neo-bot/application';
 import {
   CommercialOpsUseCase,
@@ -21,6 +22,7 @@ import {
   UsageSyncUseCase,
   WalletUseCase,
   RepresentativeWalletUseCase,
+  RepresentativePricingUseCase,
   type UsageReader,
 } from '@neo-bot/application';
 import {
@@ -37,6 +39,7 @@ import {
   parseNonNegativeIrr,
   type AdminOpsField,
   type RepresentativeWalletLedgerEntry,
+  type AdminRepPricingAction,
 } from '@neo-bot/domain';
 
 import type { TelegramConfig } from './config.js';
@@ -96,6 +99,11 @@ import {
   ADMIN_SALES_CALLBACK,
   ADMIN_BROADCAST_CALLBACK,
   ADMIN_REP_WALLET_CALLBACK,
+  ADMIN_REP_LIST_CALLBACK,
+  adminRepresentativesText,
+  ADMIN_REP_PRICING_CALLBACK,
+  adminRepPricingText,
+  adminRepPricingKeyboard,
   ADMIN_BROADCAST_CANCEL_PREFIX,
   INVITE_CALLBACK,
   ORDERS_WALLET_CALLBACK,
@@ -163,6 +171,7 @@ import {
 } from './telegram-menu.js';
 import { AdminBroadcastFlowHandler, AdminOpsFlowHandler } from './interaction/admin-ops-flow.js';
 import { AdminRepWalletCreditFlowHandler } from './interaction/admin-rep-wallet-flow.js';
+import { AdminRepPricingFlowHandler } from './interaction/admin-rep-pricing-flow.js';
 import { CommerceFlowHandler } from './interaction/commerce-flow.js';
 import {
   applyFlowTransition,
@@ -214,6 +223,7 @@ export class TelegramCommerceBot {
   private readonly referral: ReferralUseCase;
   private readonly usageSync: UsageSyncUseCase;
   private readonly repWallet: RepresentativeWalletUseCase;
+  private readonly repPricing: RepresentativePricingUseCase;
 
   public constructor(
     config: Extract<TelegramConfig, { readonly enabled: true }>,
@@ -229,6 +239,7 @@ export class TelegramCommerceBot {
     usageReader: UsageReader | null = null,
     sessions?: ConversationSessionStore,
     representativeWallet: RepresentativeWalletUseCase | null = null,
+    representativePricing: RepresentativePricingUseCase | null = null,
   ) {
     this.config = config;
     this.sessions = sessions ?? new RepositoryConversationSessionStore(repository);
@@ -239,6 +250,9 @@ export class TelegramCommerceBot {
     this.repWallet =
       representativeWallet ??
       new RepresentativeWalletUseCase(repository as unknown as RepresentativeWalletRepository);
+    this.repPricing =
+      representativePricing ??
+      new RepresentativePricingUseCase(repository as unknown as RepresentativePricingRepository);
     this.commercial = new CommercialOpsUseCase(
       repository,
       messenger.getChatMember === undefined
@@ -382,6 +396,7 @@ export class TelegramCommerceBot {
         ownerCredit: (command) => this.ownerCreditRepresentative(command),
       }),
     );
+    registry.register(new AdminRepPricingFlowHandler(this.repPricing));
     registry.register(new CommerceFlowHandler('commerce.purchase', this.commerce, customer));
     registry.register(new CommerceFlowHandler('commerce.renewal', this.commerce, customer));
     registry.register(
@@ -574,6 +589,29 @@ export class TelegramCommerceBot {
           columnKeyboard(cancelRow),
         );
         return;
+      case 'admin.rep-pricing.representative':
+        await this.present(target, 'شناسه عددی نماینده را بفرست.', columnKeyboard(cancelRow));
+        return;
+      case 'admin.rep-pricing.variant':
+        await this.present(target, 'شناسه عددی پلن را بفرست.', columnKeyboard(cancelRow));
+        return;
+      case 'admin.rep-pricing.price':
+        await this.present(
+          target,
+          'قیمت را به ریال و فقط با عدد مثبت بفرست.',
+          columnKeyboard(cancelRow),
+        );
+        return;
+      case 'admin.rep-pricing.invalid':
+        await this.present(
+          target,
+          'شناسه یا قیمت معتبر نیست. مقدار درست را دوباره بفرست.',
+          columnKeyboard(cancelRow),
+        );
+        return;
+      case 'admin.rep-pricing.saved':
+        await this.present(target, 'تغییر قیمت‌گذاری نماینده ثبت شد.', adminScreenKeyboard());
+        return;
       case 'wallet.amount':
         await this.present(target, walletAmountPromptText(), columnKeyboard(cancelRow));
         return;
@@ -705,6 +743,36 @@ export class TelegramCommerceBot {
       target,
       'شناسه نماینده را به‌صورت کد یا شناسه تلگرام بفرست.',
       columnKeyboard([flowCancelButton(), backToMenuButton()]),
+    );
+  }
+
+  private async startAdminRepPricing(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+    action: AdminRepPricingAction,
+  ): Promise<void> {
+    await AdminRepPricingFlowHandler.start(this.sessions, {
+      telegramUserId: customer.telegramUserId,
+      action,
+      now: new Date(),
+    });
+    const representativeAction =
+      action === 'grant-access' ||
+      action === 'revoke-access' ||
+      action === 'set-override-price' ||
+      action === 'clear-override-price';
+    await this.present(
+      target,
+      representativeAction ? 'شناسه عددی نماینده را بفرست.' : 'شناسه عددی پلن را بفرست.',
+      columnKeyboard([flowCancelButton(), backToMenuButton()]),
+    );
+  }
+
+  private async showAdminRepresentatives(target: MenuTarget): Promise<void> {
+    await this.present(
+      target,
+      adminRepresentativesText(await this.repPricing.listRepresentatives()),
+      adminScreenKeyboard(),
     );
   }
 
@@ -874,6 +942,21 @@ export class TelegramCommerceBot {
         this.requireAdmin(actorId);
         this.requirePrivateTarget(target, customer);
         await this.startAdminRepWallet(target, customer);
+      } else if (data === ADMIN_REP_PRICING_CALLBACK) {
+        this.requireAdmin(actorId);
+        this.requirePrivateTarget(target, customer);
+        await this.present(target, adminRepPricingText(), adminRepPricingKeyboard());
+      } else if (data === ADMIN_REP_LIST_CALLBACK) {
+        this.requireAdmin(actorId);
+        this.requirePrivateTarget(target, customer);
+        await this.showAdminRepresentatives(target);
+      } else if (data.startsWith('rep-pricing:')) {
+        this.requireAdmin(actorId);
+        this.requirePrivateTarget(target, customer);
+        const action = data.slice('rep-pricing:'.length);
+        if (!isAdminRepPricingAction(action))
+          throw new DomainConflictError('INVALID_REPRESENTATIVE_PRICING_ACTION');
+        await this.startAdminRepPricing(target, customer, action);
       } else if (data === ADMIN_OPS_CALLBACK) {
         this.requireAdmin(actorId);
         await this.showCommercialSettings(target);
@@ -3900,4 +3983,15 @@ function requiredStoreString(value: unknown): string {
     throw new DomainConflictError('CATALOG_ADMIN_SESSION_INCOMPLETE');
   }
   return value;
+}
+
+function isAdminRepPricingAction(value: string): value is AdminRepPricingAction {
+  return [
+    'grant-access',
+    'revoke-access',
+    'set-base-price',
+    'clear-base-price',
+    'set-override-price',
+    'clear-override-price',
+  ].includes(value);
 }

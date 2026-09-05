@@ -172,6 +172,7 @@ export interface CommerceRepository {
     readonly variantId: string;
     readonly priceIrr: bigint;
   }): Promise<void>;
+  clearRepresentativeBasePrice?(input: { readonly variantId: string }): Promise<void>;
   setRepresentativeOverridePrice?(input: {
     readonly representativeId: string;
     readonly variantId: string;

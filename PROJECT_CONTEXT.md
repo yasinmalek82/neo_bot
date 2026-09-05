@@ -1,8 +1,8 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T11:30:09.232Z
-source-fingerprint: aaa57a9b6e70c8c4a700f0fe691bd557f26de7f8437ca4e7945a5a6c06996641
-current-phase: commercial-wave3
+last-updated: 2026-09-05T11:59:25.219Z
+source-fingerprint: 3921c848de80784f87243eba79e65a281550cba8b4fe1b9a2c3684c810ac3a72
+current-phase: commercial-wave4
 next-task: owner-authorized-isolated-pilot-gates
 -->
 
@@ -282,6 +282,8 @@ off-host backup restoration or public security.
 
 ## Capability status
 
+|
+
 | Capability                           | Status      | Verified boundary or gap                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ------------------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Modular pnpm/TypeScript foundation   | Implemented | Strict builds and architecture gate pass locally.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -301,7 +303,7 @@ off-host backup restoration or public security.
 | Customer Mini App checkout           | Abandoned   | `POST /customer/orders` and `POST /customer/renew` return gone. Chat menu button is commands.                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Telegram WebApp customer identity    | Implemented | Retained customer statics validate Telegram `initData`; catalog administrator authorization is numeric allowlist plus private-chat enforcement inside the bot.                                                                                                                                                                                                                                                                                                                                  |
 | Production deployment and operations | Partial     | In-repo one-line `deploy/neo-install.sh` plus `deploy/neo` menu (install, git update, settings, compose, backup, health) wrap the existing first-host installer. Validator/shellcheck evidence only; no VPS run from this change. Historical first-host `bot-api` rebuild still stands: migration `0010`, public/loopback health, webhook readiness, report queues, and disabled pilot were verified then. Caddy/Postgres were not recreated; no purchase or PasarGuard mutation was performed. |
-| Resellers, wallet and debt           | Partial     | Schema, listing, checkout snapshot, customer assignment, and current-price audit exist. Override then base then public. A non-negative customer wallet top-up ledger and restart-safe amount/coupon input exist locally; representative debt, admin price UI, and `reseller.*` notices are not published.                                                                                                                                                                                       |
+| Resellers, wallet and debt           | Partial     | Wave 3 representative wallet is complete locally. Wave 4 adds owner-admin Telegram access grants/revokes, base/override set and clear, minimal representative listing, and durable Persian flows. Local unit evidence only; no live Telegram or production mutation.                                                                                                                                                                                                                            |
 | Legacy import and cutover            | Not started | Must begin read-only with backup, preflight, rollback and controlled cutover.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Free trial / test service            | Partial     | One write-once claim plus `order_kind=trial` amount 0. Admin ops settings choose enable + catalog variant (duration/traffic/devices/groups). Home shows the trial key only when eligible. Repeats refuse idempotently. Fulfillment reuses the paid create path and still honors `PROVISIONING_MODE` / `PILOT_ENABLED`. Local unit evidence only; live provision remains gated.                                                                                                                  |
 | Forced channel join                  | Partial     | Owner configures channel IDs/usernames on ops settings. Shop/trial/checkout fail closed on Telegram membership errors with join + refresh copy. Allowlisted admins bypass. Local unit evidence only; live `getChatMember` on a real channel is unproven.                                                                                                                                                                                                                                        |
@@ -433,16 +435,12 @@ Status: approved on 2026-08-25 and active after the local checkpoint.
 
 ## Current priority and next task
 
-Current phase: **commercial-wave2**. Wave 1 commercial blockers plus Wave 2 usage sync,
-referral/invite, and admin sales snapshot are in source on `cursor/wave2-commercial-848a`.
-ADR 0022 and ADR 0023. Not deployed.
+Current phase: **commercial-wave4**. Wave 3 representative wallet is complete locally; Wave 4 representative pricing administration is implemented on this isolated branch and is not deployed. ADR 0025 records the private Telegram decision. Wave 1/2 commercial changes remain local and unproven live.
 
-Next task: owner-authorized isolated-database apply of migrations `0014`+`0015`+`0016`, then
-owner-only live gates (public HTTPS webhook + TLS, prepared PasarGuard group, off-host backups,
+Next task: **owner-authorized-isolated-pilot-gates**. Continue the owner-authorized isolated-database and live gates after this review; do not treat local unit evidence as live proof.
+Owner-only live gates remain: public HTTPS webhook + TLS, prepared PasarGuard group, off-host backups,
 phone smoke of `/start` → shop or trial → receipt → delivery, plus invite and sales-snapshot
-chat checks). Do not treat local unit evidence as phone or production proof. Isolated or live
-PasarGuard mutation remains a separate product-risk decision. Remaining operator/staff
-memory-only Telegram input can return after those gates.
+chat checks. Isolated or live PasarGuard mutation remains a separate product-risk decision.
 
 Expected sequence:
 
@@ -1383,3 +1381,9 @@ Keep entries concise and newest first. This is an operational summary, not a tra
 - Validation: unit and Testcontainers integration tests passed locally; isolated PasarGuard pilot was
   used without migrating production users.
 - Next at that point: customer/admin interfaces and production-facing integrations.
+
+### 2026-09-05 - Wave 4 representative pricing admin UI
+
+- Outcome: added the owner-admin Telegram surface for representative access and base/override pricing mutations, explicit clearing, and minimal representative listing. Mutations use durable sessions and the existing precedence/repository ports; no live Telegram, database, gateway, debt, or PasarGuard mutation was performed.
+- Validation: repository build and typecheck pass; full unit suites pass (`37` domain, `94` application, `10` PasarGuard, `2` database, `156` bot-api, `5` admin-web). Targeted pricing flow/menu tests pass. No integration, Telegram, production database, gateway, debt, or PasarGuard mutation was run.
+- Next: finish branch verification and owner-authorized isolated pilot gates.
