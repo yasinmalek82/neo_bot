@@ -45,7 +45,7 @@ bash deploy/neo-install.sh
 4. Start / stop / restart / status / logs
 5. Backup database (`tools/postgres-backup.sh`)
 6. Health check (loopback and public `/health`)
-0. Exit
+7. Exit
 
 The install option asks for:
 
