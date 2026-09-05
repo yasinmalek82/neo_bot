@@ -1,7 +1,7 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T10:13:33.331Z
-source-fingerprint: b38f63ede99475543834f472d7c977033246bcee48c38699ca9965446bfdd233
+last-updated: 2026-09-05T10:43:47.453Z
+source-fingerprint: eef97495dbe6c8d0ac9f603ac1c686a1fc36e22d7df07ef35081265916203cad
 current-phase: commercial-wave2
 next-task: owner-authorized-isolated-pilot-gates
 -->
@@ -288,9 +288,9 @@ off-host backup restoration or public security.
 | PasarGuard health and group sync     | Implemented | Valid/invalid connectivity and group snapshots covered.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Direct service create/read/renew     | Implemented | Numeric IDs, idempotency and read-after-write covered.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Durable card-to-card order lifecycle | Implemented | Checkout, proof, approval/rejection, retry provisioning and catalog card source.                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Telegram chat purchase flow          | Partial     | ReplyKeyboard home now includes wallet, tickets and a persistent Home key. Category -> product -> three-plan comparison -> detail -> payment -> receipt remains chat-only. Durable purchase/renewal/wallet/ticket sessions release on Home, Cancel, shop-back and other menu navigation so reply-keyboard labels are not consumed as username/coupon/ticket text. Stale `renew:confirm` no longer checkouts after Home. Live phone and receipt-to-delivery validation remain outstanding.       |
+| Telegram chat purchase flow          | Partial     | Customer ReplyKeyboard restored to compact hubs (order/wallet and guide/support) after Wave 1/2 overcrowding; trial remains a conditional row. Category -> product -> plan comparison -> detail -> payment -> receipt stays chat-only. Durable sessions still release on Home/Cancel/shop-back. Live phone proof outstanding.       |
 | Customer visual identity             | Partial     | Versioned master, welcome and successful-delivery PNGs use the approved charcoal/ivory/signal-orange `NN / NEO NETWORK / PRIVATE ACCESS` direction. Welcome and delivery assets were uploaded privately to Telegram, their file IDs are configured on first-host, and runtime presence is verified; phone `/start` and real successful-delivery rendering are not both proven yet.                                                                                                              |
-| Receipt review                       | Partial     | Admin private-chat review; image documents accepted; receipts topic gets a redacted text summary. Customer copy consistently promises a maximum 60-minute review, but durable SLA tracking and escalation are not implemented yet.                                                                                                                                                                                                                                                              |
+| Receipt review                       | Partial     | Admin private-chat review queue labeled صف رسید (legacy open-orders alias kept). Image documents accepted; receipts topic redacted. Hub copy lists commercial tools. SLA tracking still absent.                                                                                                                                                                                                                                                              |
 | Admin reporting group and topics     | Partial     | Local outbox delivered first-contact, activity, order.created, and one daily summary; receipt/approval unconfirmed.                                                                                                                                                                                                                                                                                                                                                                             |
 | New-user `/start` reporting          | Partial     | First-contact and same-day activity notices were delivered to the new-users topic.                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Renewal customer journey             | Partial     | Renewal now requires a preview and explicit final confirmation; back/menu causes no provider mutation. Failed renewals complete the Telegram update and keep the previous service; live PasarGuard renew remains unconfirmed.                                                                                                                                                                                                                                                                   |
@@ -516,6 +516,12 @@ handoff entry.
 ## Handoff log
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
+
+### 2026-09-05 - Telegram home hubs and admin receipt-queue copy
+
+- Outcome: restored compact customer ReplyKeyboard hubs after Wave 1/2 overcrowding; admin review queue renamed to صف رسید; admin hub copy refreshed for commercial tools. No deploy.
+- Validation: bot-api unit 151/151 on PR branch; CI stamp follow-up.
+- Next: owner-authorized isolated migrate 0014+0015+0016, webhook TLS, phone smoke.
 
 ### 2026-09-05 - One-line VPS installer and interactive host menu
 
