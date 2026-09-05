@@ -23,6 +23,8 @@ import {
   type ReferralAttribution,
   type ReferralReward,
   type RepresentativeProfile,
+  type RepresentativeWallet,
+  type RepresentativeWalletLedgerEntry,
   type RepresentativePricingSource,
   type SalesOrder,
   type SalesOrderStatus,
@@ -1115,7 +1117,6 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
     return result.rows[0] ?? null;
   }
 
-
   public async findRepresentativeByCodeOrTelegram(input: {
     readonly code?: string;
     readonly telegramUserId?: number;
@@ -1165,7 +1166,7 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
 
   public async getRepresentativeWallet(
     representativeId: string,
-  ): Promise<import('@neo-bot/domain').RepresentativeWallet | null> {
+  ): Promise<RepresentativeWallet | null> {
     const rows = await this.pool.query<{
       representative_id: string;
       balance_irr: string;
@@ -1190,14 +1191,14 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
     readonly kind: 'owner_credit' | 'adjustment';
     readonly idempotencyKey: string;
     readonly note?: string;
-  }): Promise<import('@neo-bot/domain').RepresentativeWalletLedgerEntry> {
+  }): Promise<RepresentativeWalletLedgerEntry> {
     return this.mutateRepresentativeWallet({
       representativeId: input.representativeId,
       amountIrr: input.amountIrr,
       direction: 'credit',
       kind: input.kind,
       idempotencyKey: input.idempotencyKey,
-      note: input.note,
+      ...(input.note === undefined ? {} : { note: input.note }),
     });
   }
 
@@ -1208,15 +1209,15 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
     readonly idempotencyKey: string;
     readonly salesOrderId?: string;
     readonly note?: string;
-  }): Promise<import('@neo-bot/domain').RepresentativeWalletLedgerEntry> {
+  }): Promise<RepresentativeWalletLedgerEntry> {
     return this.mutateRepresentativeWallet({
       representativeId: input.representativeId,
       amountIrr: -input.amountIrr,
       direction: 'debit',
       kind: input.kind,
       idempotencyKey: input.idempotencyKey,
-      salesOrderId: input.salesOrderId,
-      note: input.note,
+      ...(input.salesOrderId === undefined ? {} : { salesOrderId: input.salesOrderId }),
+      ...(input.note === undefined ? {} : { note: input.note }),
     });
   }
 
@@ -1228,7 +1229,7 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
     readonly idempotencyKey: string;
     readonly salesOrderId?: string;
     readonly note?: string;
-  }): Promise<import('@neo-bot/domain').RepresentativeWalletLedgerEntry> {
+  }): Promise<RepresentativeWalletLedgerEntry> {
     const client = await this.pool.connect();
     try {
       await client.query('begin');
@@ -1307,12 +1308,13 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
         `select balance_irr::text from representative_wallets where representative_id = $1::bigint`,
         [input.representativeId],
       );
-      const balanceAfter = BigInt(wallet.rows[0]!.balance_irr);
+      const balanceAfter = BigInt(wallet.rows[0]?.balance_irr ?? '0');
       if (balanceAfter < 0n) {
         throw new DomainConflictError('INSUFFICIENT_REPRESENTATIVE_WALLET');
       }
       await client.query('commit');
-      const row = inserted.rows[0]!;
+      const row = inserted.rows[0];
+      if (row === undefined) throw new Error('Representative wallet ledger insert returned no row');
       return {
         id: row.id,
         representativeId: row.representative_id,

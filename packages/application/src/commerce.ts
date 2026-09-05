@@ -199,8 +199,6 @@ export class CommerceUseCase {
       occurrenceKey: `order:${order.id}:created`,
       payload: {
         orderId: order.id,
-        amountIrr: order.amountIrr.toString(),
-        replayed: String(entry.replayed),
         telegramUserId: customer.telegramUserId,
         productName: order.productName,
         variantName: order.variantName,

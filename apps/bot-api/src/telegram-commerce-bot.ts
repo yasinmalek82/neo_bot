@@ -10,7 +10,7 @@ import type {
   CustomerDeliveryUseCase,
   OpsDailySummaryUseCase,
   ReportingUseCase,
-  type RepresentativeWalletRepository,
+  RepresentativeWalletRepository,
 } from '@neo-bot/application';
 import {
   CommercialOpsUseCase,
@@ -537,22 +537,42 @@ export class TelegramCommerceBot {
         );
         return;
       case 'admin.rep-wallet.lookup':
-        await this.present(target, 'شناسه نماینده را به‌صورت کد یا شناسه تلگرام بفرست.', columnKeyboard(cancelRow));
+        await this.present(
+          target,
+          'شناسه نماینده را به‌صورت کد یا شناسه تلگرام بفرست.',
+          columnKeyboard(cancelRow),
+        );
         return;
       case 'admin.rep-wallet.amount':
-        await this.present(target, 'مبلغ شارژ را به ریال و فقط با عدد مثبت بفرست.', columnKeyboard(cancelRow));
+        await this.present(
+          target,
+          'مبلغ شارژ را به ریال و فقط با عدد مثبت بفرست.',
+          columnKeyboard(cancelRow),
+        );
         return;
       case 'admin.rep-wallet.invalid-lookup':
-        await this.present(target, 'کد یا شناسه تلگرام نماینده پیدا نشد یا فعال نیست. دوباره بفرست.', columnKeyboard(cancelRow));
+        await this.present(
+          target,
+          'کد یا شناسه تلگرام نماینده پیدا نشد یا فعال نیست. دوباره بفرست.',
+          columnKeyboard(cancelRow),
+        );
         return;
       case 'admin.rep-wallet.invalid-amount':
-        await this.present(target, 'مبلغ شارژ معتبر نیست. عدد مثبت به ریال بفرست.', columnKeyboard(cancelRow));
+        await this.present(
+          target,
+          'مبلغ شارژ معتبر نیست. عدد مثبت به ریال بفرست.',
+          columnKeyboard(cancelRow),
+        );
         return;
       case 'admin.rep-wallet.credited':
         await this.present(target, 'شارژ کیف پول نماینده ثبت شد.', adminScreenKeyboard());
         return;
       case 'admin.rep-wallet.failed':
-        await this.present(target, 'شارژ کیف پول نماینده انجام نشد؛ موجودی یا وضعیت نماینده را بررسی کن.', columnKeyboard(cancelRow));
+        await this.present(
+          target,
+          'شارژ کیف پول نماینده انجام نشد؛ موجودی یا وضعیت نماینده را بررسی کن.',
+          columnKeyboard(cancelRow),
+        );
         return;
       case 'wallet.amount':
         await this.present(target, walletAmountPromptText(), columnKeyboard(cancelRow));
@@ -3517,14 +3537,13 @@ export class TelegramCommerceBot {
     readonly idempotencyKey: string;
   }): Promise<RepresentativeWalletLedgerEntry> {
     const entry = await this.repWallet.ownerCredit(command);
-    await this.publish({
-      type: 'reseller.wallet_credited',
-      occurrenceKey: `reseller:wallet-credit:${command.idempotencyKey}`,
-      payload: {
-        representativeId: entry.representativeId,
-        ledgerId: entry.id,
-      },
-    });
+    if (this.reporting !== null) {
+      await this.reporting.record({
+        type: 'reseller.wallet_credited',
+        occurrenceKey: `reseller:wallet-credit:${command.idempotencyKey}`,
+        payload: { representativeId: entry.representativeId, ledgerId: entry.id },
+      });
+    }
     return entry;
   }
 
