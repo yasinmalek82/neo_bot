@@ -805,7 +805,11 @@ describe('CommerceUseCase', () => {
       representativeId: '9',
       pricingSource: 'representative_base' as const,
     };
-    const fulfilled = { ...representativeOrder, status: 'fulfilled' as const, serviceId: service.id };
+    const fulfilled = {
+      ...representativeOrder,
+      status: 'fulfilled' as const,
+      serviceId: service.id,
+    };
     const repository = createRepository();
     vi.mocked(repository.reserveProvisioning).mockResolvedValue(representativeOrder);
     vi.mocked(repository.completeOrder).mockResolvedValue(fulfilled);
@@ -846,7 +850,11 @@ describe('CommerceUseCase', () => {
       { create: blockedProvision, renew: vi.fn() },
       null,
       null,
-      { debitForPurchase: vi.fn().mockRejectedValue(new Error('INSUFFICIENT_REPRESENTATIVE_WALLET')) } as never,
+      {
+        debitForPurchase: vi
+          .fn()
+          .mockRejectedValue(new Error('INSUFFICIENT_REPRESENTATIVE_WALLET')),
+      } as never,
     );
     await expect(blocked.approveOrder(representativeOrder.id, '70001')).rejects.toThrow(
       'INSUFFICIENT_REPRESENTATIVE_WALLET',
@@ -854,7 +862,6 @@ describe('CommerceUseCase', () => {
     expect(blockedProvision).not.toHaveBeenCalled();
     expect(blockedRepository.completeOrder).not.toHaveBeenCalled();
   });
-
 });
 
 function createRepository(): CommerceRepository {

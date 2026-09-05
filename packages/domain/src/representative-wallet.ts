@@ -6,8 +6,7 @@ export const REPRESENTATIVE_WALLET_LEDGER_KINDS = [
   'adjustment',
 ] as const;
 
-export type RepresentativeWalletLedgerKind =
-  (typeof REPRESENTATIVE_WALLET_LEDGER_KINDS)[number];
+export type RepresentativeWalletLedgerKind = (typeof REPRESENTATIVE_WALLET_LEDGER_KINDS)[number];
 
 export type RepresentativeWalletDirection = 'credit' | 'debit';
 

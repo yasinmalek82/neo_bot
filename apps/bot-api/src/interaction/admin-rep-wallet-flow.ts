@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
-import { continueConversationSession, startConversationSession, type ConversationSessionStore } from '@neo-bot/application';
+import {
+  continueConversationSession,
+  startConversationSession,
+  type ConversationSessionStore,
+} from '@neo-bot/application';
 import {
   DomainConflictError,
   parseWalletAmountIrr,
@@ -72,7 +76,8 @@ export class AdminRepWalletCreditFlowHandler implements ConversationFlowHandler 
     const payload = session.payload as AdminRepWalletCreditPayload;
     if (session.step === 'create') {
       const lookup = parseLookup(input.text ?? '');
-      if (lookup === null) return { kind: 'reject', session, screen: { id: 'admin.rep-wallet.invalid-lookup' } };
+      if (lookup === null)
+        return { kind: 'reject', session, screen: { id: 'admin.rep-wallet.invalid-lookup' } };
       const next = continueConversationSession(session, { step: 'amount', payload: lookup, now });
       return { kind: 'continue', session: next, screen: { id: 'admin.rep-wallet.amount' } };
     }
@@ -89,7 +94,9 @@ export class AdminRepWalletCreditFlowHandler implements ConversationFlowHandler 
     }
     const command = {
       ...(payload.code === undefined ? {} : { code: payload.code }),
-      ...(payload.telegramUserId === undefined ? {} : { telegramUserId: Number(payload.telegramUserId) }),
+      ...(payload.telegramUserId === undefined
+        ? {}
+        : { telegramUserId: Number(payload.telegramUserId) }),
       amountIrr,
       idempotencyKey: `telegram:${input.updateId}:rep-wallet-credit`,
     };
@@ -101,7 +108,11 @@ export class AdminRepWalletCreditFlowHandler implements ConversationFlowHandler 
       };
     } catch (error: unknown) {
       if (!(error instanceof DomainConflictError)) throw error;
-      if (error.code === 'REPRESENTATIVE_NOT_FOUND' || error.code === 'REPRESENTATIVE_INACTIVE' || error.code === 'INVALID_REPRESENTATIVE_LOOKUP') {
+      if (
+        error.code === 'REPRESENTATIVE_NOT_FOUND' ||
+        error.code === 'REPRESENTATIVE_INACTIVE' ||
+        error.code === 'INVALID_REPRESENTATIVE_LOOKUP'
+      ) {
         return { kind: 'reject', session, screen: { id: 'admin.rep-wallet.invalid-lookup' } };
       }
       if (error.code === 'INVALID_REPRESENTATIVE_WALLET_AMOUNT') {

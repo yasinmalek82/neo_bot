@@ -184,19 +184,24 @@ export interface CommerceRepository {
   findRepresentativeByCodeOrTelegram?(input: {
     readonly code?: string;
     readonly telegramUserId?: number;
-  }): Promise<{ readonly id: string; readonly code: string; readonly telegramUserId: number; readonly active: boolean } | null>;
+  }): Promise<{
+    readonly id: string;
+    readonly code: string;
+    readonly telegramUserId: number;
+    readonly active: boolean;
+  } | null>;
   getRepresentativeWallet?(representativeId: string): Promise<RepresentativeWallet | null>;
   creditRepresentativeWallet?(input: {
     readonly representativeId: string;
     readonly amountIrr: bigint;
-    readonly kind: "owner_credit" | "adjustment";
+    readonly kind: 'owner_credit' | 'adjustment';
     readonly idempotencyKey: string;
     readonly note?: string;
   }): Promise<RepresentativeWalletLedgerEntry>;
   debitRepresentativeWallet?(input: {
     readonly representativeId: string;
     readonly amountIrr: bigint;
-    readonly kind: "purchase_debit" | "adjustment";
+    readonly kind: 'purchase_debit' | 'adjustment';
     readonly idempotencyKey: string;
     readonly salesOrderId?: string;
     readonly note?: string;
