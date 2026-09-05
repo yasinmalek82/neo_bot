@@ -22,7 +22,9 @@ describe('commercial wave 1 domain rules', () => {
   });
 
   it('keeps reminder thresholds in a bounded commercial range', () => {
-    expect(validateStorefrontOpsSettingsPatch({ expiryReminderDays: 5, lowTrafficPercent: 10 })).toEqual({
+    expect(
+      validateStorefrontOpsSettingsPatch({ expiryReminderDays: 5, lowTrafficPercent: 10 }),
+    ).toEqual({
       expiryReminderDays: 5,
       lowTrafficPercent: 10,
     });

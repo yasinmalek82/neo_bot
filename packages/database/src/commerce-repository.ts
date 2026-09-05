@@ -1313,7 +1313,9 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
          from storefront_ops_settings where id = 1 for update`,
       );
       const merged = mergeStorefrontOpsSettings(
-        current.rows[0] === undefined ? defaultStorefrontOpsSettings() : mapOpsSettings(current.rows[0]),
+        current.rows[0] === undefined
+          ? defaultStorefrontOpsSettings()
+          : mapOpsSettings(current.rows[0]),
         patch,
       );
       const updated = await client.query<OpsSettingsRow>(
@@ -1370,9 +1372,10 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
       if (claim.rows[0] !== undefined) {
         return this.requiredOrderWithClient(client, claim.rows[0].order_id);
       }
-      const settings = await client.query<{ trial_enabled: boolean; trial_variant_id: string | null }>(
-        'select trial_enabled, trial_variant_id::text from storefront_ops_settings where id = 1',
-      );
+      const settings = await client.query<{
+        trial_enabled: boolean;
+        trial_variant_id: string | null;
+      }>('select trial_enabled, trial_variant_id::text from storefront_ops_settings where id = 1');
       const ops = requiredRow(settings.rows);
       if (!ops.trial_enabled || ops.trial_variant_id === null) {
         throw new DomainConflictError('TRIAL_NOT_CONFIGURED');
@@ -1436,7 +1439,9 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
       : { customerId: row.customer_id, orderId: row.order_id, claimedAt: row.claimed_at };
   }
 
-  public async listCustomerServices(customerId: string): Promise<readonly CustomerServiceSummary[]> {
+  public async listCustomerServices(
+    customerId: string,
+  ): Promise<readonly CustomerServiceSummary[]> {
     const result = await this.pool.query<{
       id: string;
       product_name: string;
@@ -1689,7 +1694,9 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
   }
 
   public async getBroadcastJob(jobId: string): Promise<BroadcastJob | null> {
-    const result = await this.pool.query<BroadcastJobRow>(broadcastJobQuery('job.id = $1'), [jobId]);
+    const result = await this.pool.query<BroadcastJobRow>(broadcastJobQuery('job.id = $1'), [
+      jobId,
+    ]);
     return result.rows[0] === undefined ? null : mapBroadcastJob(result.rows[0]);
   }
 
@@ -1705,7 +1712,12 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
     limit: number,
     now: Date,
   ): Promise<
-    readonly { readonly id: string; readonly jobId: string; readonly chatId: string; readonly body: string }[]
+    readonly {
+      readonly id: string;
+      readonly jobId: string;
+      readonly chatId: string;
+      readonly body: string;
+    }[]
   > {
     const result = await this.pool.query<{
       id: string;

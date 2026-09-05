@@ -352,10 +352,7 @@ export class TelegramCommerceBot {
     );
     registry.register(new SupportFlowHandler(this.tickets, customer));
     registry.register(
-      new AdminBroadcastFlowHandler(
-        (command) => this.commercial.queueBroadcast(command),
-        customer,
-      ),
+      new AdminBroadcastFlowHandler((command) => this.commercial.queueBroadcast(command), customer),
     );
     registry.register(
       new AdminOpsFlowHandler((field, text) => this.applyAdminOpsField(field, text)),
@@ -777,7 +774,12 @@ export class TelegramCommerceBot {
       } else if (data === 'ops:trial') {
         this.requireAdmin(actorId);
         await this.toggleTrial(target);
-      } else if (data === 'ops:channel' || data === 'ops:variant' || data === 'ops:reminders' || data === 'ops:block') {
+      } else if (
+        data === 'ops:channel' ||
+        data === 'ops:variant' ||
+        data === 'ops:reminders' ||
+        data === 'ops:block'
+      ) {
         this.requireAdmin(actorId);
         await this.startAdminOpsField(
           target,
@@ -795,7 +797,11 @@ export class TelegramCommerceBot {
         await this.startBroadcast(target, customer);
       } else if (data.startsWith(ADMIN_BROADCAST_CANCEL_PREFIX)) {
         this.requireAdmin(actorId);
-        await this.cancelBroadcast(target, actorId, data.slice(ADMIN_BROADCAST_CANCEL_PREFIX.length));
+        await this.cancelBroadcast(
+          target,
+          actorId,
+          data.slice(ADMIN_BROADCAST_CANCEL_PREFIX.length),
+        );
       } else if (data === GUIDE_CALLBACK) {
         await this.routeAction('guide', target, customer, false);
       } else if (data === HELP_CALLBACK) {
@@ -3128,11 +3134,7 @@ export class TelegramCommerceBot {
         );
         return;
       }
-      await this.present(
-        target,
-        provisioningDelayedText(),
-        columnKeyboard([backToMenuButton()]),
-      );
+      await this.present(target, provisioningDelayedText(), columnKeyboard([backToMenuButton()]));
     } catch (error: unknown) {
       if (error instanceof DomainConflictError && error.code === 'TRIAL_ALREADY_CLAIMED') {
         await this.present(target, trialAlreadyClaimedText(), columnKeyboard([backToMenuButton()]));
@@ -3204,10 +3206,19 @@ export class TelegramCommerceBot {
   ): Promise<void> {
     const recorded = await this.commerce.recordCustomerActivity(customer);
     const access = await this.commercial.requireServiceAccess(serviceId, recorded.customer.id);
-    await this.messenger.sendMessage(access.chatId, serviceAccessText(access.subscriptionUrl), undefined, {
-      parseMode: 'HTML',
-    });
-    await this.present(target, 'لینک دسترسی در پیام جداگانه ارسال شد.', columnKeyboard([backToMenuButton()]));
+    await this.messenger.sendMessage(
+      access.chatId,
+      serviceAccessText(access.subscriptionUrl),
+      undefined,
+      {
+        parseMode: 'HTML',
+      },
+    );
+    await this.present(
+      target,
+      'لینک دسترسی در پیام جداگانه ارسال شد.',
+      columnKeyboard([backToMenuButton()]),
+    );
   }
 
   private async sendServiceQr(
@@ -3223,7 +3234,11 @@ export class TelegramCommerceBot {
     }
     const png = renderSubscriptionQrPng(access.subscriptionUrl);
     await this.messenger.sendPhotoBuffer(access.chatId, png, 'QR خصوصی سرویس. برای دیگران نفرست.');
-    await this.present(target, 'QR در پیام جداگانه ارسال شد.', columnKeyboard([backToMenuButton()]));
+    await this.present(
+      target,
+      'QR در پیام جداگانه ارسال شد.',
+      columnKeyboard([backToMenuButton()]),
+    );
   }
 
   private async showCommercialSettings(target: MenuTarget): Promise<void> {
@@ -3239,7 +3254,10 @@ export class TelegramCommerceBot {
         lowTrafficPercent: settings.lowTrafficPercent,
       }),
       adminScreenKeyboard([
-        { text: settings.trialEnabled ? 'خاموش کردن تست' : 'روشن کردن تست', callback_data: 'ops:trial' },
+        {
+          text: settings.trialEnabled ? 'خاموش کردن تست' : 'روشن کردن تست',
+          callback_data: 'ops:trial',
+        },
         { text: 'تعیین پلن تست', callback_data: 'ops:variant' },
         { text: 'افزودن کانال اجباری', callback_data: 'ops:channel' },
         { text: 'روز یادآوری انقضا', callback_data: 'ops:reminders' },
@@ -3303,10 +3321,7 @@ export class TelegramCommerceBot {
     await this.commercial.setCustomerShopBlocked(telegramUserId, blocked);
   }
 
-  private async startBroadcast(
-    target: MenuTarget,
-    customer: TelegramCustomerInput,
-  ): Promise<void> {
+  private async startBroadcast(target: MenuTarget, customer: TelegramCustomerInput): Promise<void> {
     await AdminBroadcastFlowHandler.start(this.sessions, {
       telegramUserId: customer.telegramUserId,
       now: new Date(),

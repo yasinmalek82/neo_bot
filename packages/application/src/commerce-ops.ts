@@ -17,7 +17,11 @@ import {
   type TelegramCustomer,
 } from '@neo-bot/domain';
 
-import type { ChannelGateDecision, ChatMembershipLookup, CommercialRepository } from './commerce-ops-ports.js';
+import type {
+  ChannelGateDecision,
+  ChatMembershipLookup,
+  CommercialRepository,
+} from './commerce-ops-ports.js';
 import type { ReportingPublisher } from './reporting-ports.js';
 
 const MAX_BACKOFF_MS = 15 * 60_000;
@@ -138,7 +142,11 @@ export class CommercialOpsUseCase {
         if (!isRetryable(code)) {
           await this.repository.failServiceReminder(reminder.id, code, this.now());
         } else {
-          await this.repository.retryServiceReminder(reminder.id, code, nextAttemptAt(1, this.now()));
+          await this.repository.retryServiceReminder(
+            reminder.id,
+            code,
+            nextAttemptAt(1, this.now()),
+          );
         }
       }
     }
@@ -169,10 +177,7 @@ export class CommercialOpsUseCase {
     return job;
   }
 
-  public async cancelBroadcast(
-    jobId: string,
-    adminTelegramUserId: string,
-  ): Promise<BroadcastJob> {
+  public async cancelBroadcast(jobId: string, adminTelegramUserId: string): Promise<BroadcastJob> {
     requireTelegramUserId(adminTelegramUserId);
     return this.repository.cancelBroadcastJob(jobId, adminTelegramUserId);
   }
@@ -277,5 +282,3 @@ function nextAttemptAt(attemptCount: number, now: Date): Date {
   const delay = Math.min(30_000 * 2 ** Math.max(attemptCount - 1, 0), MAX_BACKOFF_MS);
   return new Date(now.getTime() + delay);
 }
-
-

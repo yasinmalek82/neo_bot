@@ -58,7 +58,13 @@ export interface ServiceReminderDelivery {
   readonly expiresAt: Date | null;
 }
 
-export const BROADCAST_JOB_STATUSES = ['queued', 'running', 'canceled', 'completed', 'failed'] as const;
+export const BROADCAST_JOB_STATUSES = [
+  'queued',
+  'running',
+  'canceled',
+  'completed',
+  'failed',
+] as const;
 export type BroadcastJobStatus = (typeof BROADCAST_JOB_STATUSES)[number];
 
 export interface BroadcastJob {
@@ -147,7 +153,11 @@ export function validateStorefrontOpsSettingsPatch(
 ): StorefrontOpsSettingsPatch {
   const trialEnabled = patch.trialEnabled;
   const trialVariantId = patch.trialVariantId;
-  if (trialVariantId !== undefined && trialVariantId !== null && !/^\d{1,20}$/u.test(trialVariantId)) {
+  if (
+    trialVariantId !== undefined &&
+    trialVariantId !== null &&
+    !/^\d{1,20}$/u.test(trialVariantId)
+  ) {
     throw new DomainConflictError('INVALID_TRIAL_VARIANT');
   }
   const forcedJoinChannels =
@@ -178,8 +188,12 @@ export function validateStorefrontOpsSettingsPatch(
     ...(trialVariantId === undefined ? {} : { trialVariantId }),
     ...(forcedJoinChannels === undefined ? {} : { forcedJoinChannels }),
     ...(remindersEnabled === undefined ? {} : { remindersEnabled }),
-    ...(patch.expiryReminderDays === undefined ? {} : { expiryReminderDays: patch.expiryReminderDays }),
-    ...(patch.lowTrafficPercent === undefined ? {} : { lowTrafficPercent: patch.lowTrafficPercent }),
+    ...(patch.expiryReminderDays === undefined
+      ? {}
+      : { expiryReminderDays: patch.expiryReminderDays }),
+    ...(patch.lowTrafficPercent === undefined
+      ? {}
+      : { lowTrafficPercent: patch.lowTrafficPercent }),
   };
 }
 

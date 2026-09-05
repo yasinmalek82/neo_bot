@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { defaultStorefrontOpsSettings, type StorefrontOpsSettings } from '@neo-bot/domain';
+import {
+  defaultStorefrontOpsSettings,
+  type StorefrontOpsSettings,
+  type StorefrontOpsSettingsPatch,
+} from '@neo-bot/domain';
 
 import type { CommercialRepository } from './commerce-ops-ports.js';
 import { CommercialOpsUseCase, isLowTraffic } from './commerce-ops.js';
@@ -81,10 +85,7 @@ describe('CommercialOpsUseCase', () => {
       variantName: 'یک‌ماهه',
       expiresAt: new Date('2026-09-08T00:00:00.000Z'),
     });
-    expect(repository.markServiceReminderDelivered).toHaveBeenCalledWith(
-      '9',
-      expect.any(Date),
-    );
+    expect(repository.markServiceReminderDelivered).toHaveBeenCalledWith('9', expect.any(Date));
     expect(JSON.stringify(send.mock.calls[0]?.[0])).not.toMatch(/https?:\/\//u);
   });
 
@@ -97,10 +98,12 @@ describe('CommercialOpsUseCase', () => {
 function createRepository(): CommercialRepository {
   return {
     getCommercialSettings: vi.fn().mockResolvedValue(settings),
-    updateCommercialSettings: vi.fn().mockImplementation(async (patch) => ({
-      ...settings,
-      ...patch,
-    })),
+    updateCommercialSettings: vi
+      .fn()
+      .mockImplementation(async (patch: StorefrontOpsSettingsPatch) => ({
+        ...settings,
+        ...patch,
+      })),
     createTrialOrder: vi.fn(),
     getTrialClaim: vi.fn().mockResolvedValue(null),
     listCustomerServices: vi.fn().mockResolvedValue([]),

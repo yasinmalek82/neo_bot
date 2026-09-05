@@ -69,11 +69,7 @@ export interface TelegramMessenger {
     chatId: string,
     userId: string,
   ): Promise<{ readonly status: string; readonly isMember?: boolean }>;
-  sendPhotoBuffer?(
-    chatId: string,
-    png: Buffer,
-    caption: string,
-  ): Promise<TelegramSentMessage>;
+  sendPhotoBuffer?(chatId: string, png: Buffer, caption: string): Promise<TelegramSentMessage>;
 }
 
 export class TelegramApiClient implements TelegramMessenger {
@@ -505,7 +501,7 @@ function mappedTelegramError(description: unknown): string | null {
   ) {
     return 'TELEGRAM_FORUM_DISABLED';
   }
-    if (normalized.includes('not enough rights') || normalized.includes('can_manage_topics')) {
+  if (normalized.includes('not enough rights') || normalized.includes('can_manage_topics')) {
     return 'TELEGRAM_FORUM_RIGHTS_MISSING';
   }
   if (normalized.includes('user not found')) {

@@ -609,7 +609,11 @@ describe('TelegramCommerceBot', () => {
     expect(
       keyboard?.filter((row) => {
         const first = row[0];
-        return first !== undefined && 'callback_data' in first && first.callback_data.startsWith('variant:');
+        return (
+          first !== undefined &&
+          'callback_data' in first &&
+          first.callback_data.startsWith('variant:')
+        );
       }),
     ).toHaveLength(3);
     expect(JSON.stringify(keyboard)).toContain('product:10:40:1');

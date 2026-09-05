@@ -214,9 +214,7 @@ export function homeReplyKeyboard(
   isAdmin: boolean,
   extras: { readonly trialEligible?: boolean } = {},
 ): TelegramPersistentKeyboardMarkup {
-  const rows: TelegramReplyKeyboardButton[][] = [
-    [{ text: buttonLabel(MENU_LABEL.shop) }],
-  ];
+  const rows: TelegramReplyKeyboardButton[][] = [[{ text: buttonLabel(MENU_LABEL.shop) }]];
   if (extras.trialEligible === true) {
     rows.push([{ text: buttonLabel(MENU_LABEL.trial) }]);
   }
