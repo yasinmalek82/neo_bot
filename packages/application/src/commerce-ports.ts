@@ -15,6 +15,7 @@ import type {
   TelegramCustomer,
   TelegramCustomerInput,
   TelegramPaymentProof,
+  TrialClaim,
   WalletLedgerEntry,
 } from '@neo-bot/domain';
 
@@ -39,6 +40,12 @@ export interface CommerceRepository {
     idempotencyKey: string,
     representativeId?: string,
   ): Promise<SalesOrder>;
+  createTrialOrder?(input: {
+    readonly customerId: string;
+    readonly idempotencyKey: string;
+    readonly serviceUsernameBase: string;
+  }): Promise<SalesOrder>;
+  getTrialClaim?(customerId: string): Promise<TrialClaim | null>;
   getOrder(id: string): Promise<SalesOrder | null>;
   getCustomerForOrder(orderId: string): Promise<TelegramCustomer | null>;
   getOpenOrderForCustomer(customerId: string): Promise<SalesOrder | null>;

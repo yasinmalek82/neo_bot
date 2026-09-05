@@ -49,6 +49,7 @@ export interface TelegramCustomer {
   readonly privateChatId: string;
   readonly username: string | null;
   readonly displayName: string;
+  readonly shopBlocked?: boolean;
 }
 
 export type SalesOrderStatus =
@@ -60,7 +61,7 @@ export type SalesOrderStatus =
   | 'rejected'
   | 'cancelled';
 
-export const SALES_ORDER_KINDS = ['purchase', 'renewal'] as const;
+export const SALES_ORDER_KINDS = ['purchase', 'renewal', 'trial'] as const;
 
 export type SalesOrderKind = (typeof SALES_ORDER_KINDS)[number];
 

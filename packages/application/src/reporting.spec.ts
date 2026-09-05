@@ -328,6 +328,33 @@ describe('ReportingUseCase', () => {
     expect(EVENT_PURPOSE['reseller.pricing_updated']).toBe('resellers');
   });
 
+  it('formats trial and broadcast notices without leaking a message body or subscription URL', () => {
+    expect(EVENT_PURPOSE['trial.claimed']).toBe('sales');
+    expect(EVENT_PURPOSE['broadcast.queued']).toBe('daily_summaries');
+    expect(
+      formatReportText('trial.claimed', {
+        orderId: '44',
+        telegramUserId: '10001',
+        productName: 'تست',
+        variantName: 'سه‌روزه',
+      }),
+    ).toContain('سرویس تست');
+    expect(
+      formatReportText('broadcast.queued', {
+        jobId: '11',
+        recipientCount: '2',
+        bodyHash: 'abcdef0123456789',
+      }),
+    ).toContain('اثرانگشت متن');
+    expect(
+      formatReportText('broadcast.queued', {
+        jobId: '11',
+        recipientCount: '2',
+        bodyHash: 'abcdef0123456789',
+      }),
+    ).not.toMatch(/https?:\/\//u);
+  });
+
   it('formats reseller notices without leaking forbidden values', () => {
     expect(
       formatReportText('reseller.order_created', {

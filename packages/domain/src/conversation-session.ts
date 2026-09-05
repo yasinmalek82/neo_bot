@@ -5,6 +5,8 @@ export const CONVERSATION_FLOW_IDS = [
   'commerce.renewal',
   'wallet.topup',
   'support.ticket',
+  'admin.broadcast',
+  'admin.ops',
 ] as const;
 
 export type ConversationFlowId = (typeof CONVERSATION_FLOW_IDS)[number];
@@ -16,6 +18,7 @@ export const CONVERSATION_STEPS = [
   'amount',
   'create',
   'followup',
+  'settings',
 ] as const;
 
 export type ConversationStep = (typeof CONVERSATION_STEPS)[number];
@@ -67,8 +70,30 @@ export interface SupportTicketPayload {
   readonly ticketId?: string;
 }
 
+export interface AdminBroadcastPayload {
+  readonly mode: 'create';
+}
+
+export const ADMIN_OPS_FIELDS = [
+  'channel',
+  'reminderDays',
+  'trialVariant',
+  'blockCustomer',
+] as const;
+
+export type AdminOpsField = (typeof ADMIN_OPS_FIELDS)[number];
+
+export interface AdminOpsPayload {
+  readonly field: AdminOpsField;
+}
+
 export type ConversationPayload =
-  CommercePurchasePayload | CommerceRenewalPayload | WalletTopUpPayload | SupportTicketPayload;
+  | CommercePurchasePayload
+  | CommerceRenewalPayload
+  | WalletTopUpPayload
+  | SupportTicketPayload
+  | AdminBroadcastPayload
+  | AdminOpsPayload;
 
 export interface DurableConversationSession {
   readonly id: string;
@@ -145,6 +170,10 @@ export function parseConversationPayload(
       return parseWalletPayload(step, payload);
     case 'support.ticket':
       return parseSupportPayload(step, payload);
+    case 'admin.broadcast':
+      return parseBroadcastPayload(step, payload);
+    case 'admin.ops':
+      return parseAdminOpsPayload(step, payload);
   }
 }
 
@@ -271,6 +300,30 @@ function parseSupportPayload(
     return { mode: 'followup', ticketId: requiredId(payload['ticketId']) };
   }
   throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
+}
+
+function parseBroadcastPayload(
+  step: ConversationStep,
+  payload: Record<string, unknown>,
+): AdminBroadcastPayload {
+  if (step !== 'create' || payload['mode'] !== 'create') {
+    throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
+  }
+  return { mode: 'create' };
+}
+
+function parseAdminOpsPayload(
+  step: ConversationStep,
+  payload: Record<string, unknown>,
+): AdminOpsPayload {
+  if (step !== 'settings') {
+    throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
+  }
+  const field = payload['field'];
+  if (typeof field !== 'string' || !ADMIN_OPS_FIELDS.some((item) => item === field)) {
+    throw new DomainConflictError('MALFORMED_CONVERSATION_SESSION');
+  }
+  return { field: field as AdminOpsField };
 }
 
 function requiredString(value: unknown): string {

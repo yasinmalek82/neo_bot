@@ -13,3 +13,5 @@ export * from './customer-delivery.js';
 export * from './service-username.js';
 export * from './support-ticket.js';
 export * from './wallet.js';
+export * from './commerce-ops-ports.js';
+export * from './commerce-ops.js';

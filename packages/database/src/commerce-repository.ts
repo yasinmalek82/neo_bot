@@ -1,27 +1,36 @@
 import {
   DomainConflictError,
+  defaultStorefrontOpsSettings,
   isRepresentativePricingSource,
+  mergeStorefrontOpsSettings,
   parseDurableConversationSession,
   resolveRepresentativePrice,
   validateServiceUsernameBase,
+  type BroadcastJob,
   type CatalogCategory,
   type ClaimedDeliveryJob,
   type ConversationSessionStatus,
   type CustomerDeliveryJob,
+  type CustomerServiceSummary,
   type DurableConversationSession,
+  type ForcedJoinChannel,
   type PaymentProofMediaKind,
   type RepresentativeProfile,
   type RepresentativePricingSource,
   type SalesOrder,
   type SellableProductVariant,
+  type ServiceReminderDelivery,
+  type StorefrontOpsSettings,
+  type StorefrontOpsSettingsPatch,
   type SupportTicket,
   type SupportTicketWriteResult,
   type TelegramCustomer,
   type TelegramCustomerInput,
   type TelegramPaymentProof,
+  type TrialClaim,
   type WalletLedgerEntry,
 } from '@neo-bot/domain';
-import type { CommerceRepository } from '@neo-bot/application';
+import type { CommerceRepository, CommercialRepository } from '@neo-bot/application';
 import type { Pool, PoolClient } from 'pg';
 
 interface CategoryRow {
@@ -64,6 +73,7 @@ interface CustomerRow {
   private_chat_id: string;
   telegram_username: string | null;
   display_name: string;
+  shop_blocked?: boolean;
 }
 
 interface OrderRow {
@@ -152,7 +162,7 @@ interface SupportTicketRow {
   updated_at: Date;
 }
 
-export class PostgresCommerceRepository implements CommerceRepository {
+export class PostgresCommerceRepository implements CommerceRepository, CommercialRepository {
   public constructor(private readonly pool: Pool) {}
 
   public async listCategories(parentId: string | null): Promise<readonly CatalogCategory[]> {
@@ -444,7 +454,7 @@ export class PostgresCommerceRepository implements CommerceRepository {
          last_seen_at = now(),
          updated_at = now()
        returning id::text, telegram_user_id::text, private_chat_id::text,
-                 telegram_username, display_name, (xmax = 0) as inserted`,
+                 telegram_username, display_name, shop_blocked, (xmax = 0) as inserted`,
       [input.telegramUserId, input.privateChatId, input.username ?? null, input.displayName.trim()],
     );
     const row = requiredRow(result.rows);
@@ -551,7 +561,7 @@ export class PostgresCommerceRepository implements CommerceRepository {
     const result = await this.pool.query<CustomerRow>(
       `select customer.id::text, customer.telegram_user_id::text,
               customer.private_chat_id::text, customer.telegram_username,
-              customer.display_name
+              customer.display_name, customer.shop_blocked
        from sales_orders orders
        join customers customer on customer.id = orders.customer_id
        where orders.id = $1`,
@@ -1283,6 +1293,559 @@ export class PostgresCommerceRepository implements CommerceRepository {
     return row.id;
   }
 
+  public async getCommercialSettings(): Promise<StorefrontOpsSettings> {
+    const result = await this.pool.query<OpsSettingsRow>(
+      `select trial_enabled, trial_variant_id::text, forced_join_channels,
+              reminders_enabled, expiry_reminder_days, low_traffic_percent, updated_at
+       from storefront_ops_settings where id = 1`,
+    );
+    const row = result.rows[0];
+    return row === undefined ? defaultStorefrontOpsSettings() : mapOpsSettings(row);
+  }
+
+  public updateCommercialSettings(
+    patch: StorefrontOpsSettingsPatch,
+  ): Promise<StorefrontOpsSettings> {
+    return this.withTransaction(async (client) => {
+      const current = await client.query<OpsSettingsRow>(
+        `select trial_enabled, trial_variant_id::text, forced_join_channels,
+                reminders_enabled, expiry_reminder_days, low_traffic_percent, updated_at
+         from storefront_ops_settings where id = 1 for update`,
+      );
+      const merged = mergeStorefrontOpsSettings(
+        current.rows[0] === undefined ? defaultStorefrontOpsSettings() : mapOpsSettings(current.rows[0]),
+        patch,
+      );
+      const updated = await client.query<OpsSettingsRow>(
+        `update storefront_ops_settings set
+           trial_enabled = $1,
+           trial_variant_id = $2,
+           forced_join_channels = $3::jsonb,
+           reminders_enabled = $4,
+           expiry_reminder_days = $5,
+           low_traffic_percent = $6,
+           updated_at = now()
+         where id = 1
+         returning trial_enabled, trial_variant_id::text, forced_join_channels,
+                   reminders_enabled, expiry_reminder_days, low_traffic_percent, updated_at`,
+        [
+          merged.trialEnabled,
+          merged.trialVariantId,
+          JSON.stringify(merged.forcedJoinChannels),
+          merged.remindersEnabled,
+          merged.expiryReminderDays,
+          merged.lowTrafficPercent,
+        ],
+      );
+      return mapOpsSettings(requiredRow(updated.rows));
+    });
+  }
+
+  public createTrialOrder(input: {
+    readonly customerId: string;
+    readonly idempotencyKey: string;
+    readonly serviceUsernameBase: string;
+  }): Promise<SalesOrder> {
+    validateServiceUsernameBase(input.serviceUsernameBase);
+    return this.withTransaction(async (client) => {
+      const customer = await client.query<{ id: string; shop_blocked: boolean }>(
+        'select id::text, shop_blocked from customers where id = $1 for update',
+        [input.customerId],
+      );
+      const locked = requiredRow(customer.rows);
+      if (locked.shop_blocked) {
+        throw new DomainConflictError('SHOP_BLOCKED');
+      }
+      const existing = await this.findOrderByIdempotencyKey(client, input.idempotencyKey);
+      if (existing !== null) {
+        if (existing.customerId !== input.customerId || existing.kind !== 'trial') {
+          throw new DomainConflictError('IDEMPOTENCY_KEY_REUSED');
+        }
+        return existing;
+      }
+      const claim = await client.query<{ order_id: string }>(
+        'select order_id::text from customer_trial_claims where customer_id = $1',
+        [input.customerId],
+      );
+      if (claim.rows[0] !== undefined) {
+        return this.requiredOrderWithClient(client, claim.rows[0].order_id);
+      }
+      const settings = await client.query<{ trial_enabled: boolean; trial_variant_id: string | null }>(
+        'select trial_enabled, trial_variant_id::text from storefront_ops_settings where id = 1',
+      );
+      const ops = requiredRow(settings.rows);
+      if (!ops.trial_enabled || ops.trial_variant_id === null) {
+        throw new DomainConflictError('TRIAL_NOT_CONFIGURED');
+      }
+      const variant = await client.query<{ id: string }>(
+        `select id::text from product_variants
+         where id = $1 and active = true`,
+        [ops.trial_variant_id],
+      );
+      if (variant.rows[0] === undefined) {
+        throw new DomainConflictError('TRIAL_NOT_CONFIGURED');
+      }
+      const blocking = await client.query<{ exists: boolean }>(
+        `select exists(
+           select 1 from sales_orders
+           where customer_id = $1 and status in (
+             'receipt_submitted', 'provisioning', 'provisioning_failed'
+           )
+         ) as exists`,
+        [input.customerId],
+      );
+      if (requiredRow(blocking.rows).exists) {
+        throw new DomainConflictError('OPEN_ORDER_UNDER_REVIEW');
+      }
+      await client.query(
+        `update sales_orders set status = 'cancelled', updated_at = now()
+         where customer_id = $1 and status in ('awaiting_receipt', 'rejected')`,
+        [input.customerId],
+      );
+      const inserted = await client.query<{ id: string }>(
+        `insert into sales_orders(
+           customer_id, product_variant_id, idempotency_key, amount_irr,
+           representative_id, pricing_source, service_username_base,
+           order_kind, status
+         ) values ($1, $2, $3, 0, null, 'public', $4, 'trial', 'provisioning')
+         returning id::text`,
+        [input.customerId, ops.trial_variant_id, input.idempotencyKey, input.serviceUsernameBase],
+      );
+      const orderId = requiredRow(inserted.rows).id;
+      await client.query(
+        `insert into customer_trial_claims(customer_id, order_id) values ($1, $2)`,
+        [input.customerId, orderId],
+      );
+      return this.requiredOrderWithClient(client, orderId);
+    });
+  }
+
+  public async getTrialClaim(customerId: string): Promise<TrialClaim | null> {
+    const result = await this.pool.query<{
+      customer_id: string;
+      order_id: string;
+      claimed_at: Date;
+    }>(
+      `select customer_id::text, order_id::text, claimed_at
+       from customer_trial_claims where customer_id = $1`,
+      [customerId],
+    );
+    const row = result.rows[0];
+    return row === undefined
+      ? null
+      : { customerId: row.customer_id, orderId: row.order_id, claimedAt: row.claimed_at };
+  }
+
+  public async listCustomerServices(customerId: string): Promise<readonly CustomerServiceSummary[]> {
+    const result = await this.pool.query<{
+      id: string;
+      product_name: string;
+      variant_name: string;
+      status: string;
+      expires_at: Date | null;
+      data_limit_bytes: string;
+      used_traffic_bytes: string | null;
+    }>(
+      `select service.id::text, product.name as product_name, variant.name as variant_name,
+              service.status, service.expires_at, variant.data_limit_bytes::text,
+              service.used_traffic_bytes::text
+       from sales_orders orders
+       join services service on service.id = orders.service_id
+       join product_variants variant on variant.id = service.product_variant_id
+       join products product on product.id = variant.product_id
+       where orders.customer_id = $1 and orders.status = 'fulfilled'
+       order by service.expires_at desc nulls last, service.id desc`,
+      [customerId],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      productName: row.product_name,
+      variantName: row.variant_name,
+      status: row.status,
+      expiresAt: row.expires_at,
+      dataLimitBytes: BigInt(row.data_limit_bytes),
+      usedTrafficBytes: row.used_traffic_bytes === null ? null : BigInt(row.used_traffic_bytes),
+    }));
+  }
+
+  public async getServiceAccessTarget(
+    serviceId: string,
+    customerId: string,
+  ): Promise<{ readonly chatId: string; readonly subscriptionUrl: string } | null> {
+    const result = await this.pool.query<{ chat_id: string; subscription_url: string }>(
+      `select customer.private_chat_id::text as chat_id, service.subscription_url
+       from services service
+       join sales_orders orders
+         on orders.service_id = service.id and orders.status = 'fulfilled'
+       join customers customer on customer.id = orders.customer_id
+       where service.id = $1 and customer.id = $2
+       limit 1`,
+      [serviceId, customerId],
+    );
+    return result.rows[0] === undefined
+      ? null
+      : { chatId: result.rows[0].chat_id, subscriptionUrl: result.rows[0].subscription_url };
+  }
+
+  public async enqueueDueServiceReminders(now: Date): Promise<number> {
+    const expiry = await this.pool.query(
+      `insert into service_reminder_deliveries (service_id, customer_id, kind, window_key)
+       select service.id, customer.id, 'expiry',
+              to_char(service.expires_at at time zone 'utc', 'YYYY-MM-DD')
+       from services service
+       join sales_orders orders on orders.service_id = service.id and orders.status = 'fulfilled'
+       join customers customer on customer.id = orders.customer_id
+       join storefront_ops_settings settings on settings.id = 1
+       where settings.reminders_enabled = true
+         and customer.shop_blocked = false
+         and service.expires_at is not null
+         and service.expires_at > $1
+         and service.expires_at <= $1 + (settings.expiry_reminder_days * interval '1 day')
+       on conflict (service_id, kind, window_key) do nothing`,
+      [now],
+    );
+    const traffic = await this.pool.query(
+      `insert into service_reminder_deliveries (service_id, customer_id, kind, window_key)
+       select service.id, customer.id, 'low_traffic',
+              to_char($1 at time zone 'utc', 'YYYY-MM-DD')
+       from services service
+       join sales_orders orders on orders.service_id = service.id and orders.status = 'fulfilled'
+       join customers customer on customer.id = orders.customer_id
+       join product_variants variant on variant.id = service.product_variant_id
+       join storefront_ops_settings settings on settings.id = 1
+       where settings.reminders_enabled = true
+         and customer.shop_blocked = false
+         and service.used_traffic_bytes is not null
+         and variant.data_limit_bytes > 0
+         and ((variant.data_limit_bytes - service.used_traffic_bytes) * 100)
+             / variant.data_limit_bytes <= settings.low_traffic_percent
+       on conflict (service_id, kind, window_key) do nothing`,
+      [now],
+    );
+    return (expiry.rowCount ?? 0) + (traffic.rowCount ?? 0);
+  }
+
+  public async claimDueServiceReminders(
+    limit: number,
+    now: Date,
+  ): Promise<readonly ServiceReminderDelivery[]> {
+    const claimed = await this.pool.query<{ id: string }>(
+      `with due as (
+         select reminder.id
+         from service_reminder_deliveries reminder
+         where reminder.status = 'pending' and reminder.next_attempt_at <= $2
+         order by reminder.id
+         limit $1
+         for update skip locked
+       )
+       update service_reminder_deliveries reminder
+       set attempt_count = reminder.attempt_count + 1, updated_at = now()
+       from due
+       where reminder.id = due.id
+       returning reminder.id::text`,
+      [limit, now],
+    );
+    if (claimed.rows.length === 0) {
+      return [];
+    }
+    const details = await this.pool.query<{
+      id: string;
+      service_id: string;
+      customer_id: string;
+      chat_id: string;
+      kind: ServiceReminderDelivery['kind'];
+      window_key: string;
+      product_name: string;
+      variant_name: string;
+      expires_at: Date | null;
+    }>(
+      `select reminder.id::text, reminder.service_id::text, reminder.customer_id::text,
+              customer.private_chat_id::text as chat_id, reminder.kind, reminder.window_key,
+              product.name as product_name, variant.name as variant_name, service.expires_at
+       from service_reminder_deliveries reminder
+       join customers customer on customer.id = reminder.customer_id
+       join services service on service.id = reminder.service_id
+       join product_variants variant on variant.id = service.product_variant_id
+       join products product on product.id = variant.product_id
+       where reminder.id = any($1::bigint[])`,
+      [claimed.rows.map((row) => row.id)],
+    );
+    return details.rows.map((row) => ({
+      id: row.id,
+      serviceId: row.service_id,
+      customerId: row.customer_id,
+      chatId: row.chat_id,
+      kind: row.kind,
+      windowKey: row.window_key,
+      productName: row.product_name,
+      variantName: row.variant_name,
+      expiresAt: row.expires_at,
+    }));
+  }
+
+  public async markServiceReminderDelivered(id: string, now: Date): Promise<boolean> {
+    const result = await this.pool.query(
+      `update service_reminder_deliveries
+       set status = 'delivered', updated_at = $2
+       where id = $1 and status = 'pending'`,
+      [id, now],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public async retryServiceReminder(
+    id: string,
+    errorCode: string,
+    nextAttemptAt: Date,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `update service_reminder_deliveries
+       set last_error_code = $2, next_attempt_at = $3, updated_at = now()
+       where id = $1 and status = 'pending'`,
+      [id, errorCode, nextAttemptAt],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public async failServiceReminder(id: string, errorCode: string, now: Date): Promise<boolean> {
+    const result = await this.pool.query(
+      `update service_reminder_deliveries
+       set status = 'failed', last_error_code = $2, updated_at = $3
+       where id = $1 and status = 'pending'`,
+      [id, errorCode, now],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public createBroadcastJob(input: {
+    readonly adminTelegramUserId: string;
+    readonly body: string;
+    readonly bodySha256: string;
+  }): Promise<BroadcastJob> {
+    return this.withTransaction(async (client) => {
+      const job = await client.query<{
+        id: string;
+        created_at: Date;
+      }>(
+        `insert into broadcast_jobs(admin_telegram_user_id, body, body_sha256, status)
+         values ($1, $2, $3, 'queued')
+         returning id::text, created_at`,
+        [input.adminTelegramUserId, input.body, input.bodySha256],
+      );
+      const created = requiredRow(job.rows);
+      const recipients = await client.query(
+        `insert into broadcast_recipients(job_id, customer_id, chat_id)
+         select $1, id, private_chat_id
+         from customers
+         where shop_blocked = false`,
+        [created.id],
+      );
+      const recipientCount = recipients.rowCount ?? 0;
+      const status = recipientCount === 0 ? 'completed' : 'queued';
+      await client.query(
+        `update broadcast_jobs set status = $2, completed_at = case when $2 = 'completed' then now() else null end,
+                updated_at = now()
+         where id = $1`,
+        [created.id, status],
+      );
+      return {
+        id: created.id,
+        adminTelegramUserId: input.adminTelegramUserId,
+        body: input.body,
+        bodySha256: input.bodySha256,
+        status,
+        recipientCount,
+        sentCount: 0,
+        failedCount: 0,
+        createdAt: created.created_at,
+      };
+    });
+  }
+
+  public async cancelBroadcastJob(
+    jobId: string,
+    adminTelegramUserId: string,
+  ): Promise<BroadcastJob> {
+    const result = await this.pool.query(
+      `update broadcast_jobs
+       set status = 'canceled', canceled_at = now(), updated_at = now()
+       where id = $1 and admin_telegram_user_id = $2
+         and status in ('queued', 'running')`,
+      [jobId, adminTelegramUserId],
+    );
+    if ((result.rowCount ?? 0) === 0) {
+      throw new DomainConflictError('BROADCAST_NOT_CANCELABLE');
+    }
+    await this.pool.query(
+      `update broadcast_recipients set status = 'skipped', updated_at = now()
+       where job_id = $1 and status = 'pending'`,
+      [jobId],
+    );
+    const job = await this.getBroadcastJob(jobId);
+    if (job === null) {
+      throw new DomainConflictError('BROADCAST_NOT_FOUND');
+    }
+    return job;
+  }
+
+  public async getBroadcastJob(jobId: string): Promise<BroadcastJob | null> {
+    const result = await this.pool.query<BroadcastJobRow>(broadcastJobQuery('job.id = $1'), [jobId]);
+    return result.rows[0] === undefined ? null : mapBroadcastJob(result.rows[0]);
+  }
+
+  public async listRecentBroadcastJobs(limit: number): Promise<readonly BroadcastJob[]> {
+    const result = await this.pool.query<BroadcastJobRow>(
+      `${broadcastJobQuery('true')} order by job.id desc limit $1`,
+      [limit],
+    );
+    return result.rows.map(mapBroadcastJob);
+  }
+
+  public async claimDueBroadcastRecipients(
+    limit: number,
+    now: Date,
+  ): Promise<
+    readonly { readonly id: string; readonly jobId: string; readonly chatId: string; readonly body: string }[]
+  > {
+    const result = await this.pool.query<{
+      id: string;
+      job_id: string;
+      chat_id: string;
+      body: string;
+    }>(
+      `with due as (
+         select recipient.id
+         from broadcast_recipients recipient
+         join broadcast_jobs job on job.id = recipient.job_id
+         where recipient.status = 'pending'
+           and recipient.next_attempt_at <= $2
+           and job.status in ('queued', 'running')
+         order by recipient.id
+         limit $1
+         for update of recipient skip locked
+       )
+       update broadcast_recipients recipient
+       set attempt_count = recipient.attempt_count + 1
+       from due, broadcast_jobs job
+       where recipient.id = due.id and job.id = recipient.job_id
+       returning recipient.id::text, recipient.job_id::text, recipient.chat_id::text, job.body`,
+      [limit, now],
+    );
+    if (result.rows.length > 0) {
+      await this.pool.query(
+        `update broadcast_jobs set status = 'running', updated_at = now()
+         where id = any($1::bigint[]) and status = 'queued'`,
+        [...new Set(result.rows.map((row) => row.job_id))],
+      );
+    }
+    return result.rows.map((row) => ({
+      id: row.id,
+      jobId: row.job_id,
+      chatId: row.chat_id,
+      body: row.body,
+    }));
+  }
+
+  public async markBroadcastRecipientSent(id: string, now: Date): Promise<boolean> {
+    const result = await this.pool.query<{ job_id: string }>(
+      `update broadcast_recipients
+       set status = 'sent', sent_at = $2
+       where id = $1 and status = 'pending'
+       returning job_id::text`,
+      [id, now],
+    );
+    const jobId = result.rows[0]?.job_id;
+    if (jobId !== undefined) {
+      await this.completeBroadcastIfIdle(jobId);
+    }
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public async retryBroadcastRecipient(
+    id: string,
+    errorCode: string,
+    nextAttemptAt: Date,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `update broadcast_recipients
+       set last_error_code = $2, next_attempt_at = $3
+       where id = $1 and status = 'pending'`,
+      [id, errorCode, nextAttemptAt],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public async failBroadcastRecipient(id: string, errorCode: string, now: Date): Promise<boolean> {
+    const result = await this.pool.query<{ job_id: string }>(
+      `update broadcast_recipients
+       set status = 'failed', last_error_code = $2, sent_at = $3
+       where id = $1 and status = 'pending'
+       returning job_id::text`,
+      [id, errorCode, now],
+    );
+    const jobId = result.rows[0]?.job_id;
+    if (jobId !== undefined) {
+      await this.completeBroadcastIfIdle(jobId);
+    }
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public async setCustomerShopBlocked(
+    telegramUserId: string,
+    blocked: boolean,
+  ): Promise<TelegramCustomer> {
+    const result = await this.pool.query<CustomerRow>(
+      `update customers
+       set shop_blocked = $2, updated_at = now()
+       where telegram_user_id = $1
+       returning id::text, telegram_user_id::text, private_chat_id::text,
+                 telegram_username, display_name, shop_blocked`,
+      [telegramUserId, blocked],
+    );
+    const row = result.rows[0];
+    if (row === undefined) {
+      throw new DomainConflictError('CUSTOMER_NOT_FOUND');
+    }
+    return mapCustomer(row);
+  }
+
+  public async countCommercialQueues(): Promise<{
+    readonly remindersPending: number;
+    readonly broadcastsPending: number;
+    readonly broadcastsRunning: number;
+  }> {
+    const result = await this.pool.query<{
+      reminders_pending: number;
+      broadcasts_pending: number;
+      broadcasts_running: number;
+    }>(
+      `select
+         (select count(*)::int from service_reminder_deliveries where status = 'pending') as reminders_pending,
+         (select count(*)::int from broadcast_recipients where status = 'pending') as broadcasts_pending,
+         (select count(*)::int from broadcast_jobs where status in ('queued', 'running')) as broadcasts_running`,
+    );
+    const row = result.rows[0];
+    return {
+      remindersPending: row?.reminders_pending ?? 0,
+      broadcastsPending: row?.broadcasts_pending ?? 0,
+      broadcastsRunning: row?.broadcasts_running ?? 0,
+    };
+  }
+
+  private async completeBroadcastIfIdle(jobId: string): Promise<void> {
+    await this.pool.query(
+      `update broadcast_jobs
+       set status = 'completed', completed_at = now(), updated_at = now()
+       where id = $1
+         and status in ('queued', 'running')
+         and not exists (
+           select 1 from broadcast_recipients
+           where job_id = $1 and status = 'pending'
+         )`,
+      [jobId],
+    );
+  }
+
   private async findOrderByIdempotencyKey(
     client: PoolClient,
     idempotencyKey: string,
@@ -1645,6 +2208,88 @@ function mapCustomer(row: CustomerRow): TelegramCustomer {
     privateChatId: row.private_chat_id,
     username: row.telegram_username,
     displayName: row.display_name,
+    shopBlocked: row.shop_blocked === true,
+  };
+}
+
+interface OpsSettingsRow {
+  trial_enabled: boolean;
+  trial_variant_id: string | null;
+  forced_join_channels: unknown;
+  reminders_enabled: boolean;
+  expiry_reminder_days: number;
+  low_traffic_percent: number;
+  updated_at: Date;
+}
+
+function mapOpsSettings(row: OpsSettingsRow): StorefrontOpsSettings {
+  return {
+    trialEnabled: row.trial_enabled,
+    trialVariantId: row.trial_variant_id,
+    forcedJoinChannels: parseForcedJoinChannels(row.forced_join_channels),
+    remindersEnabled: row.reminders_enabled,
+    expiryReminderDays: row.expiry_reminder_days,
+    lowTrafficPercent: row.low_traffic_percent,
+    updatedAt: row.updated_at,
+  };
+}
+
+function parseForcedJoinChannels(value: unknown): readonly ForcedJoinChannel[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const channels: ForcedJoinChannel[] = [];
+  for (const item of value) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    if (typeof record['chatId'] !== 'string') {
+      continue;
+    }
+    channels.push({
+      chatId: record['chatId'],
+      username: typeof record['username'] === 'string' ? record['username'] : null,
+    });
+  }
+  return channels;
+}
+
+interface BroadcastJobRow {
+  id: string;
+  admin_telegram_user_id: string;
+  body: string;
+  body_sha256: string;
+  status: BroadcastJob['status'];
+  recipient_count: number;
+  sent_count: number;
+  failed_count: number;
+  created_at: Date;
+}
+
+function broadcastJobQuery(where: string): string {
+  return `select job.id::text, job.admin_telegram_user_id::text, job.body, job.body_sha256,
+                 job.status, job.created_at,
+                 count(recipient.id)::int as recipient_count,
+                 count(recipient.id) filter (where recipient.status = 'sent')::int as sent_count,
+                 count(recipient.id) filter (where recipient.status = 'failed')::int as failed_count
+          from broadcast_jobs job
+          left join broadcast_recipients recipient on recipient.job_id = job.id
+          where ${where}
+          group by job.id`;
+}
+
+function mapBroadcastJob(row: BroadcastJobRow): BroadcastJob {
+  return {
+    id: row.id,
+    adminTelegramUserId: row.admin_telegram_user_id,
+    body: row.body,
+    bodySha256: row.body_sha256,
+    status: row.status,
+    recipientCount: row.recipient_count,
+    sentCount: row.sent_count,
+    failedCount: row.failed_count,
+    createdAt: row.created_at,
   };
 }
 

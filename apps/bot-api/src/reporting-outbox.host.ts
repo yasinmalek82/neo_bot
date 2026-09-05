@@ -9,6 +9,8 @@ import { telegramCommerceBotToken } from './telegram.provider.js';
 export class ReportingOutboxHost implements OnModuleInit, OnModuleDestroy {
   private reportScheduler: ReportingOutboxScheduler | null = null;
   private deliveryScheduler: ReportingOutboxScheduler | null = null;
+  private reminderScheduler: ReportingOutboxScheduler | null = null;
+  private broadcastScheduler: ReportingOutboxScheduler | null = null;
 
   public constructor(
     @Inject(telegramCommerceBotToken)
@@ -32,13 +34,30 @@ export class ReportingOutboxHost implements OnModuleInit, OnModuleDestroy {
       () => bot.dispatchDueDeliveries(),
       config.deliveryDispatchIntervalMs,
     );
+    this.reminderScheduler = new ReportingOutboxScheduler(
+      () => bot.dispatchDueReminders(),
+      config.reminderDispatchIntervalMs,
+    );
+    this.broadcastScheduler = new ReportingOutboxScheduler(
+      () => bot.dispatchDueBroadcasts(),
+      config.broadcastDispatchIntervalMs,
+    );
     this.reportScheduler.start();
     this.deliveryScheduler.start();
+    this.reminderScheduler.start();
+    this.broadcastScheduler.start();
   }
 
   public async onModuleDestroy(): Promise<void> {
     this.reportScheduler?.stop();
     this.deliveryScheduler?.stop();
-    await Promise.all([this.reportScheduler?.waitForIdle(), this.deliveryScheduler?.waitForIdle()]);
+    this.reminderScheduler?.stop();
+    this.broadcastScheduler?.stop();
+    await Promise.all([
+      this.reportScheduler?.waitForIdle(),
+      this.deliveryScheduler?.waitForIdle(),
+      this.reminderScheduler?.waitForIdle(),
+      this.broadcastScheduler?.waitForIdle(),
+    ]);
   }
 }

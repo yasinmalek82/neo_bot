@@ -1,7 +1,7 @@
 import { Controller, Get, Inject } from '@nestjs/common';
 import type { Pool } from 'pg';
 
-import { loadTelegramConfig } from './config.js';
+import { loadPilotConfig, loadTelegramConfig } from './config.js';
 import { databasePoolToken } from './database.provider.js';
 import { readTelegramIntakeHealth, type TelegramIntakeMode } from './telegram-intake.js';
 
@@ -17,6 +17,15 @@ interface HealthResponse {
     readonly failed: number;
     readonly retrying: number;
     readonly due: number;
+  };
+  readonly provisioning: {
+    readonly mode: 'disabled' | 'isolated' | 'live';
+    readonly pilotEnabled: boolean;
+  };
+  readonly commercial: {
+    readonly remindersPending: number;
+    readonly broadcastsPending: number;
+    readonly broadcastsRunning: number;
   };
 }
 
@@ -38,6 +47,7 @@ export class HealthController {
     const migrated = await this.pool.query<{ n: number }>(
       'select count(*)::int as n from schema_migrations',
     );
+    const commercial = await readCommercialCounts(this.pool);
     const telegram = telegramIntakeSnapshot();
     return {
       status: 'ok',
@@ -47,6 +57,8 @@ export class HealthController {
       telegramError: telegram.error,
       migrations: migrationCount(migrated.rows[0]?.n),
       reports: deliveryCounts(counts.rows[0]),
+      provisioning: provisioningSnapshot(),
+      commercial: commercialCounts(commercial.rows[0]),
     };
   }
 }
@@ -94,4 +106,52 @@ function nonNegativeInt(value: number | undefined): number {
     return 0;
   }
   return value;
+}
+
+interface CommercialCountRow {
+  readonly reminders_pending: number;
+  readonly broadcasts_pending: number;
+  readonly broadcasts_running: number;
+}
+
+function commercialCounts(row: CommercialCountRow | undefined): HealthResponse['commercial'] {
+  return {
+    remindersPending: nonNegativeInt(row?.reminders_pending),
+    broadcastsPending: nonNegativeInt(row?.broadcasts_pending),
+    broadcastsRunning: nonNegativeInt(row?.broadcasts_running),
+  };
+}
+
+async function readCommercialCounts(pool: Pool): Promise<{ rows: CommercialCountRow[] }> {
+  try {
+    return await pool.query<CommercialCountRow>(
+      `select
+         (select count(*)::int from service_reminder_deliveries where status = 'pending') as reminders_pending,
+         (select count(*)::int from broadcast_recipients where status = 'pending') as broadcasts_pending,
+         (select count(*)::int from broadcast_jobs where status in ('queued', 'running')) as broadcasts_running`,
+    );
+  } catch (error: unknown) {
+    if (isUndefinedTableError(error)) {
+      return { rows: [] };
+    }
+    throw error;
+  }
+}
+
+function isUndefinedTableError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { readonly code?: string }).code === '42P01'
+  );
+}
+
+function provisioningSnapshot(): HealthResponse['provisioning'] {
+  try {
+    const pilot = loadPilotConfig();
+    return { mode: pilot.provisioningMode, pilotEnabled: pilot.pilotEnabled };
+  } catch {
+    return { mode: 'disabled', pilotEnabled: false };
+  }
 }

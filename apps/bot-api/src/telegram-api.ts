@@ -3,7 +3,12 @@ export interface TelegramCallbackButton {
   readonly callback_data: string;
 }
 
-export type TelegramInlineButton = TelegramCallbackButton;
+export interface TelegramUrlButton {
+  readonly text: string;
+  readonly url: string;
+}
+
+export type TelegramInlineButton = TelegramCallbackButton | TelegramUrlButton;
 
 export interface TelegramInlineKeyboardMarkup {
   readonly inline_keyboard: readonly (readonly TelegramInlineButton[])[];
@@ -60,6 +65,15 @@ export interface TelegramMessenger {
   ): Promise<void>;
   deleteMessage?(chatId: string, messageId: string): Promise<void>;
   answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void>;
+  getChatMember?(
+    chatId: string,
+    userId: string,
+  ): Promise<{ readonly status: string; readonly isMember?: boolean }>;
+  sendPhotoBuffer?(
+    chatId: string,
+    png: Buffer,
+    caption: string,
+  ): Promise<TelegramSentMessage>;
 }
 
 export class TelegramApiClient implements TelegramMessenger {
@@ -228,6 +242,44 @@ export class TelegramApiClient implements TelegramMessenger {
     });
   }
 
+  public async getChatMember(
+    chatId: string,
+    userId: string,
+  ): Promise<{ readonly status: string; readonly isMember?: boolean }> {
+    const body = await this.request('getChatMember', {
+      chat_id: chatId,
+      user_id: Number(userId),
+    });
+    const result = objectResult(body.result);
+    const status = result?.['status'];
+    if (typeof status !== 'string') {
+      throw new Error('TELEGRAM_INVALID_RESPONSE');
+    }
+    const isMember = result?.['is_member'];
+    return {
+      status,
+      ...(typeof isMember === 'boolean' ? { isMember } : {}),
+    };
+  }
+
+  public async sendPhotoBuffer(
+    chatId: string,
+    png: Buffer,
+    caption: string,
+  ): Promise<TelegramSentMessage> {
+    const form = new FormData();
+    form.set('chat_id', chatId);
+    form.set('caption', caption.slice(0, 1024));
+    form.set('parse_mode', 'HTML');
+    form.set('photo', new Blob([Uint8Array.from(png)], { type: 'image/png' }), 'access.png');
+    const body = await this.requestForm('sendPhoto', form);
+    const messageId = objectResult(body.result)?.['message_id'];
+    if (typeof messageId !== 'number' || !Number.isInteger(messageId) || messageId < 0) {
+      throw new Error('TELEGRAM_INVALID_RESPONSE');
+    }
+    return { messageId: String(messageId) };
+  }
+
   public answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void> {
     return this.requestOk('answerCallbackQuery', {
       callback_query_id: callbackQueryId,
@@ -358,6 +410,56 @@ export class TelegramApiClient implements TelegramMessenger {
     }
     return body;
   }
+
+  private async requestForm(
+    method: string,
+    form: FormData,
+    timeoutMs = 10_000,
+  ): Promise<{
+    readonly ok?: unknown;
+    readonly result?: unknown;
+    readonly description?: unknown;
+  }> {
+    const response = await this.fetchImplementation(new URL(method, this.apiBaseUrl), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        Connection: 'close',
+      },
+      body: form,
+      keepalive: false,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const rawBody = await response.text();
+    if (Buffer.byteLength(rawBody, 'utf8') > 1_048_576) {
+      throw new Error('TELEGRAM_RESPONSE_TOO_LARGE');
+    }
+    let body: {
+      readonly ok?: unknown;
+      readonly result?: unknown;
+      readonly description?: unknown;
+    };
+    try {
+      body = JSON.parse(rawBody) as {
+        readonly ok?: unknown;
+        readonly result?: unknown;
+        readonly description?: unknown;
+      };
+    } catch {
+      throw new Error(
+        response.ok ? 'TELEGRAM_INVALID_RESPONSE' : `TELEGRAM_HTTP_${String(response.status)}`,
+      );
+    }
+    if (!response.ok) {
+      throw new Error(
+        mappedTelegramError(body.description) ?? `TELEGRAM_HTTP_${String(response.status)}`,
+      );
+    }
+    if (body.ok !== true) {
+      throw new Error(mappedTelegramError(body.description) ?? 'TELEGRAM_API_ERROR');
+    }
+    return body;
+  }
 }
 
 function objectResult(value: unknown): Record<string, unknown> | null {
@@ -403,8 +505,18 @@ function mappedTelegramError(description: unknown): string | null {
   ) {
     return 'TELEGRAM_FORUM_DISABLED';
   }
-  if (normalized.includes('not enough rights') || normalized.includes('can_manage_topics')) {
+    if (normalized.includes('not enough rights') || normalized.includes('can_manage_topics')) {
     return 'TELEGRAM_FORUM_RIGHTS_MISSING';
+  }
+  if (normalized.includes('user not found')) {
+    return 'TELEGRAM_MEMBER_NOT_FOUND';
+  }
+  if (
+    normalized.includes('chat not found') ||
+    normalized.includes('chat_admin_required') ||
+    normalized.includes('bot is not a member')
+  ) {
+    return 'TELEGRAM_CHAT_ADMIN_REQUIRED';
   }
   return null;
 }

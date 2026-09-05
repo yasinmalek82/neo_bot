@@ -32,7 +32,15 @@ counts only: `reports.pending`, `reports.failed`, `reports.retrying` (pending de
 retried at least once), and `reports.due` (pending deliveries whose next attempt time has passed).
 No order IDs, file IDs, or secrets appear in the response. Alert when `reports.due` stays above
 zero for several minutes (dispatch lag) or when `reports.retrying` climbs while `reports.failed`
-remains zero (transient Telegram pressure).
+remains zero (transient Telegram pressure). `provisioning.mode` and `provisioning.pilotEnabled`
+are flags only: `disabled` never calls PasarGuard mutating APIs, `isolated` requires
+`PROVISIONING_ISOLATED_GROUP_ID`, and `PILOT_ENABLED=true` is still an owner-only switch for
+the isolated pilot CLI. `commercial.remindersPending` and `commercial.broadcastsPending` are
+queue counts; they never include message bodies or subscription URLs.
+
+Owner-only live gates before a paid cohort: public HTTPS webhook, TLS on the host, a prepared
+isolated PasarGuard group, off-host backups, and a phone smoke of `/start` → shop or trial →
+receipt → delivery. Do not enable live provision from chat.
 
 ## Customer static assets on the same host
 

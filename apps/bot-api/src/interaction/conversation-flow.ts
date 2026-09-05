@@ -29,6 +29,11 @@ const CUSTOMER_NAVIGATION_CALLBACKS = new Set([
   'admin:failed',
   'admin:catalog',
   'admin:summary',
+  'admin:ops',
+  'admin:broadcast',
+  'trial',
+  'services',
+  'join:refresh',
 ]);
 
 export type ConversationInputKind = 'text' | 'callback';
@@ -66,13 +71,21 @@ export type FlowScreenId =
   | 'home'
   | 'expired'
   | 'malformed'
-  | 'cancelled';
+  | 'cancelled'
+  | 'admin.broadcast.compose'
+  | 'admin.broadcast.queued'
+  | 'admin.broadcast.invalid'
+  | 'admin.ops.prompt'
+  | 'admin.ops.saved'
+  | 'admin.ops.invalid';
 
 export interface BotScreenModel {
   readonly id: FlowScreenId;
   readonly variantName?: string;
   readonly ticketId?: string;
   readonly replayed?: boolean;
+  readonly jobId?: string;
+  readonly field?: string;
 }
 
 export type FlowTransition =

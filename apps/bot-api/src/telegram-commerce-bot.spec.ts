@@ -2,6 +2,7 @@ import {
   CommerceUseCase,
   CustomerDeliveryUseCase,
   type CommerceRepository,
+  type CommercialRepository,
   type OpsDailySummaryUseCase,
   type ReportingUseCase,
   type ServiceProvisioner,
@@ -366,6 +367,7 @@ describe('TelegramCommerceBot', () => {
       expect.objectContaining({
         keyboard: [
           [{ text: 'خرید سریع 🛍' }],
+          [{ text: 'سرویس‌های من 📡' }],
           [{ text: 'راهنمای انتخاب 🧭' }],
           [{ text: 'پیگیری سفارش 📦' }, { text: 'تمدید سرویس ♻️' }],
           [{ text: 'شارژ کیف پول 💳' }, { text: 'تیکت پشتیبانی 🎫' }],
@@ -604,9 +606,12 @@ describe('TelegramCommerceBot', () => {
       },
     });
     const keyboard = vi.mocked(messenger.editMessageText).mock.calls.at(-1)?.[3]?.inline_keyboard;
-    expect(keyboard?.filter((row) => row[0]?.callback_data?.startsWith('variant:'))).toHaveLength(
-      3,
-    );
+    expect(
+      keyboard?.filter((row) => {
+        const first = row[0];
+        return first !== undefined && 'callback_data' in first && first.callback_data.startsWith('variant:');
+      }),
+    ).toHaveLength(3);
     expect(JSON.stringify(keyboard)).toContain('product:10:40:1');
   });
 
@@ -2659,10 +2664,186 @@ describe('TelegramCommerceBot', () => {
     expect(keyboard).toContain('"callback_data":"store:cancel"');
     expect(keyboard).not.toMatch(/"text":"1\/1","callback_data":"store:cancel"/u);
   });
+
+  it('refuses a second trial and does not provision again', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.getCommercialSettings).mockResolvedValue({
+      trialEnabled: true,
+      trialVariantId: variant.id,
+      forcedJoinChannels: [],
+      remindersEnabled: true,
+      expiryReminderDays: 3,
+      lowTrafficPercent: 15,
+      updatedAt: new Date('2026-09-05T00:00:00.000Z'),
+    });
+    vi.mocked(repository.getTrialClaim).mockResolvedValue({
+      customerId: customer.id,
+      orderId: order.id,
+      claimedAt: new Date('2026-09-01T00:00:00.000Z'),
+    });
+    const provisioner = { create: vi.fn(), renew: vi.fn() };
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger, null, provisioner);
+    await bot.handleUpdate({
+      update_id: 1701,
+      message: {
+        message_id: 501,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: MENU_LABEL.trial,
+      },
+    });
+    expect(provisioner.create).not.toHaveBeenCalled();
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('قبلاً استفاده شده'),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('fails closed on channel membership errors and never opens shop', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.getCommercialSettings).mockResolvedValue({
+      trialEnabled: false,
+      trialVariantId: null,
+      forcedJoinChannels: [{ chatId: '@NeoShop', username: 'NeoShop' }],
+      remindersEnabled: true,
+      expiryReminderDays: 3,
+      lowTrafficPercent: 15,
+      updatedAt: new Date('2026-09-05T00:00:00.000Z'),
+    });
+    const messenger = createMessenger();
+    messenger.getChatMember = vi.fn().mockRejectedValue(new Error('TELEGRAM_HTTP_403'));
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1702,
+      message: {
+        message_id: 502,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: MENU_LABEL.shop,
+      },
+    });
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('قابل بررسی نیست'),
+      expect.objectContaining({
+        inline_keyboard: expect.arrayContaining([
+          expect.arrayContaining([expect.objectContaining({ url: 'https://t.me/NeoShop' })]),
+        ]),
+      }),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('lets an allowlisted admin bypass the forced join gate', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.getCommercialSettings).mockResolvedValue({
+      trialEnabled: false,
+      trialVariantId: null,
+      forcedJoinChannels: [{ chatId: '@NeoShop', username: 'NeoShop' }],
+      remindersEnabled: true,
+      expiryReminderDays: 3,
+      lowTrafficPercent: 15,
+      updatedAt: new Date('2026-09-05T00:00:00.000Z'),
+    });
+    const messenger = createMessenger();
+    messenger.getChatMember = vi.fn();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1703,
+      message: {
+        message_id: 503,
+        from: { id: 70001, first_name: 'ادمین' },
+        chat: { id: 70001, type: 'private' },
+        text: MENU_LABEL.shop,
+      },
+    });
+    expect(messenger.getChatMember).not.toHaveBeenCalled();
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '70001',
+      expect.stringContaining('فروشگاه خالی است'),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('queues an admin broadcast from a durable session without storing the body on the session', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.createBroadcastJob).mockResolvedValue({
+      id: '44',
+      adminTelegramUserId: '70001',
+      body: 'فروشگاه امشب قطع است',
+      bodySha256: 'b'.repeat(64),
+      status: 'queued',
+      recipientCount: 3,
+      sentCount: 0,
+      failedCount: 0,
+      createdAt: new Date('2026-09-05T00:00:00.000Z'),
+    });
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1704,
+      callback_query: {
+        id: 'cb-broadcast',
+        from: { id: 70001, first_name: 'ادمین' },
+        message: { message_id: 504, chat: { id: 70001, type: 'private' }, text: 'ادمین' },
+        data: 'admin:broadcast',
+      },
+    });
+    await bot.handleUpdate({
+      update_id: 1705,
+      message: {
+        message_id: 505,
+        from: { id: 70001, first_name: 'ادمین' },
+        chat: { id: 70001, type: 'private' },
+        text: 'فروشگاه امشب قطع است',
+      },
+    });
+    expect(repository.createBroadcastJob).toHaveBeenCalledWith({
+      adminTelegramUserId: '70001',
+      body: 'فروشگاه امشب قطع است',
+      bodySha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    const session = await repository.getPendingConversationSession('70001');
+    expect(session).toBeNull();
+  });
+
+  it('lists my services without putting a subscription URL on the list screen', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.listCustomerServices).mockResolvedValue([
+      {
+        id: '4',
+        productName: 'اقتصادی',
+        variantName: 'یک‌ماهه',
+        status: 'active',
+        expiresAt: new Date('2026-09-21T00:00:00.000Z'),
+        dataLimitBytes: 20n * 1024n ** 3n,
+        usedTrafficBytes: null,
+      },
+    ]);
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1706,
+      message: {
+        message_id: 506,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: MENU_LABEL.services,
+      },
+    });
+    const listCall = vi.mocked(messenger.sendMessage).mock.calls.at(-1);
+    expect(listCall?.[1]).toContain('سرویس‌های من');
+    expect(listCall?.[1]).not.toContain('https://');
+    expect(JSON.stringify(listCall?.[2])).toContain('svc:4');
+  });
 });
 
 function createBot(
-  repository: CommerceRepository,
+  repository: CommerceRepository & CommercialRepository,
   messenger: TelegramMessenger,
   reporting: ReportingUseCase | null = null,
   provisioner: ServiceProvisioner = {
@@ -2685,6 +2866,8 @@ function createBot(
     reporting: null,
     reportDispatchIntervalMs: 15_000,
     deliveryDispatchIntervalMs: 15_000,
+    reminderDispatchIntervalMs: 15_000,
+    broadcastDispatchIntervalMs: 15_000,
     ...configOverrides,
   };
   const commerce = new CommerceUseCase(repository, provisioner, reporting);
@@ -2740,7 +2923,7 @@ function createMessenger(): TelegramMessenger {
   };
 }
 
-function createRepository(): CommerceRepository {
+function createRepository(): CommerceRepository & CommercialRepository {
   const sessions = new Map<string, DurableConversationSession>();
   const proof: TelegramPaymentProof = {
     id: '20',
@@ -2834,5 +3017,38 @@ function createRepository(): CommerceRepository {
     creditWalletTopUp: vi.fn(),
     createSupportTicket: vi.fn(),
     followUpSupportTicket: vi.fn(),
+    getCommercialSettings: vi.fn().mockResolvedValue({
+      trialEnabled: false,
+      trialVariantId: null,
+      forcedJoinChannels: [],
+      remindersEnabled: true,
+      expiryReminderDays: 3,
+      lowTrafficPercent: 15,
+      updatedAt: new Date('2026-09-05T00:00:00.000Z'),
+    }),
+    updateCommercialSettings: vi.fn(),
+    createTrialOrder: vi.fn(),
+    getTrialClaim: vi.fn().mockResolvedValue(null),
+    listCustomerServices: vi.fn().mockResolvedValue([]),
+    getServiceAccessTarget: vi.fn().mockResolvedValue(null),
+    enqueueDueServiceReminders: vi.fn().mockResolvedValue(0),
+    claimDueServiceReminders: vi.fn().mockResolvedValue([]),
+    markServiceReminderDelivered: vi.fn(),
+    retryServiceReminder: vi.fn(),
+    failServiceReminder: vi.fn(),
+    createBroadcastJob: vi.fn(),
+    cancelBroadcastJob: vi.fn(),
+    getBroadcastJob: vi.fn(),
+    listRecentBroadcastJobs: vi.fn().mockResolvedValue([]),
+    claimDueBroadcastRecipients: vi.fn().mockResolvedValue([]),
+    markBroadcastRecipientSent: vi.fn(),
+    retryBroadcastRecipient: vi.fn(),
+    failBroadcastRecipient: vi.fn(),
+    setCustomerShopBlocked: vi.fn(),
+    countCommercialQueues: vi.fn().mockResolvedValue({
+      remindersPending: 0,
+      broadcastsPending: 0,
+      broadcastsRunning: 0,
+    }),
   };
 }

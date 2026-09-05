@@ -14,6 +14,15 @@ describe('conversation session payload rules', () => {
     ).toThrow('MALFORMED_CONVERSATION_SESSION');
   });
 
+  it('rejects a broadcast body inside a durable admin session payload', () => {
+    expect(() =>
+      parseConversationPayload('admin.broadcast', 'create', { mode: 'create', body: 'secret' }),
+    ).toThrow('MALFORMED_CONVERSATION_SESSION');
+    expect(parseConversationPayload('admin.ops', 'settings', { field: 'channel' })).toEqual({
+      field: 'channel',
+    });
+  });
+
   it('parses Persian wallet amounts and discount codes', () => {
     expect(parseWalletAmountIrr('۵۰٬۰۰۰')).toBe(50_000n);
     expect(validateDiscountCode('save10')).toBe('SAVE10');

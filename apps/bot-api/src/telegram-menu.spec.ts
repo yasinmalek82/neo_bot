@@ -152,11 +152,14 @@ describe('telegram menu copy', () => {
     expect(dailySummaryQueuedText(true)).toContain('خلاصه امروز ثبت شد');
     expect(customerOrderStatusLabel('receipt_submitted')).toBe('رسید در حال بررسی');
     expect(matchMenuAction(MENU_LABEL.shop)).toBe('shop');
+    expect(matchMenuAction(MENU_LABEL.trial)).toBe('trial');
+    expect(matchMenuAction(MENU_LABEL.services)).toBe('services');
     expect(matchMenuAction(MENU_LABEL.store)).toBe('store');
     expect(matchMenuAction('مدیریت فروشگاه')).toBe('store');
     expect(homeReplyKeyboard(true)).toEqual({
       keyboard: [
         [{ text: 'خرید سریع 🛍' }],
+        [{ text: 'سرویس‌های من 📡' }],
         [{ text: 'راهنمای انتخاب 🧭' }],
         [{ text: 'پیگیری سفارش 📦' }, { text: 'تمدید سرویس ♻️' }],
         [{ text: 'شارژ کیف پول 💳' }, { text: 'تیکت پشتیبانی 🎫' }],
@@ -186,6 +189,8 @@ describe('telegram menu copy', () => {
         [{ text: 'مدیریت فروشگاه 🏪', callback_data: 'admin:store' }],
         [{ text: 'ساخت ناموفق ⚠️', callback_data: 'admin:failed' }],
         [{ text: 'سلامت کاتالوگ 🗂️', callback_data: 'admin:catalog' }],
+        [{ text: 'تنظیمات تجاری 🛠', callback_data: 'admin:ops' }],
+        [{ text: 'پیام همگانی 📢', callback_data: 'admin:broadcast' }],
         [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
       ],
     });

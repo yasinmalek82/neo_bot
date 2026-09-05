@@ -172,6 +172,7 @@ export class CommerceUseCase {
       await this.previewDiscount(command.discountCode);
     }
     const { customer, created } = await this.repository.upsertTelegramCustomer(command.customer);
+    rejectIfShopBlocked(customer);
     if (created) {
       await this.publish({
         type: 'customer.first_contact',
@@ -230,6 +231,7 @@ export class CommerceUseCase {
       await this.previewDiscount(command.discountCode);
     }
     const { customer, created } = await this.repository.upsertTelegramCustomer(command.customer);
+    rejectIfShopBlocked(customer);
     if (created) {
       await this.publish({
         type: 'customer.first_contact',
@@ -255,6 +257,49 @@ export class CommerceUseCase {
         amountIrr: order.amountIrr.toString(),
       },
     });
+    return order;
+  }
+
+  public async beginTrial(command: {
+    readonly customer: TelegramCustomerInput;
+    readonly idempotencyKey: string;
+  }): Promise<SalesOrder> {
+    validateTelegramCustomerInput(command.customer);
+    requireIdempotencyKey(command.idempotencyKey);
+    if (this.repository.createTrialOrder === undefined) {
+      throw new DomainConflictError('TRIAL_NOT_CONFIGURED');
+    }
+    const { customer, created } = await this.repository.upsertTelegramCustomer(command.customer);
+    rejectIfShopBlocked(customer);
+    if (created) {
+      await this.publish({
+        type: 'customer.first_contact',
+        occurrenceKey: `customer:${customer.telegramUserId}:first-contact`,
+        payload: { telegramUserId: customer.telegramUserId },
+      });
+    }
+    const usernameBase = trialUsernameBase(customer.telegramUserId);
+    const order = await this.repository.createTrialOrder({
+      customerId: customer.id,
+      idempotencyKey: command.idempotencyKey,
+      serviceUsernameBase: usernameBase,
+    });
+    if (order.status === 'fulfilled') {
+      throw new DomainConflictError('TRIAL_ALREADY_CLAIMED');
+    }
+    await this.publish({
+      type: 'trial.claimed',
+      occurrenceKey: `order:${order.id}:trial-claimed`,
+      payload: {
+        orderId: order.id,
+        telegramUserId: customer.telegramUserId,
+        productName: order.productName,
+        variantName: order.variantName,
+      },
+    });
+    if (order.status === 'provisioning' || order.status === 'provisioning_failed') {
+      return this.fulfillReservedOrder(order);
+    }
     return order;
   }
 
@@ -455,4 +500,14 @@ function requireIdempotencyKey(value: string): void {
   if (value.length < 8 || value.length > 200 || !/^[a-zA-Z0-9:._-]+$/u.test(value)) {
     throw new DomainConflictError('INVALID_IDEMPOTENCY_KEY');
   }
+}
+
+function rejectIfShopBlocked(customer: { readonly shopBlocked?: boolean }): void {
+  if (customer.shopBlocked === true) {
+    throw new DomainConflictError('SHOP_BLOCKED');
+  }
+}
+
+function trialUsernameBase(telegramUserId: string): string {
+  return `t${telegramUserId.slice(-8)}`;
 }

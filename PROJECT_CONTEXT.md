@@ -1,9 +1,9 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T08:05:32.324Z
-source-fingerprint: 73ccc90b8654f4da386709903f630f4cdf2b743cb0f0c621c5fe992161930490
-current-phase: durable-interaction-kernel
-next-task: adopt-remaining-operator-input-into-durable-flows
+last-updated: 2026-09-05T08:32:46.411Z
+source-fingerprint: cce7ad7f2bde4c6a137188693d648d137344eed397194cca835c2e921b2ced79
+current-phase: commercial-wave1
+next-task: owner-authorized-isolated-pilot-gates
 -->
 
 # neo_bot Project Context
@@ -93,17 +93,19 @@ Authoritative decisions are recorded in:
 - `docs/adr/0013-flexible-chat-storefront-presentation.md`
 - `docs/adr/0014-role-aware-commerce-and-service-operations.md`
 - `docs/adr/0021-durable-interaction-kernel.md`
+- `docs/adr/0022-commercial-wave1.md`
 
 Create a new ADR before materially changing one of these decisions.
 
 ## Current verified snapshot
 
-Last evidence refresh: `2026-09-05`, reviewed Telegram customer/admin interactive menus on the
-durable-customer-flows baseline and landed a focused Home/Cancel/navigation pass. `pnpm check`
-passes locally with `251` unit tests. Isolated local Slice 1 runtime and first-host evidence
-below are unchanged historical records, not a new live check. Feature
-`004-telegram-home-concept` artifacts are not on this remote; the visual baseline used was ADR
-0013 ReplyKeyboard home plus the existing `telegram-menu` mixed layout.
+Last evidence refresh: `2026-09-05`, Commercial Wave 1 (trial, forced join, reminders, my-services
+deliverability, admin broadcast, pilot health/runbook) is implemented on
+`cursor/wave1-commercial-pilot-736e` branched from the durable-customer-flows + menu UX baseline.
+ADR 0022 and migration `0015` record the durable decisions. Unit evidence below is local only.
+Isolated local Slice 1 runtime and first-host evidence remain unchanged historical records, not a
+new live check. Feature `004-telegram-home-concept` artifacts are not on this remote; the visual
+baseline used was ADR 0013 ReplyKeyboard home plus the existing `telegram-menu` mixed layout.
 
 - Production-MVP readiness estimate: the customer store and catalog administration are both chat
   paths; live administrator publication, live purchase, and the seven-day pilot remain owner-side.
@@ -243,6 +245,8 @@ off-host backup restoration or public security.
 - `0014_durable_customer_flows.sql`: local candidate for versioned customer conversation sessions,
   optional discount codes, a non-negative prepaid wallet ledger, and Telegram-update-scoped support
   tickets; not deployed.
+- `0015_commercial_wave1.sql`: local candidate for shop-block, trial orders/claims, ops settings,
+  reminder deliveries, broadcast outbox, and Wave 1 reporting types; not deployed.
 
 ### Runtime boundaries
 
@@ -290,6 +294,12 @@ off-host backup restoration or public security.
 | Production deployment and operations | Partial     | First-host `bot-api` was rebuilt/recreated after a root-only source/env/database backup. Migration `0010`, public/loopback health, webhook readiness, report queues, schema objects, read model, retired-route 404s and disabled pilot provisioning were verified. Caddy/Postgres were not recreated; no purchase or PasarGuard mutation was performed.                                                                                                                                   |
 | Resellers, wallet and debt           | Partial     | Schema, listing, checkout snapshot, customer assignment, and current-price audit exist. Override then base then public. A non-negative customer wallet top-up ledger and restart-safe amount/coupon input exist locally; representative debt, admin price UI, and `reseller.*` notices are not published.                                                                                                                                                                                 |
 | Legacy import and cutover            | Not started | Must begin read-only with backup, preflight, rollback and controlled cutover.                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Free trial / test service            | Partial     | One write-once claim plus `order_kind=trial` amount 0. Admin ops settings choose enable + catalog variant (duration/traffic/devices/groups). Home shows the trial key only when eligible. Repeats refuse idempotently. Fulfillment reuses the paid create path and still honors `PROVISIONING_MODE` / `PILOT_ENABLED`. Local unit evidence only; live provision remains gated.                                                                                                              |
+| Forced channel join                  | Partial     | Owner configures channel IDs/usernames on ops settings. Shop/trial/checkout fail closed on Telegram membership errors with join + refresh copy. Allowlisted admins bypass. Local unit evidence only; live `getChatMember` on a real channel is unproven.                                                                                                                                                                                                                                   |
+| Expiry / low-traffic reminders       | Partial     | Outbox-style `service_reminder_deliveries` with idempotent window keys. Persian copy, no subscription URL. Shop-blocked customers skipped. Low-traffic enqueues only when `used_traffic_bytes` is known; no PasarGuard usage sync is in this slice, so expiry is the proven path. Dispatcher is in-process like reports. Local unit evidence only.                                                                                                                                         |
+| My-services deliverability           | Partial     | «سرویس‌های من» lists local fulfilled bindings, resends the access link, offers iOS/Android/Windows guides, and can send an in-memory QR. URLs stay off list screens, jobs, reports and logs. QR needs `sendPhotoBuffer`; otherwise the link is resent. Local unit evidence only.                                                                                                                                                                                                          |
+| Admin broadcast                      | Partial     | Allowlisted admin queues a one-shot durable job with paginated/rate-limited dispatch and cancel. Reports store hash + counts, not the body. Durable `admin.broadcast` session never stores the body. Local unit evidence only; no live Telegram send.                                                                                                                                                                                                                                      |
+| Commercial pilot hardening           | Partial     | Health exposes `provisioning.mode` / `pilotEnabled` and commercial queue counts without bodies or URLs. Missing Wave 1 tables do not fail `/health`. Runbook notes owner-only gates: webhook TLS, isolated PasarGuard group, backups, phone smoke. No deploy, no live PasarGuard mutation, no real Telegram in CI.                                                                                                                                                                        |
 
 ## Confirmed admin reporting requirement
 
@@ -382,7 +392,8 @@ Gate remaining:
 
 ### Phase 5 - Controlled pilot and release
 
-Status: not started.
+Status: in-repo commercial blockers for an Iranian card-to-card shop are locally implemented
+(Wave 1). The live seven-day cohort is not started.
 
 Gate:
 
@@ -409,26 +420,28 @@ Status: approved on 2026-08-25 and active after the local checkpoint.
 
 ## Current priority and next task
 
-Current phase: **durable-interaction-kernel**. Feature `005` Phase 4 customer restart-safe flows
-(T019–T026) are on this remote. The owner then directed a customer+admin Telegram menu UX
-debug on that baseline; the high-impact navigation and label fixes are in source, not deployed.
+Current phase: **commercial-wave1**. Competitor must-haves that blocked a controlled paid
+Iranian Telegram shop are in source on top of the durable-customer-flows + menu UX baseline:
+one free trial, forced channel join, expiry/low-traffic reminders, my-services deliverability,
+admin broadcast, and pilot health/runbook notes. ADR 0022. Not deployed.
 
-Next task: adopt any remaining operator/staff memory-only Telegram input into the same durable
-flow registry, or run Spec Kit converge against feature 005 if later kernel phases are specified.
-A later menu pass can still deepen BotScreenModel coverage for catalog-admin screens and add
-wallet-balance display. Do not treat local unit evidence as phone or production proof. Isolated
-or live PasarGuard mutation remains a separate product-risk decision.
+Next task: owner-authorized isolated-database apply of migrations `0014`+`0015`, then owner-only
+live gates (public HTTPS webhook + TLS, prepared PasarGuard group, off-host backups, phone
+smoke of `/start` → shop or trial → receipt → delivery). Do not treat local unit evidence as
+phone or production proof. Isolated or live PasarGuard mutation remains a separate product-risk
+decision. Remaining operator/staff memory-only Telegram input can return after those gates.
 
 Expected sequence:
 
-1. Keep customer purchase naming/coupon, renewal coupon, wallet top-up, and ticket flows on
-   durable sessions; do not reintroduce process-local Maps for those inputs.
-2. Apply migration `0014` only with explicit authorization on an isolated database.
-3. Continue Slice 1 local polling smoke and later slices as separately authorized work.
-4. Android/iPhone evidence remains mandatory before customer-facing visual completion.
+1. Keep customer purchase naming/coupon, renewal coupon, wallet top-up, ticket, broadcast and
+   ops-settings flows on durable sessions; do not reintroduce process-local Maps for those inputs.
+2. Apply migrations `0014` and `0015` only with explicit authorization on an isolated database.
+3. Owner configures trial variant, forced-join channels, and reminder thresholds in chat.
+4. Continue Slice 1 local polling smoke and later slices as separately authorized work.
+5. Android/iPhone evidence remains mandatory before customer-facing visual completion.
 
 Owner-only remaining gates: public HTTPS webhook URL, live isolated PasarGuard group, TLS host,
-off-host backup storage, seven-day pilot.
+off-host backup storage, phone smoke, seven-day pilot.
 
 Do not request group tokens or secrets in chat.
 
@@ -488,6 +501,21 @@ handoff entry.
 ## Handoff log
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
+
+### 2026-09-05 - Commercial Wave 1 for an Iranian Telegram shop
+
+- Outcome: implemented the missing commercial blockers on the durable-customer-flows + menu UX
+  baseline: one free trial per customer, forced channel join, expiry/low-traffic reminder
+  outbox, my-services resend/guides/QR, cancelable admin broadcast, and pilot health/runbook
+  notes. ADR 0022 and migration `0015`. Card-to-card + wallet stay the only rails. PasarGuard
+  stays the only panel. No AGPL copy, no live provision, no deploy.
+- Validation: targeted unit suites pass — domain `32`, application `78`, PasarGuard `10`,
+  database `2`, bot-api `147`, admin-web still `5` (`274` total). Full `pnpm check` follows
+  the context stamp in this work unit. No production migrate, Telegram send, or PasarGuard
+  mutation. No phone or production proof. Low-traffic reminders stay Partial until
+  `used_traffic_bytes` is populated.
+- Next: owner-authorized isolated apply of `0014`+`0015`, then webhook TLS, isolated
+  PasarGuard group, backups, and phone smoke.
 
 ### 2026-09-05 - Telegram customer and admin menu UX navigation pass
 

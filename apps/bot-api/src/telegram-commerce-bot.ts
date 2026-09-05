@@ -4,6 +4,7 @@ import type {
   CommerceRepository,
   CommerceUseCase,
   CatalogChatAdminUseCase,
+  CommercialRepository,
   ConversationSessionStore,
   CustomerDeliveryTransport,
   CustomerDeliveryUseCase,
@@ -11,6 +12,8 @@ import type {
   ReportingUseCase,
 } from '@neo-bot/application';
 import {
+  CommercialOpsUseCase,
+  joinUrlForChannel,
   RepositoryConversationSessionStore,
   SupportTicketUseCase,
   WalletUseCase,
@@ -26,6 +29,7 @@ import {
   type StorefrontCatalog,
   type SellableProductVariant,
   type TelegramCustomerInput,
+  type AdminOpsField,
 } from '@neo-bot/domain';
 
 import type { TelegramConfig } from './config.js';
@@ -78,6 +82,24 @@ import {
   TICKET_FOLLOW_PREFIX,
   TICKET_NEW_CALLBACK,
   WALLET_TOPUP_CALLBACK,
+  TRIAL_CALLBACK,
+  SERVICES_CALLBACK,
+  JOIN_REFRESH_CALLBACK,
+  ADMIN_OPS_CALLBACK,
+  ADMIN_BROADCAST_CALLBACK,
+  ADMIN_BROADCAST_CANCEL_PREFIX,
+  trialOfferText,
+  trialAlreadyClaimedText,
+  trialUnavailableText,
+  shopBlockedText,
+  forcedJoinText,
+  customerServicesText,
+  serviceAccessText,
+  platformGuideText,
+  commercialSettingsText,
+  broadcastPromptText,
+  broadcastQueuedText,
+  reminderNoticeText,
   conversationCancelledText,
   conversationExpiredText,
   conversationMalformedText,
@@ -120,6 +142,7 @@ import {
   variantListLabel,
   variantText,
 } from './telegram-menu.js';
+import { AdminBroadcastFlowHandler, AdminOpsFlowHandler } from './interaction/admin-ops-flow.js';
 import { CommerceFlowHandler } from './interaction/commerce-flow.js';
 import {
   applyFlowTransition,
@@ -134,6 +157,7 @@ import {
 } from './interaction/conversation-flow.js';
 import { SupportFlowHandler } from './interaction/support-flow.js';
 import { WalletFlowHandler } from './interaction/wallet-flow.js';
+import { renderSubscriptionQrPng } from './subscription-qr.js';
 import { readTelegramIntakeHealth } from './telegram-intake.js';
 import {
   hasUnsupportedReceiptMedia,
@@ -166,11 +190,12 @@ export class TelegramCommerceBot {
   private readonly sessions: ConversationSessionStore;
   private readonly wallet: WalletUseCase;
   private readonly tickets: SupportTicketUseCase;
+  private readonly commercial: CommercialOpsUseCase;
 
   public constructor(
     config: Extract<TelegramConfig, { readonly enabled: true }>,
     private readonly commerce: CommerceUseCase,
-    private readonly repository: CommerceRepository,
+    private readonly repository: CommerceRepository & CommercialRepository,
     private readonly serviceReader: ServiceReader,
     private readonly messenger: TelegramMessenger,
     private readonly catalogAdmin: CatalogAdminReader,
@@ -184,6 +209,21 @@ export class TelegramCommerceBot {
     this.sessions = sessions ?? new RepositoryConversationSessionStore(repository);
     this.wallet = new WalletUseCase(repository);
     this.tickets = new SupportTicketUseCase(repository);
+    this.commercial = new CommercialOpsUseCase(
+      repository,
+      messenger.getChatMember === undefined
+        ? null
+        : {
+            getMemberStatus: (chatId, userId) => {
+              if (messenger.getChatMember === undefined) {
+                return Promise.reject(new Error('TELEGRAM_MEMBERSHIP_UNAVAILABLE'));
+              }
+              return messenger.getChatMember(chatId, userId);
+            },
+          },
+      () => new Date(),
+      reporting,
+    );
   }
 
   public isWebhookSecretValid(candidate: string | undefined): boolean {
@@ -311,6 +351,15 @@ export class TelegramCommerceBot {
       ),
     );
     registry.register(new SupportFlowHandler(this.tickets, customer));
+    registry.register(
+      new AdminBroadcastFlowHandler(
+        (command) => this.commercial.queueBroadcast(command),
+        customer,
+      ),
+    );
+    registry.register(
+      new AdminOpsFlowHandler((field, text) => this.applyAdminOpsField(field, text)),
+    );
     return registry;
   }
 
@@ -464,6 +513,45 @@ export class TelegramCommerceBot {
         return;
       case 'support.invalid-body':
         await this.present(target, invalidTicketBodyText(), columnKeyboard(cancelRow));
+        return;
+      case 'admin.broadcast.compose':
+        await this.present(target, broadcastPromptText(), columnKeyboard(cancelRow));
+        return;
+      case 'admin.broadcast.invalid':
+        await this.present(
+          target,
+          'متن پیام همگانی معتبر نیست. بین ۱ تا ۳۵۰۰ نویسه بفرست.',
+          columnKeyboard(cancelRow),
+        );
+        return;
+      case 'admin.broadcast.queued':
+        await this.present(
+          target,
+          broadcastQueuedText(screen.jobId ?? '', 0),
+          adminScreenKeyboard(
+            screen.jobId === undefined
+              ? []
+              : [
+                  {
+                    text: 'لغو پیام همگانی',
+                    callback_data: `${ADMIN_BROADCAST_CANCEL_PREFIX}${screen.jobId}`,
+                  },
+                ],
+          ),
+        );
+        return;
+      case 'admin.ops.prompt':
+      case 'admin.ops.invalid':
+        await this.present(
+          target,
+          screen.id === 'admin.ops.invalid'
+            ? 'ورودی تنظیمات تجاری معتبر نیست. دوباره بفرست.'
+            : this.adminOpsPrompt(screen.field),
+          columnKeyboard(cancelRow),
+        );
+        return;
+      case 'admin.ops.saved':
+        await this.showCommercialSettings(target);
         return;
       case 'support.submitted':
         await this.present(
@@ -659,6 +747,55 @@ export class TelegramCommerceBot {
         await this.routeAction('home', target, customer, false);
       } else if (data === SHOP_CALLBACK) {
         await this.routeAction('shop', target, customer, false);
+      } else if (data === TRIAL_CALLBACK) {
+        await this.routeAction('trial', target, customer, false);
+      } else if (data === SERVICES_CALLBACK) {
+        await this.routeAction('services', target, customer, false);
+      } else if (data === JOIN_REFRESH_CALLBACK) {
+        await this.routeAction('shop', target, customer, false);
+      } else if (data === 'trial:claim') {
+        await this.claimTrial(target, customer);
+      } else if (/^svc:\d+$/u.test(data)) {
+        await this.showCustomerService(target, customer, data.slice(4));
+      } else if (/^svc:link:\d+$/u.test(data)) {
+        await this.resendServiceLink(target, customer, data.slice('svc:link:'.length));
+      } else if (/^svc:guide:(ios|android|windows):\d+$/u.test(data)) {
+        const [, , platform, serviceId] = data.split(':');
+        await this.present(
+          target,
+          platformGuideText(platform as 'ios' | 'android' | 'windows'),
+          columnKeyboard([
+            { text: 'بازگشت به سرویس', callback_data: `svc:${serviceId ?? ''}` },
+            backToMenuButton(),
+          ]),
+        );
+      } else if (/^svc:qr:\d+$/u.test(data)) {
+        await this.sendServiceQr(target, customer, data.slice('svc:qr:'.length));
+      } else if (data === ADMIN_OPS_CALLBACK) {
+        this.requireAdmin(actorId);
+        await this.showCommercialSettings(target);
+      } else if (data === 'ops:trial') {
+        this.requireAdmin(actorId);
+        await this.toggleTrial(target);
+      } else if (data === 'ops:channel' || data === 'ops:variant' || data === 'ops:reminders' || data === 'ops:block') {
+        this.requireAdmin(actorId);
+        await this.startAdminOpsField(
+          target,
+          customer,
+          data === 'ops:channel'
+            ? 'channel'
+            : data === 'ops:variant'
+              ? 'trialVariant'
+              : data === 'ops:reminders'
+                ? 'reminderDays'
+                : 'blockCustomer',
+        );
+      } else if (data === ADMIN_BROADCAST_CALLBACK) {
+        this.requireAdmin(actorId);
+        await this.startBroadcast(target, customer);
+      } else if (data.startsWith(ADMIN_BROADCAST_CANCEL_PREFIX)) {
+        this.requireAdmin(actorId);
+        await this.cancelBroadcast(target, actorId, data.slice(ADMIN_BROADCAST_CANCEL_PREFIX.length));
       } else if (data === GUIDE_CALLBACK) {
         await this.routeAction('guide', target, customer, false);
       } else if (data === HELP_CALLBACK) {
@@ -703,13 +840,25 @@ export class TelegramCommerceBot {
         this.requireAdmin(actorId);
         await this.showAdminOrder(target, data.slice('admin:order:'.length));
       } else if (/^cat:\d+$/u.test(data)) {
+        if (!(await this.ensureChannelGate(target, customer, 'shop'))) {
+          return;
+        }
         await this.showCategory(target, data.slice(4), customer);
       } else if (/^product:\d+:\d+:\d+$/u.test(data)) {
+        if (!(await this.ensureChannelGate(target, customer, 'shop'))) {
+          return;
+        }
         const [, categoryId = '', productId = '', page = '0'] = data.split(':');
         await this.showProductPlans(target, categoryId, productId, Number(page), customer);
       } else if (/^variant:\d+$/u.test(data)) {
+        if (!(await this.ensureChannelGate(target, customer, 'shop'))) {
+          return;
+        }
         await this.showVariant(target, data.slice(8), customer);
       } else if (/^buy:\d+$/u.test(data)) {
+        if (!(await this.ensureChannelGate(target, customer, 'shop'))) {
+          return;
+        }
         const variantId = data.slice(4);
         const variant = await this.commerce.getVariantForCustomer(variantId, customer);
         await CommerceFlowHandler.startPurchase(this.sessions, {
@@ -779,6 +928,23 @@ export class TelegramCommerceBot {
     }
   }
 
+  public async dispatchDueReminders(): Promise<void> {
+    await this.commercial.dispatchDueReminders(async (input) => {
+      await this.messenger.sendMessage(
+        input.chatId,
+        reminderNoticeText(input.kind, `${input.productName} — ${input.variantName}`),
+        undefined,
+        { parseMode: 'HTML' },
+      );
+    });
+  }
+
+  public async dispatchDueBroadcasts(): Promise<void> {
+    await this.commercial.dispatchDueBroadcasts(async (input) => {
+      await this.messenger.sendMessage(input.chatId, input.body);
+    });
+  }
+
   public async publishDailySummary(): Promise<boolean> {
     if (this.dailySummary === null) {
       return false;
@@ -795,10 +961,19 @@ export class TelegramCommerceBot {
   ): Promise<void> {
     switch (action) {
       case 'home':
-        await this.showHome(target, customer.telegramUserId, showWelcomeMedia);
+        await this.showHome(target, customer, showWelcomeMedia);
         return;
       case 'shop':
+        if (!(await this.ensureChannelGate(target, customer, 'shop'))) {
+          return;
+        }
         await this.showRootCategories(target, this.isAdmin(customer.telegramUserId));
+        return;
+      case 'trial':
+        await this.showTrial(target, customer);
+        return;
+      case 'services':
+        await this.showCustomerServices(target, customer);
         return;
       case 'guide':
         await this.present(target, guideText(), guideInlineKeyboard());
@@ -859,7 +1034,7 @@ export class TelegramCommerceBot {
 
   private async showHome(
     target: MenuTarget,
-    actorId: string,
+    customer: TelegramCustomerInput,
     showWelcomeMedia: boolean,
   ): Promise<void> {
     if (target.messageId !== undefined) {
@@ -873,10 +1048,18 @@ export class TelegramCommerceBot {
         brandWelcomeCaption(),
       );
     }
-    const admin = this.isAdmin(actorId);
-    await this.messenger.sendMessage(target.chatId, homeText(admin), homeReplyKeyboard(admin), {
-      parseMode: 'HTML',
-    });
+    const admin = this.isAdmin(customer.telegramUserId);
+    const { customer: recorded } = await this.repository.upsertTelegramCustomer(customer);
+    const trialEligible =
+      !admin &&
+      recorded.shopBlocked !== true &&
+      (await this.commercial.isTrialEligible(recorded.id));
+    await this.messenger.sendMessage(
+      target.chatId,
+      homeText(admin),
+      homeReplyKeyboard(admin, { trialEligible }),
+      { parseMode: 'HTML' },
+    );
   }
 
   private async showRootCategories(target: MenuTarget, isAdmin: boolean): Promise<void> {
@@ -2601,7 +2784,7 @@ export class TelegramCommerceBot {
       return;
     }
     const deliveryJob = this.delivery === null ? null : await this.delivery.getJobForOrder(orderId);
-    const buttons = [
+    const buttons: { text: string; callback_data?: string; url?: string }[] = [
       { text: 'تأیید و ساخت سرویس ✅', callback_data: `approve:${order.id}` },
       { text: 'رد رسید ❌', callback_data: `reject:${order.id}` },
       { text: 'مشاهده رسید 🧾', callback_data: `admin:proof:${order.id}` },
@@ -2839,6 +3022,309 @@ export class TelegramCommerceBot {
     } catch {
       // Optional welcome media must never block the home screen.
     }
+  }
+
+  private async ensureChannelGate(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+    next: 'shop' | 'trial',
+  ): Promise<boolean> {
+    const decision = await this.commercial.evaluateChannelGate({
+      telegramUserId: customer.telegramUserId,
+      isAdmin: this.isAdmin(customer.telegramUserId),
+    });
+    if (decision.allowed) {
+      return true;
+    }
+    const joinButtons = decision.channels.flatMap((channel) => {
+      const url = joinUrlForChannel(channel);
+      return url === null ? [] : [{ text: `عضویت در ${channel.username ?? 'کانال'}`, url }];
+    });
+    await this.present(
+      target,
+      forcedJoinText(decision.reason === 'unavailable' ? 'unavailable' : 'missing'),
+      columnKeyboard([
+        ...joinButtons,
+        {
+          text: 'بررسی مجدد',
+          callback_data: next === 'trial' ? TRIAL_CALLBACK : JOIN_REFRESH_CALLBACK,
+        },
+        backToMenuButton(),
+      ]),
+    );
+    return false;
+  }
+
+  private async showTrial(target: MenuTarget, customer: TelegramCustomerInput): Promise<void> {
+    if (!(await this.ensureChannelGate(target, customer, 'trial'))) {
+      return;
+    }
+    const recorded = await this.commerce.recordCustomerActivity(customer);
+    if (recorded.customer.shopBlocked === true) {
+      await this.present(target, shopBlockedText(), columnKeyboard([backToMenuButton()]));
+      return;
+    }
+    if (!(await this.commercial.isTrialEligible(recorded.customer.id))) {
+      const settings = await this.commercial.getSettings();
+      await this.present(
+        target,
+        settings.trialEnabled ? trialAlreadyClaimedText() : trialUnavailableText(),
+        columnKeyboard([backToMenuButton()]),
+      );
+      return;
+    }
+    const settings = await this.commercial.getSettings();
+    if (settings.trialVariantId === null) {
+      await this.present(target, trialUnavailableText(), columnKeyboard([backToMenuButton()]));
+      return;
+    }
+    try {
+      const variant = await this.commerce.getVariant(settings.trialVariantId);
+      await this.present(
+        target,
+        trialOfferText({
+          durationDays: variant.durationDays,
+          dataLimitBytes: variant.dataLimitBytes,
+          deviceLimit: variant.deviceLimit,
+        }),
+        columnKeyboard([
+          { text: 'فعال‌سازی سرویس تست', callback_data: 'trial:claim' },
+          backToMenuButton(),
+        ]),
+      );
+    } catch {
+      await this.present(
+        target,
+        [
+          '<b>سرویس تست</b>',
+          'یک‌بار برای هر مشتری، بدون پرداخت کارت‌به‌کارت.',
+          'مدت و حجم از پلن تست تنظیم‌شده در فروشگاه می‌آید.',
+        ].join('\n'),
+        columnKeyboard([
+          { text: 'فعال‌سازی سرویس تست', callback_data: 'trial:claim' },
+          backToMenuButton(),
+        ]),
+      );
+    }
+  }
+
+  private async claimTrial(target: MenuTarget, customer: TelegramCustomerInput): Promise<void> {
+    if (!(await this.ensureChannelGate(target, customer, 'trial'))) {
+      return;
+    }
+    try {
+      const order = await this.commerce.beginTrial({
+        customer,
+        idempotencyKey: `trial:${customer.telegramUserId}`,
+      });
+      if (order.status === 'fulfilled') {
+        await this.present(
+          target,
+          'سرویس تست آماده است. لینک دسترسی از «سرویس‌های من» قابل دریافت است.',
+          columnKeyboard([
+            { text: MENU_LABEL.services, callback_data: SERVICES_CALLBACK },
+            backToMenuButton(),
+          ]),
+        );
+        return;
+      }
+      await this.present(
+        target,
+        provisioningDelayedText(),
+        columnKeyboard([backToMenuButton()]),
+      );
+    } catch (error: unknown) {
+      if (error instanceof DomainConflictError && error.code === 'TRIAL_ALREADY_CLAIMED') {
+        await this.present(target, trialAlreadyClaimedText(), columnKeyboard([backToMenuButton()]));
+        return;
+      }
+      if (error instanceof DomainConflictError && error.code === 'SHOP_BLOCKED') {
+        await this.present(target, shopBlockedText(), columnKeyboard([backToMenuButton()]));
+        return;
+      }
+      if (error instanceof DomainConflictError && error.code === 'TRIAL_NOT_CONFIGURED') {
+        await this.present(target, trialUnavailableText(), columnKeyboard([backToMenuButton()]));
+        return;
+      }
+      if (error instanceof DomainConflictError && error.code === 'PROVISIONING_DISABLED') {
+        await this.present(
+          target,
+          'سرویس تست ثبت شد ولی ساخت زنده فعلاً خاموش است. بعد از روشن شدن پایلوت، از صف ساخت ناموفق پیگیری می‌شود.',
+          columnKeyboard([backToMenuButton()]),
+        );
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async showCustomerServices(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+  ): Promise<void> {
+    const recorded = await this.commerce.recordCustomerActivity(customer);
+    const services = await this.commercial.listCustomerServices(recorded.customer.id);
+    await this.present(
+      target,
+      customerServicesText(services),
+      columnKeyboard([
+        ...services.map((service) => ({
+          text: buttonLabel(`${service.productName} — ${service.variantName}`),
+          callback_data: `svc:${service.id}`,
+        })),
+        backToMenuButton(),
+      ]),
+    );
+  }
+
+  private async showCustomerService(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+    serviceId: string,
+  ): Promise<void> {
+    await this.present(
+      target,
+      'لینک را دوباره بفرست، راهنمای اتصال را ببین، یا QR خصوصی بگیر. لینک در گزارش ادمین نیست.',
+      columnKeyboard([
+        { text: 'ارسال دوباره لینک', callback_data: `svc:link:${serviceId}` },
+        { text: 'QR خصوصی', callback_data: `svc:qr:${serviceId}` },
+        { text: 'راهنمای آیفون', callback_data: `svc:guide:ios:${serviceId}` },
+        { text: 'راهنمای اندروید', callback_data: `svc:guide:android:${serviceId}` },
+        { text: 'راهنمای ویندوز', callback_data: `svc:guide:windows:${serviceId}` },
+        { text: MENU_LABEL.services, callback_data: SERVICES_CALLBACK },
+        backToMenuButton(),
+      ]),
+    );
+  }
+
+  private async resendServiceLink(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+    serviceId: string,
+  ): Promise<void> {
+    const recorded = await this.commerce.recordCustomerActivity(customer);
+    const access = await this.commercial.requireServiceAccess(serviceId, recorded.customer.id);
+    await this.messenger.sendMessage(access.chatId, serviceAccessText(access.subscriptionUrl), undefined, {
+      parseMode: 'HTML',
+    });
+    await this.present(target, 'لینک دسترسی در پیام جداگانه ارسال شد.', columnKeyboard([backToMenuButton()]));
+  }
+
+  private async sendServiceQr(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+    serviceId: string,
+  ): Promise<void> {
+    const recorded = await this.commerce.recordCustomerActivity(customer);
+    const access = await this.commercial.requireServiceAccess(serviceId, recorded.customer.id);
+    if (this.messenger.sendPhotoBuffer === undefined) {
+      await this.resendServiceLink(target, customer, serviceId);
+      return;
+    }
+    const png = renderSubscriptionQrPng(access.subscriptionUrl);
+    await this.messenger.sendPhotoBuffer(access.chatId, png, 'QR خصوصی سرویس. برای دیگران نفرست.');
+    await this.present(target, 'QR در پیام جداگانه ارسال شد.', columnKeyboard([backToMenuButton()]));
+  }
+
+  private async showCommercialSettings(target: MenuTarget): Promise<void> {
+    const settings = await this.commercial.getSettings();
+    await this.present(
+      target,
+      commercialSettingsText({
+        trialEnabled: settings.trialEnabled,
+        trialVariantId: settings.trialVariantId,
+        channelCount: settings.forcedJoinChannels.length,
+        remindersEnabled: settings.remindersEnabled,
+        expiryReminderDays: settings.expiryReminderDays,
+        lowTrafficPercent: settings.lowTrafficPercent,
+      }),
+      adminScreenKeyboard([
+        { text: settings.trialEnabled ? 'خاموش کردن تست' : 'روشن کردن تست', callback_data: 'ops:trial' },
+        { text: 'تعیین پلن تست', callback_data: 'ops:variant' },
+        { text: 'افزودن کانال اجباری', callback_data: 'ops:channel' },
+        { text: 'روز یادآوری انقضا', callback_data: 'ops:reminders' },
+        { text: 'مسدود/آزاد کردن خرید', callback_data: 'ops:block' },
+      ]),
+    );
+  }
+
+  private async toggleTrial(target: MenuTarget): Promise<void> {
+    const settings = await this.commercial.getSettings();
+    await this.commercial.updateSettings({ trialEnabled: !settings.trialEnabled });
+    await this.showCommercialSettings(target);
+  }
+
+  private async startAdminOpsField(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+    field: AdminOpsField,
+  ): Promise<void> {
+    await AdminOpsFlowHandler.start(this.sessions, {
+      telegramUserId: customer.telegramUserId,
+      field,
+      now: new Date(),
+    });
+    await this.present(
+      target,
+      this.adminOpsPrompt(field),
+      columnKeyboard([flowCancelButton(), backToMenuButton()]),
+    );
+  }
+
+  private adminOpsPrompt(field: string | undefined): string {
+    if (field === 'channel') {
+      return 'آیدی عددی کانال یا یوزرنیم عمومی را بفرست. مثال: @NeoShop';
+    }
+    if (field === 'trialVariant') {
+      return 'شناسه عددی پلن تست را بفرست.';
+    }
+    if (field === 'reminderDays') {
+      return 'تعداد روز یادآوری انقضا را بین ۱ تا ۳۰ بفرست.';
+    }
+    return 'شناسه تلگرام مشتری را با + برای مسدود یا - برای آزاد بفرست. مثال: +10001';
+  }
+
+  private async applyAdminOpsField(field: AdminOpsField, text: string): Promise<void> {
+    if (field === 'channel') {
+      await this.commercial.addForcedJoinChannel(text);
+      return;
+    }
+    if (field === 'trialVariant') {
+      await this.commercial.updateSettings({ trialVariantId: text.trim() });
+      return;
+    }
+    if (field === 'reminderDays') {
+      await this.commercial.updateSettings({ expiryReminderDays: Number(text.trim()) });
+      return;
+    }
+    const trimmed = text.trim();
+    const blocked = trimmed.startsWith('+');
+    const telegramUserId = trimmed.replace(/^[+-]/u, '');
+    await this.commercial.setCustomerShopBlocked(telegramUserId, blocked);
+  }
+
+  private async startBroadcast(
+    target: MenuTarget,
+    customer: TelegramCustomerInput,
+  ): Promise<void> {
+    await AdminBroadcastFlowHandler.start(this.sessions, {
+      telegramUserId: customer.telegramUserId,
+      now: new Date(),
+    });
+    await this.present(
+      target,
+      broadcastPromptText(),
+      columnKeyboard([flowCancelButton(), backToMenuButton()]),
+    );
+  }
+
+  private async cancelBroadcast(
+    target: MenuTarget,
+    adminTelegramUserId: string,
+    jobId: string,
+  ): Promise<void> {
+    await this.commercial.cancelBroadcast(jobId, adminTelegramUserId);
+    await this.present(target, 'پیام همگانی لغو شد.', adminScreenKeyboard());
   }
 
   private isAdmin(telegramUserId: string): boolean {
