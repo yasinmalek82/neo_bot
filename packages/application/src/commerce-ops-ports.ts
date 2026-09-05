@@ -78,7 +78,10 @@ export interface CommercialRepository {
   getReferralAttribution(customerId: string): Promise<ReferralAttribution | null>;
   grantReferralRewardForPaidOrder(order: SalesOrder): Promise<ReferralReward | null>;
   getAdminSalesSnapshot(now: Date): Promise<AdminSalesSnapshot>;
-  listServicesDueForUsageSync(limit: number, staleBefore: Date): Promise<readonly UsageSyncTarget[]>;
+  listServicesDueForUsageSync(
+    limit: number,
+    staleBefore: Date,
+  ): Promise<readonly UsageSyncTarget[]>;
   persistServiceUsedTraffic(input: UsageSyncWrite): Promise<boolean>;
   countDueUsageSync(staleBefore: Date): Promise<number>;
 }

@@ -44,9 +44,9 @@ describe('commercial wave 1 domain rules', () => {
       referralInviteeDiscountIrr: 10_000n,
       referralMaxRewardsPerReferrer: 20,
     });
-    expect(() =>
-      validateStorefrontOpsSettingsPatch({ referralReferrerCreditIrr: -1n }),
-    ).toThrow('INVALID_REFERRAL_CREDIT');
+    expect(() => validateStorefrontOpsSettingsPatch({ referralReferrerCreditIrr: -1n })).toThrow(
+      'INVALID_REFERRAL_CREDIT',
+    );
   });
 
   it('treats creator, administrator, member and restricted-is-member as joined', () => {

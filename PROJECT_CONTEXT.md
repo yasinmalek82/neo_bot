@@ -1,9 +1,9 @@
 <!--
 context-schema: 1
-last-updated: 2026-09-05T09:52:58.619Z
-source-fingerprint: f8365e972f54dcb1d48a5ad8cbae7de3d6eb981a9a3e19ba8aaa50f4c58165a9
+last-updated: 2026-09-05T09:55:35.842Z
+source-fingerprint: 8c5561cbeeb0d6e93fe473fafa9bae06b3da39c6f7ea9eb5c48d16a6c8ebf5f3
 current-phase: commercial-wave2
-next-task: wave2-check-then-owner-authorized-isolated-pilot-gates
+next-task: owner-authorized-isolated-pilot-gates
 -->
 
 # neo_bot Project Context
@@ -103,7 +103,7 @@ Create a new ADR before materially changing one of these decisions.
 Last evidence refresh: `2026-09-05`, Commercial Wave 2 (read-only PasarGuard used-traffic sync,
 referral/invite, admin sales snapshot) is implemented on `cursor/wave2-commercial-848a` from the
 Wave 1 commercial-pilot baseline. ADR 0023 and migration `0016` record the durable decisions.
-Unit evidence below still describes the Wave 1 local check until the Wave 2 gate is recorded.
+Local `pnpm check` is green for this branch. Isolated/live evidence is unchanged.
 Isolated local Slice 1 runtime and first-host evidence remain unchanged historical records, not a
 new live check. Feature `004-telegram-home-concept` artifacts are not on this remote; the visual
 baseline used was ADR 0013 ReplyKeyboard home plus the existing `telegram-menu` mixed layout.
@@ -300,9 +300,9 @@ off-host backup restoration or public security.
 | Legacy import and cutover            | Not started | Must begin read-only with backup, preflight, rollback and controlled cutover.                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Free trial / test service            | Partial     | One write-once claim plus `order_kind=trial` amount 0. Admin ops settings choose enable + catalog variant (duration/traffic/devices/groups). Home shows the trial key only when eligible. Repeats refuse idempotently. Fulfillment reuses the paid create path and still honors `PROVISIONING_MODE` / `PILOT_ENABLED`. Local unit evidence only; live provision remains gated.                                                                                                            |
 | Forced channel join                  | Partial     | Owner configures channel IDs/usernames on ops settings. Shop/trial/checkout fail closed on Telegram membership errors with join + refresh copy. Allowlisted admins bypass. Local unit evidence only; live `getChatMember` on a real channel is unproven.                                                                                                                                                                                                                                  |
-| Expiry / low-traffic reminders       | Partial     | Outbox-style `service_reminder_deliveries` with idempotent window keys. Persian copy, no subscription URL. Shop-blocked customers skipped. Low-traffic enqueues only when `used_traffic_bytes` is known. Wave 2 adds a read-only PasarGuard `UsageSyncUseCase` that writes only that column plus `usage_synced_at`; no entitlement mutation; mocked/gated in tests. Dispatcher is in-process like reports. Local unit evidence not yet recorded for Wave 2.                                                                                      |
-| Referral / invite                    | Partial     | Personal `/start r{telegramUserId}` deep-link, write-once attribution, no self-referral, one reward per referred user, per-referrer cap. Wallet credit and optional first-purchase discount fire on first paid fulfillment only (not trial). Durable `referral_rewards` plus wallet `kind=referral`. Admin ops settings in chat. Local unit evidence not yet recorded.                                                                                                                          |
-| Admin sales snapshot                 | Partial     | Private-chat Postgres snapshot for today and 7d in `Asia/Tehran`: orders by status, approximate fulfilled revenue, new customers, open tickets, pending receipt reviews. No Telegram or PasarGuard I/O. Local unit evidence not yet recorded.                                                                                                                                                                                                                                      |
+| Expiry / low-traffic reminders       | Partial     | Outbox-style `service_reminder_deliveries` with idempotent window keys. Persian copy, no subscription URL. Shop-blocked customers skipped. Low-traffic enqueues only when `used_traffic_bytes` is known. Wave 2 adds a read-only PasarGuard `UsageSyncUseCase` that writes only that column plus `usage_synced_at`; no entitlement mutation; mocked/gated in tests. Dispatcher is in-process like reports. Local unit evidence only; live GET remains unproven.                           |
+| Referral / invite                    | Partial     | Personal `/start r{telegramUserId}` deep-link, write-once attribution, no self-referral, one reward per referred user, per-referrer cap. Wallet credit and optional first-purchase discount fire on first paid fulfillment only (not trial). Durable `referral_rewards` plus wallet `kind=referral`. Admin ops settings in chat. Local unit evidence only; live invite/pay remains unproven.                                                                                              |
+| Admin sales snapshot                 | Partial     | Private-chat Postgres snapshot for today and 7d in `Asia/Tehran`: orders by status, approximate fulfilled revenue, new customers, open tickets, pending receipt reviews. No Telegram or PasarGuard I/O. Local unit evidence only.                                                                                                                                                                                                                                                         |
 | My-services deliverability           | Partial     | «سرویس‌های من» lists local fulfilled bindings, resends the access link, offers iOS/Android/Windows guides, and can send an in-memory QR. URLs stay off list screens, jobs, reports and logs. QR needs `sendPhotoBuffer`; otherwise the link is resent. Local unit evidence only.                                                                                                                                                                                                          |
 | Admin broadcast                      | Partial     | Allowlisted admin queues a one-shot durable job with paginated/rate-limited dispatch and cancel. Reports store hash + counts, not the body. Durable `admin.broadcast` session never stores the body. Local unit evidence only; no live Telegram send.                                                                                                                                                                                                                                     |
 | Commercial pilot hardening           | Partial     | Health exposes `provisioning.mode` / `pilotEnabled` and commercial queue counts without bodies or URLs. Missing Wave 1 tables do not fail `/health`. Runbook notes owner-only gates: webhook TLS, isolated PasarGuard group, backups, phone smoke. No deploy, no live PasarGuard mutation, no real Telegram in CI.                                                                                                                                                                        |
@@ -430,12 +430,12 @@ Current phase: **commercial-wave2**. Wave 1 commercial blockers plus Wave 2 usag
 referral/invite, and admin sales snapshot are in source on `cursor/wave2-commercial-848a`.
 ADR 0022 and ADR 0023. Not deployed.
 
-Next task: record a green local `pnpm check` for Wave 2, then owner-authorized isolated-database
-apply of migrations `0014`+`0015`+`0016`, then owner-only live gates (public HTTPS webhook + TLS,
-prepared PasarGuard group, off-host backups, phone smoke of `/start` → shop or trial → receipt →
-delivery, plus invite and sales-snapshot chat checks). Do not treat local unit evidence as phone
-or production proof. Isolated or live PasarGuard mutation remains a separate product-risk
-decision. Remaining operator/staff memory-only Telegram input can return after those gates.
+Next task: owner-authorized isolated-database apply of migrations `0014`+`0015`+`0016`, then
+owner-only live gates (public HTTPS webhook + TLS, prepared PasarGuard group, off-host backups,
+phone smoke of `/start` → shop or trial → receipt → delivery, plus invite and sales-snapshot
+chat checks). Do not treat local unit evidence as phone or production proof. Isolated or live
+PasarGuard mutation remains a separate product-risk decision. Remaining operator/staff
+memory-only Telegram input can return after those gates.
 
 Expected sequence:
 
@@ -517,8 +517,12 @@ Keep entries concise and newest first. This is an operational summary, not a tra
   used-traffic sync, personal start-link referral with paid-fulfillment wallet/discount rewards,
   and a Postgres admin sales snapshot. ADR 0023 and migration `0016`. Card-to-card + wallet stay
   the only rails. PasarGuard stays the only panel. No AGPL copy, no live provision, no deploy.
-- Validation: local `pnpm check` not yet the recorded Wave 2 evidence at this handoff.
-- Next: finish the Wave 2 check gate, then owner-authorized isolated apply of `0014`+`0015`+`0016`.
+- Validation: `pnpm check` passed (build, typecheck, lint, format, architecture, tests).
+  Unit suites: domain `37`, application `88`, PasarGuard `10`, database `2`, bot-api `151`,
+  admin-web `5` (`293` total). No production migrate, Telegram send, or PasarGuard
+  mutation. No phone or production proof.
+- Next: owner-authorized isolated apply of `0014`+`0015`+`0016`, then webhook TLS, isolated
+  PasarGuard group, backups, and phone smoke.
 
 ### 2026-09-05 - Commercial Wave 1 for an Iranian Telegram shop
 

@@ -29,7 +29,7 @@ export interface ReferralInvite {
 }
 
 export function parseReferralStartPayload(raw: string): string | null {
-  const match = raw.trim().match(/^r(\d{1,20})$/u);
+  const match = /^r(\d{1,20})$/u.exec(raw.trim());
   return match?.[1] ?? null;
 }
 
@@ -59,7 +59,9 @@ export function isSelfReferral(
   return inviteeTelegramUserId === referrerTelegramUserId;
 }
 
-export function isPaidFulfillmentEligible(order: Pick<SalesOrder, 'kind' | 'status' | 'amountIrr'>): boolean {
+export function isPaidFulfillmentEligible(
+  order: Pick<SalesOrder, 'kind' | 'status' | 'amountIrr'>,
+): boolean {
   return order.status === 'fulfilled' && order.kind !== 'trial' && order.amountIrr > 0n;
 }
 

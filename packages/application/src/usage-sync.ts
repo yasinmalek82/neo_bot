@@ -10,7 +10,10 @@ export interface UsageReader {
 }
 
 export interface UsageSyncRepository {
-  listServicesDueForUsageSync(limit: number, staleBefore: Date): Promise<readonly UsageSyncTarget[]>;
+  listServicesDueForUsageSync(
+    limit: number,
+    staleBefore: Date,
+  ): Promise<readonly UsageSyncTarget[]>;
   persistServiceUsedTraffic(input: UsageSyncWrite): Promise<boolean>;
   countDueUsageSync(staleBefore: Date): Promise<number>;
 }

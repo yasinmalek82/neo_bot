@@ -36,9 +36,9 @@ describe('referral domain rules', () => {
     expect(
       isPaidFulfillmentEligible({ kind: 'renewal', status: 'fulfilled', amountIrr: 150_000n }),
     ).toBe(true);
-    expect(
-      isPaidFulfillmentEligible({ kind: 'trial', status: 'fulfilled', amountIrr: 0n }),
-    ).toBe(false);
+    expect(isPaidFulfillmentEligible({ kind: 'trial', status: 'fulfilled', amountIrr: 0n })).toBe(
+      false,
+    );
     expect(
       isPaidFulfillmentEligible({ kind: 'purchase', status: 'provisioning', amountIrr: 150_000n }),
     ).toBe(false);

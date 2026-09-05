@@ -1981,8 +1981,7 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
         'select count(*)::int as n from referral_rewards where referrer_customer_id = $1',
         [link.referrer_customer_id],
       );
-      const underCap =
-        (rewardCount.rows[0]?.n ?? 0) < ops.referralMaxRewardsPerReferrer;
+      const underCap = (rewardCount.rows[0]?.n ?? 0) < ops.referralMaxRewardsPerReferrer;
       const blocked = referrer.rows[0]?.shop_blocked === true;
       const credit =
         !blocked && underCap && ops.referralReferrerCreditIrr > 0n
@@ -2657,7 +2656,7 @@ async function applyReferralInviteeDiscount(
      from storefront_ops_settings where id = 1`,
   );
   const ops = settings.rows[0];
-  if (ops === undefined || !ops.referral_enabled) {
+  if (!ops?.referral_enabled) {
     return { amountIrr: priceIrr, discountApplied: false };
   }
   const discountIrr = BigInt(ops.referral_invitee_discount_irr);
@@ -2669,7 +2668,7 @@ async function applyReferralInviteeDiscount(
      from referral_attributions where customer_id = $1 for update`,
     [customerId],
   );
-  if (attribution.rows[0] === undefined || attribution.rows[0].invitee_discount_order_id !== null) {
+  if (attribution.rows[0]?.invitee_discount_order_id !== null) {
     return { amountIrr: priceIrr, discountApplied: false };
   }
   const priced = applyInviteeCheckoutDiscount(priceIrr, discountIrr);

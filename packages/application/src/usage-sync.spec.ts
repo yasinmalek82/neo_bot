@@ -24,9 +24,9 @@ describe('UsageSyncUseCase', () => {
     const getUserById = vi.fn().mockResolvedValue({ usedTrafficBytes: 80n });
     const useCase = new UsageSyncUseCase(
       {
-        listServicesDueForUsageSync: vi.fn().mockResolvedValue([
-          { serviceId: '4', targetUserId: 6, usedTrafficBytes: null },
-        ]),
+        listServicesDueForUsageSync: vi
+          .fn()
+          .mockResolvedValue([{ serviceId: '4', targetUserId: 6, usedTrafficBytes: null }]),
         persistServiceUsedTraffic,
         countDueUsageSync: vi.fn().mockResolvedValue(1),
       },
@@ -45,18 +45,32 @@ describe('UsageSyncUseCase', () => {
       usedTrafficBytes: 80n,
       remoteFound: true,
     });
-    expect(JSON.stringify(persistServiceUsedTraffic.mock.calls[0]?.[0])).not.toMatch(
-      /expire|group|subscription/iu,
-    );
+    const persisted = persistServiceUsedTraffic.mock.calls[0]?.[0] as
+      | {
+          readonly serviceId: string;
+          readonly targetUserId: number;
+          readonly usedTrafficBytes: bigint;
+          readonly remoteFound: boolean;
+        }
+      | undefined;
+    expect(persisted).toEqual({
+      serviceId: '4',
+      targetUserId: 6,
+      usedTrafficBytes: 80n,
+      remoteFound: true,
+    });
+    expect(persisted).not.toHaveProperty('expiresAt');
+    expect(persisted).not.toHaveProperty('groupIds');
+    expect(persisted).not.toHaveProperty('subscriptionUrl');
   });
 
   it('marks a missing remote user synced without inventing usage', async () => {
     const persistServiceUsedTraffic = vi.fn().mockResolvedValue(true);
     const useCase = new UsageSyncUseCase(
       {
-        listServicesDueForUsageSync: vi.fn().mockResolvedValue([
-          { serviceId: '4', targetUserId: 6, usedTrafficBytes: 10n },
-        ]),
+        listServicesDueForUsageSync: vi
+          .fn()
+          .mockResolvedValue([{ serviceId: '4', targetUserId: 6, usedTrafficBytes: 10n }]),
         persistServiceUsedTraffic,
         countDueUsageSync: vi.fn().mockResolvedValue(0),
       },
