@@ -1115,6 +1115,225 @@ export class PostgresCommerceRepository implements CommerceRepository, Commercia
     return result.rows[0] ?? null;
   }
 
+
+  public async findRepresentativeByCodeOrTelegram(input: {
+    readonly code?: string;
+    readonly telegramUserId?: number;
+  }): Promise<{ id: string; code: string; telegramUserId: number; active: boolean } | null> {
+    if (input.code !== undefined) {
+      const rows = await this.pool.query<{
+        id: string;
+        code: string;
+        telegram_user_id: string;
+        active: boolean;
+      }>(
+        `select id::text, code, telegram_user_id::text, active
+         from representatives where code = $1`,
+        [input.code],
+      );
+      const row = rows.rows[0];
+      if (row === undefined) return null;
+      return {
+        id: row.id,
+        code: row.code,
+        telegramUserId: Number(row.telegram_user_id),
+        active: row.active,
+      };
+    }
+    if (input.telegramUserId !== undefined) {
+      const rows = await this.pool.query<{
+        id: string;
+        code: string;
+        telegram_user_id: string;
+        active: boolean;
+      }>(
+        `select id::text, code, telegram_user_id::text, active
+         from representatives where telegram_user_id = $1`,
+        [input.telegramUserId],
+      );
+      const row = rows.rows[0];
+      if (row === undefined) return null;
+      return {
+        id: row.id,
+        code: row.code,
+        telegramUserId: Number(row.telegram_user_id),
+        active: row.active,
+      };
+    }
+    return null;
+  }
+
+  public async getRepresentativeWallet(
+    representativeId: string,
+  ): Promise<import('@neo-bot/domain').RepresentativeWallet | null> {
+    const rows = await this.pool.query<{
+      representative_id: string;
+      balance_irr: string;
+      updated_at: Date;
+    }>(
+      `select representative_id::text, balance_irr::text, updated_at
+       from representative_wallets where representative_id = $1::bigint`,
+      [representativeId],
+    );
+    const row = rows.rows[0];
+    if (row === undefined) return null;
+    return {
+      representativeId: row.representative_id,
+      balanceIrr: BigInt(row.balance_irr),
+      updatedAt: row.updated_at,
+    };
+  }
+
+  public async creditRepresentativeWallet(input: {
+    readonly representativeId: string;
+    readonly amountIrr: bigint;
+    readonly kind: 'owner_credit' | 'adjustment';
+    readonly idempotencyKey: string;
+    readonly note?: string;
+  }): Promise<import('@neo-bot/domain').RepresentativeWalletLedgerEntry> {
+    return this.mutateRepresentativeWallet({
+      representativeId: input.representativeId,
+      amountIrr: input.amountIrr,
+      direction: 'credit',
+      kind: input.kind,
+      idempotencyKey: input.idempotencyKey,
+      note: input.note,
+    });
+  }
+
+  public async debitRepresentativeWallet(input: {
+    readonly representativeId: string;
+    readonly amountIrr: bigint;
+    readonly kind: 'purchase_debit' | 'adjustment';
+    readonly idempotencyKey: string;
+    readonly salesOrderId?: string;
+    readonly note?: string;
+  }): Promise<import('@neo-bot/domain').RepresentativeWalletLedgerEntry> {
+    return this.mutateRepresentativeWallet({
+      representativeId: input.representativeId,
+      amountIrr: -input.amountIrr,
+      direction: 'debit',
+      kind: input.kind,
+      idempotencyKey: input.idempotencyKey,
+      salesOrderId: input.salesOrderId,
+      note: input.note,
+    });
+  }
+
+  private async mutateRepresentativeWallet(input: {
+    readonly representativeId: string;
+    readonly amountIrr: bigint;
+    readonly direction: 'credit' | 'debit';
+    readonly kind: 'owner_credit' | 'purchase_debit' | 'adjustment';
+    readonly idempotencyKey: string;
+    readonly salesOrderId?: string;
+    readonly note?: string;
+  }): Promise<import('@neo-bot/domain').RepresentativeWalletLedgerEntry> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('begin');
+      const existing = await client.query<{
+        id: string;
+        representative_id: string;
+        amount_irr: string;
+        direction: 'credit' | 'debit';
+        kind: 'owner_credit' | 'purchase_debit' | 'adjustment';
+        idempotency_key: string;
+        sales_order_id: string | null;
+        note: string | null;
+        created_at: Date;
+      }>(
+        `select id::text, representative_id::text, amount_irr::text, direction, kind,
+                idempotency_key, sales_order_id::text, note, created_at
+         from representative_wallet_ledger where idempotency_key = $1`,
+        [input.idempotencyKey],
+      );
+      if (existing.rows[0] !== undefined) {
+        const bal = await client.query<{ balance_irr: string }>(
+          `select balance_irr::text from representative_wallets where representative_id = $1::bigint`,
+          [input.representativeId],
+        );
+        await client.query('commit');
+        const row = existing.rows[0];
+        return {
+          id: row.id,
+          representativeId: row.representative_id,
+          amountIrr: BigInt(row.amount_irr),
+          direction: row.direction,
+          kind: row.kind,
+          idempotencyKey: row.idempotency_key,
+          salesOrderId: row.sales_order_id,
+          note: row.note,
+          createdAt: row.created_at,
+          replayed: true,
+          balanceAfterIrr: BigInt(bal.rows[0]?.balance_irr ?? '0'),
+        };
+      }
+      const inserted = await client.query<{
+        id: string;
+        representative_id: string;
+        amount_irr: string;
+        direction: 'credit' | 'debit';
+        kind: 'owner_credit' | 'purchase_debit' | 'adjustment';
+        idempotency_key: string;
+        sales_order_id: string | null;
+        note: string | null;
+        created_at: Date;
+      }>(
+        `insert into representative_wallet_ledger(
+           representative_id, amount_irr, direction, kind, idempotency_key, sales_order_id, note
+         ) values ($1::bigint, $2, $3, $4, $5, $6::bigint, $7)
+         returning id::text, representative_id::text, amount_irr::text, direction, kind,
+                   idempotency_key, sales_order_id::text, note, created_at`,
+        [
+          input.representativeId,
+          input.amountIrr.toString(),
+          input.direction,
+          input.kind,
+          input.idempotencyKey,
+          input.salesOrderId ?? null,
+          input.note ?? null,
+        ],
+      );
+      await client.query(
+        `insert into representative_wallets(representative_id, balance_irr)
+         values ($1::bigint, $2)
+         on conflict (representative_id) do update set
+           balance_irr = representative_wallets.balance_irr + excluded.balance_irr,
+           updated_at = now()`,
+        [input.representativeId, input.amountIrr.toString()],
+      );
+      const wallet = await client.query<{ balance_irr: string }>(
+        `select balance_irr::text from representative_wallets where representative_id = $1::bigint`,
+        [input.representativeId],
+      );
+      const balanceAfter = BigInt(wallet.rows[0]!.balance_irr);
+      if (balanceAfter < 0n) {
+        throw new DomainConflictError('INSUFFICIENT_REPRESENTATIVE_WALLET');
+      }
+      await client.query('commit');
+      const row = inserted.rows[0]!;
+      return {
+        id: row.id,
+        representativeId: row.representative_id,
+        amountIrr: BigInt(row.amount_irr),
+        direction: row.direction,
+        kind: row.kind,
+        idempotencyKey: row.idempotency_key,
+        salesOrderId: row.sales_order_id,
+        note: row.note,
+        createdAt: row.created_at,
+        replayed: false,
+        balanceAfterIrr: balanceAfter,
+      };
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   public creditWalletTopUp(input: {
     readonly customerId: string;
     readonly amountIrr: bigint;
