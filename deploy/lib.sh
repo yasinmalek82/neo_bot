@@ -473,7 +473,7 @@ neo_require_host_tools() {
   family="$(neo_os_family)"
   neo_err 'Ubuntu/Debian example: apt-get install -y git curl openssl docker.io docker-compose-v2'
   if [[ "$family" == 'ubuntu' || "$family" == 'debian' ]]; then
-    if neo_confirm 'Install missing packages? Type yes / نصب بسته‌ها؟ yes: '; then
+    if neo_confirm 'Install missing packages? Type yes: '; then
       neo_install_host_packages
       neo_need_cmd git
       neo_need_cmd curl
@@ -617,13 +617,13 @@ neo_write_production_env() {
   if ! neo_validate_postgres_password "$postgres_password"; then
     neo_err "Existing PostgreSQL password is not URL-safe for DATABASE_URL."
     neo_err "Changing .env alone can break the live database; rotate the DB password first."
-    if ! neo_confirm "DB password already rotated? Type yes / رمز DB چرخانده شده؟ yes: "; then
+    if ! neo_confirm "DB password already rotated? Type yes: "; then
 
 
       return 1
     fi
     while true; do
-      postgres_password="$(neo_prompt_secret "New URL-safe PostgreSQL password / رمز جدید (hidden): ")"
+      postgres_password="$(neo_prompt_secret "New URL-safe PostgreSQL password (hidden): ")"
       if neo_validate_postgres_password "$postgres_password"; then
         break
       fi
@@ -706,7 +706,7 @@ neo_collect_setup_answers() {
 
   local host token admin_ids report_group panel_url panel_key bot_username
   while true; do
-    host="$(neo_prompt_default 'Public hostname / نام دامنه عمومی (DNS A record; no https://)' "$current_host")"
+    host="$(neo_prompt_default 'Public hostname (DNS A record; no https://)' "$current_host")"
     if neo_validate_hostname "$host"; then
       break
     fi
@@ -714,12 +714,12 @@ neo_collect_setup_answers() {
 
   while true; do
     if [[ "$reuse" == '1' ]] && neo_env_get TELEGRAM_BOT_TOKEN >/dev/null; then
-      token="$(neo_prompt_secret 'BotFather token / توکن BotFather (hidden; empty keeps current): ')"
+      token="$(neo_prompt_secret 'BotFather token (hidden; empty keeps current): ')"
       if [[ -z "$token" ]]; then
         token="$(neo_env_get TELEGRAM_BOT_TOKEN)"
       fi
     else
-      token="$(neo_prompt_secret 'BotFather token / توکن BotFather (input hidden): ')"
+      token="$(neo_prompt_secret 'BotFather token (input hidden): ')"
     fi
     if neo_validate_bot_token "$token"; then
       break
@@ -727,7 +727,7 @@ neo_collect_setup_answers() {
   done
 
   while true; do
-    admin_ids="$(neo_prompt_default 'Admin Telegram IDs / شناسه عددی مدیران (comma-separated)' "$current_admins")"
+    admin_ids="$(neo_prompt_default 'Admin Telegram IDs (comma-separated)' "$current_admins")"
     admin_ids="$(neo_normalize_admin_ids "$admin_ids")"
     if neo_validate_admin_ids "$admin_ids"; then
       break
@@ -735,14 +735,14 @@ neo_collect_setup_answers() {
   done
 
   while true; do
-    report_group="$(neo_prompt_default 'Report group chat ID / شناسه گروه گزارش (empty skips topics)' "$current_report")"
+    report_group="$(neo_prompt_default 'Report group chat ID (empty skips topics)' "$current_report")"
     if neo_validate_report_chat_id "$report_group"; then
       break
     fi
   done
 
   while true; do
-    panel_url="$(neo_prompt_default 'PasarGuard URL / آدرس PasarGuard (empty keeps placeholder)' "$current_panel")"
+    panel_url="$(neo_prompt_default 'PasarGuard URL (empty keeps placeholder)' "$current_panel")"
     if [[ -z "$panel_url" ]]; then
       panel_url="$NEO_PLACEHOLDER_PANEL"
       break
@@ -754,12 +754,12 @@ neo_collect_setup_answers() {
 
   while true; do
     if [[ "$reuse" == '1' ]] && neo_env_get PASARGUARD_API_KEY >/dev/null; then
-      panel_key="$(neo_prompt_secret 'PasarGuard API key / کلید API (hidden; empty keeps current): ')"
+      panel_key="$(neo_prompt_secret 'PasarGuard API key (hidden; empty keeps current): ')"
       if [[ -z "$panel_key" ]]; then
         panel_key="$(neo_env_get PASARGUARD_API_KEY)"
       fi
     else
-      panel_key="$(neo_prompt_secret 'PasarGuard API key / کلید API (hidden; empty keeps placeholder): ')"
+      panel_key="$(neo_prompt_secret 'PasarGuard API key (hidden; empty keeps placeholder): ')"
       if [[ -z "$panel_key" ]]; then
         panel_key="$NEO_PLACEHOLDER_KEY"
       fi
@@ -770,7 +770,7 @@ neo_collect_setup_answers() {
   done
 
   while true; do
-    bot_username="$(neo_prompt_default 'Public bot username / نام کاربری ربات بدون @ (empty skips invite links)' "$current_username")"
+    bot_username="$(neo_prompt_default 'Public bot username without @ (empty skips invite links)' "$current_username")"
     bot_username="${bot_username#@}"
     if neo_validate_bot_username "$bot_username"; then
       break
@@ -794,18 +794,18 @@ neo_install_or_reconfigure() {
   local mode='write'
   if neo_env_exists; then
     if ! neo_env_is_complete; then
-      neo_say '.env exists but is incomplete / فایل .env ناقص است؛ continuing with reconfigure.'
+      neo_say '.env exists but is incomplete; continuing with reconfigure.'
     else
-      neo_say '.env already exists / فایل .env از قبل وجود دارد.'
-      neo_say '  [k] keep current values and rebuild/start / حفظ مقادیر'
-      neo_say '  [r] reconfigure values / تغییر تنظیمات (secrets are preserved)'
-      neo_say '  [q] quit without changes / خروج'
+      neo_say '.env already exists.'
+      neo_say '  [k] keep current values and rebuild/start'
+      neo_say '  [r] reconfigure values (secrets are preserved)'
+      neo_say '  [q] quit without changes'
       local choice
-      choice="$(neo_prompt 'Choose k, r, or q / انتخاب: ')"
+      choice="$(neo_prompt 'Choose k, r, or q: ')"
       case "$choice" in
         k | K | keep) mode='keep' ;;
         r | R | reconfigure | yes) mode='write' ;;
-        *) neo_die 'Stopped without changing .env / بدون تغییر متوقف شد.' ;;
+        *) neo_die 'Stopped without changing .env.' ;;
       esac
     fi
   fi
@@ -875,7 +875,7 @@ neo_settings_menu() {
     return 1
   fi
   while true; do
-    neo_title 'Change settings / تغییر تنظیمات'
+    neo_title 'Change settings'
     neo_say "1) Hostname          $(neo_env_display TELEGRAM_PUBLIC_HOST)"
     neo_say "2) BotFather token   $(neo_env_display TELEGRAM_BOT_TOKEN)"
     neo_say "3) Admin IDs         $(neo_env_display TELEGRAM_ADMIN_IDS)"
@@ -887,13 +887,13 @@ neo_settings_menu() {
     neo_say "9) Provisioning mode $(neo_env_display PROVISIONING_MODE)"
     neo_say "10) Isolated group   $(neo_env_display PROVISIONING_ISOLATED_GROUP_ID)"
     neo_say "11) PILOT_ENABLED    $(neo_env_display PILOT_ENABLED)"
-    neo_say '0) Back / بازگشت'
+    neo_say '0) Back'
     local choice
-    choice="$(neo_prompt 'Settings choice / انتخاب تنظیمات: ')"
+    choice="$(neo_prompt 'Settings choice: ')"
     case "$choice" in
       1)
         local host
-        host="$(neo_prompt 'New public hostname / نام دامنه جدید (DNS only): ')"
+        host="$(neo_prompt 'New public hostname (DNS only): ')"
         if neo_apply_hostname "$host"; then
           neo_say 'Updated hostname, WEB_ORIGINS, and webhook URL.'
         fi
@@ -908,7 +908,7 @@ neo_settings_menu() {
         ;;
       3)
         local ids
-        ids="$(neo_normalize_admin_ids "$(neo_prompt 'Admin Telegram IDs / شناسه عددی مدیران (comma-separated): ')")"
+        ids="$(neo_normalize_admin_ids "$(neo_prompt 'Admin Telegram IDs (comma-separated): ')")"
         if neo_validate_admin_ids "$ids"; then
           neo_env_set TELEGRAM_ADMIN_IDS "$ids"
           neo_say 'Updated admin IDs.'
@@ -970,7 +970,7 @@ neo_settings_menu() {
         mode="$(neo_prompt 'PROVISIONING_MODE (disabled/isolated/live): ')"
         if neo_validate_provisioning_mode "$mode"; then
           if [[ "$mode" == 'live' ]]; then
-            if ! neo_confirm 'Live mode mutates PasarGuard. Type yes / حالت live تغییر می‌دهد؛ yes: '; then
+            if ! neo_confirm 'Live mode mutates PasarGuard. Type yes: '; then
               neo_err 'Kept previous provisioning mode.'
               continue
             fi
@@ -999,7 +999,7 @@ neo_settings_menu() {
         pilot="$(neo_prompt 'PILOT_ENABLED (true/false): ')"
         if neo_validate_bool "$pilot"; then
           if [[ "$pilot" == 'true' ]]; then
-            if ! neo_confirm 'Pilot mutations require an isolated group. Type yes / نیازمند گروه isolated؛ yes: '; then
+            if ! neo_confirm 'Pilot mutations require an isolated group. Type yes: '; then
               neo_err 'Kept PILOT_ENABLED unchanged.'
               continue
             fi
@@ -1009,7 +1009,7 @@ neo_settings_menu() {
         fi
         ;;
       0 | q | Q)
-        if neo_confirm 'Restart bot-api to apply .env? Type yes / راه‌اندازی مجدد؟ yes: '; then
+        if neo_confirm 'Restart bot-api to apply .env? Type yes: '; then
           neo_compose restart bot-api || true
         fi
         return 0
@@ -1036,7 +1036,7 @@ neo_update_from_git() {
   ref="$(neo_git_ref)"
   neo_say "Current checkout: ${NEO_ROOT}"
   neo_say "Requested ref: ${ref}"
-  if ! neo_confirm 'Fetch, fast-forward, rebuild? Type yes / دریافت و بازسازی؟ yes: '; then
+  if ! neo_confirm 'Fetch, fast-forward, rebuild? Type yes: '; then
     neo_say 'Update cancelled.'
     return 0
   fi
@@ -1072,14 +1072,14 @@ neo_service_menu() {
   neo_require_host_tools
   while true; do
     neo_title 'Services'
-    neo_say '1) Start / شروع'
-    neo_say '2) Stop (keeps volumes) / توقف (حجم‌ها حفظ می‌شوند)'
-    neo_say '3) Restart / راه‌اندازی مجدد'
-    neo_say '4) Status / وضعیت'
-    neo_say '5) Logs (last 80 lines) / گزارش‌ها'
-    neo_say '0) Back / بازگشت'
+    neo_say '1) Start'
+    neo_say '2) Stop (keeps volumes)'
+    neo_say '3) Restart'
+    neo_say '4) Status'
+    neo_say '5) Logs (last 80 lines)'
+    neo_say '0) Back'
     local choice
-    choice="$(neo_prompt 'Service choice / انتخاب سرویس: ')"
+    choice="$(neo_prompt 'Service choice: ')"
     case "$choice" in
       1) neo_compose up -d ;;
       2) neo_compose stop ;;
