@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Interactive neo_bot host management menu.
+# Never run with `bash -x` or `set -x`; prompts include secrets.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+export NEO_ROOT="$ROOT"
+# shellcheck source=lib.sh
+source "${ROOT}/deploy/lib.sh"
+
+neo_print_menu() {
+  neo_say ''
+  neo_say "$(neo_color '1;36' '┌──────────── neo_bot ────────────┐')"
+  neo_say "$(neo_color '1;36' '│  مدیریت نصب و سرویس روی VPS     │')"
+  neo_say "$(neo_color '1;36' '└─────────────────────────────────┘')"
+  neo_say "Checkout: ${NEO_ROOT}"
+  if neo_env_exists; then
+    neo_say "Hostname: $(neo_env_display TELEGRAM_PUBLIC_HOST)"
+  else
+    neo_say 'Hostname: (not installed)'
+  fi
+  neo_say ''
+  neo_say '1) Install / first setup'
+  neo_say '2) Update from git'
+  neo_say '3) Change settings'
+  neo_say '4) Start / stop / restart / status / logs'
+  neo_say '5) Backup database'
+  neo_say '6) Health check'
+  neo_say '0) Exit'
+}
+
+neo_dispatch() {
+  local choice="$1"
+  case "$choice" in
+    1 | install) neo_install_or_reconfigure ;;
+    2 | update) neo_update_from_git ;;
+    3 | settings) neo_settings_menu ;;
+    4 | services) neo_service_menu ;;
+    5 | backup) neo_backup_db ;;
+    6 | health) neo_health_check ;;
+    0 | q | Q | exit) exit 0 ;;
+    *)
+      neo_err 'Unknown choice.'
+      return 1
+      ;;
+  esac
+}
+
+if [[ "${1:-}" != '' ]]; then
+  neo_dispatch "$1"
+  exit 0
+fi
+
+while true; do
+  neo_print_menu
+  choice="$(neo_prompt 'Choose 0-6: ')"
+  neo_dispatch "$choice" || true
+done

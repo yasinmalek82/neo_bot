@@ -22,12 +22,31 @@ export const ADMIN_SUMMARY_CALLBACK = 'admin:summary';
 export const ADMIN_FAILED_CALLBACK = 'admin:failed';
 export const ADMIN_CATALOG_CALLBACK = 'admin:catalog';
 export const ADMIN_STORE_CALLBACK = 'admin:store';
+const FLOW_CANCEL_CALLBACK = 'flow:cancel';
+const FLOW_SKIP_COUPON_CALLBACK = 'flow:skip-coupon';
+export const WALLET_TOPUP_CALLBACK = 'wallet:topup';
+export const TICKET_NEW_CALLBACK = 'ticket:new';
+export const TICKET_FOLLOW_PREFIX = 'ticket:follow:';
+export const TRIAL_CALLBACK = 'trial';
+export const SERVICES_CALLBACK = 'services';
+export const JOIN_REFRESH_CALLBACK = 'join:refresh';
+export const ADMIN_OPS_CALLBACK = 'admin:ops';
+export const ADMIN_SALES_CALLBACK = 'admin:sales';
+export const ADMIN_BROADCAST_CALLBACK = 'admin:broadcast';
+export const ADMIN_BROADCAST_CANCEL_PREFIX = 'admin:broadcast:cancel:';
+export const INVITE_CALLBACK = 'invite';
 
 export const MENU_LABEL = {
+  home: 'منوی اصلی 🏠',
   shop: 'خرید سریع 🛍',
   guide: 'راهنمای انتخاب 🧭',
   order: 'پیگیری سفارش 📦',
   renew: 'تمدید سرویس ♻️',
+  wallet: 'شارژ کیف پول 💳',
+  ticket: 'تیکت پشتیبانی 🎫',
+  trial: 'سرویس تست 🎁',
+  services: 'سرویس‌های من 📡',
+  invite: 'دعوت دوستان 🎁',
   help: 'راهنما 📘',
   status: 'وضعیت سیستم ⚙️',
   reports: 'گزارش‌ها 📣',
@@ -44,6 +63,11 @@ export type MenuAction =
   | 'guide'
   | 'order'
   | 'renew'
+  | 'wallet'
+  | 'ticket'
+  | 'trial'
+  | 'services'
+  | 'invite'
   | 'help'
   | 'status'
   | 'reports'
@@ -53,7 +77,8 @@ export type MenuAction =
 
 interface CallbackButton {
   readonly text: string;
-  readonly callback_data: string;
+  readonly callback_data?: string;
+  readonly url?: string;
 }
 type InlineButton = CallbackButton;
 type InlineRow = InlineButton | readonly InlineButton[];
@@ -86,15 +111,35 @@ export function pairedKeyboard(buttons: readonly InlineButton[]): TelegramInline
   return inlineMenu(pairButtons(buttons));
 }
 
+export function parseTelegramStartCommand(
+  text: string,
+): { readonly payload: string | null } | null {
+  const match = /^\/start(?:@[A-Za-z0-9_]+)?(?:\s+([A-Za-z0-9_-]{1,64}))?$/u.exec(text.trim());
+  if (match === null) {
+    return null;
+  }
+  return { payload: match[1] ?? null };
+}
+
+export function isHomeMenuText(text: string): boolean {
+  const normalized = text.trim();
+  return (
+    parseTelegramStartCommand(normalized) !== null ||
+    normalized === 'منوی اصلی' ||
+    normalized === MENU_LABEL.home
+  );
+}
+
 export function matchMenuAction(text: string): MenuAction | null {
   const normalized = text.trim();
-  if (normalized === '/start' || normalized.startsWith('/start@') || normalized === 'منوی اصلی') {
+  if (isHomeMenuText(normalized)) {
     return 'home';
   }
   if (
     normalized === '/buy' ||
     normalized === MENU_LABEL.shop ||
     normalized === 'خرید سرویس' ||
+    normalized === 'خرید سریع' ||
     normalized === 'خرید'
   ) {
     return 'shop';
@@ -119,6 +164,25 @@ export function matchMenuAction(text: string): MenuAction | null {
     normalized === 'تمدید'
   ) {
     return 'renew';
+  }
+  if (normalized === MENU_LABEL.wallet || normalized === 'شارژ کیف پول') {
+    return 'wallet';
+  }
+  if (normalized === MENU_LABEL.ticket || normalized === 'تیکت پشتیبانی') {
+    return 'ticket';
+  }
+  if (
+    normalized === MENU_LABEL.trial ||
+    normalized === 'سرویس تست' ||
+    normalized === 'تست رایگان'
+  ) {
+    return 'trial';
+  }
+  if (normalized === MENU_LABEL.services || normalized === 'سرویس‌های من') {
+    return 'services';
+  }
+  if (normalized === MENU_LABEL.invite || normalized === 'دعوت دوستان') {
+    return 'invite';
   }
   if (
     normalized === '/help' ||
@@ -152,6 +216,7 @@ export function homeText(isAdmin: boolean): string {
     '<i>PRIVATE ACCESS</i>',
     '',
     'خرید سریع، پرداخت و ارسال رسید همه در همین گفتگو است.',
+    'شارژ کیف پول، سرویس‌های من و تیکت پشتیبانی از دکمه‌های پایین در دسترس است.',
     '',
     'دکمه‌های پایین صفحه را لمس کن؛ لازم نیست دستوری تایپ کنی.',
   ];
@@ -161,13 +226,23 @@ export function homeText(isAdmin: boolean): string {
   return lines.join('\n');
 }
 
-export function homeReplyKeyboard(isAdmin: boolean): TelegramPersistentKeyboardMarkup {
-  const rows: TelegramReplyKeyboardButton[][] = [
-    [{ text: buttonLabel(MENU_LABEL.shop) }],
+export function homeReplyKeyboard(
+  isAdmin: boolean,
+  extras: { readonly trialEligible?: boolean } = {},
+): TelegramPersistentKeyboardMarkup {
+  const rows: TelegramReplyKeyboardButton[][] = [[{ text: buttonLabel(MENU_LABEL.shop) }]];
+  if (extras.trialEligible === true) {
+    rows.push([{ text: buttonLabel(MENU_LABEL.trial) }]);
+  }
+  rows.push(
+    [{ text: buttonLabel(MENU_LABEL.services) }],
     [{ text: buttonLabel(MENU_LABEL.guide) }],
     [{ text: buttonLabel(MENU_LABEL.order) }, { text: buttonLabel(MENU_LABEL.renew) }],
+    [{ text: buttonLabel(MENU_LABEL.wallet) }, { text: buttonLabel(MENU_LABEL.ticket) }],
+    [{ text: buttonLabel(MENU_LABEL.invite) }],
     [{ text: buttonLabel(MENU_LABEL.help) }],
-  ];
+    [{ text: buttonLabel(MENU_LABEL.home) }],
+  );
   if (isAdmin) {
     rows.push([{ text: buttonLabel(MENU_LABEL.admin) }]);
   }
@@ -180,7 +255,7 @@ export function homeReplyKeyboard(isAdmin: boolean): TelegramPersistentKeyboardM
 }
 
 export function shopText(): string {
-  return ['<b>خرید سرویس</b>', 'یک دسته انتخاب کن تا پلن‌ها و قیمت هر پلن را ببینی.'].join('\n');
+  return ['<b>خرید سریع</b>', 'یک دسته انتخاب کن تا پلن‌ها و قیمت هر پلن را ببینی.'].join('\n');
 }
 
 export function homeReturnText(): string {
@@ -244,7 +319,7 @@ export function emptyShopText(isAdmin: boolean): string {
   }
   return [
     '<b>فروشگاه خالی است</b>',
-    'فعلاً پلن فعالی برای فروش منتشر نشده. کمی بعد دوباره «خرید سرویس» را بزن.',
+    'فعلاً پلن فعالی برای فروش منتشر نشده. کمی بعد دوباره «خرید سریع» را بزن.',
   ].join('\n');
 }
 
@@ -266,7 +341,7 @@ export function categoryText(input: {
   lines.push(
     input.hasItems
       ? 'یک محصول انتخاب کن تا پلن‌ها و قیمت‌ها را مقایسه کنی.'
-      : 'در این دسته پلن فعالی نیست. با دکمهٔ دستهٔ قبلی یا «خرید سرویس ⬅️» برگرد.',
+      : 'در این دسته پلن فعالی نیست. با دکمهٔ دستهٔ قبلی یا «خرید سریع ⬅️» برگرد.',
   );
   return lines.join('\n');
 }
@@ -280,7 +355,7 @@ export function missingCategoryText(): string {
 }
 
 export function shopBackButton(): InlineButton {
-  return { text: 'خرید سرویس ⬅️', callback_data: SHOP_CALLBACK };
+  return { text: 'خرید سریع ⬅️', callback_data: SHOP_CALLBACK };
 }
 
 export function categoryBackButton(
@@ -366,7 +441,84 @@ export function helpText(): string {
     'مبلغ نمایش‌داده‌شده را کارت‌به‌کارت کن و عکس رسید را در همین چت خصوصی بفرست.',
     'PDF و ویدیو پذیرفته نمی‌شود. بررسی رسید و اعلام نتیجه حداکثر ۶۰ دقیقه زمان می‌برد.',
     'پس از تأیید، لینک سرویس در همین گفتگوی خصوصی ارسال می‌شود.',
+    'شارژ کیف پول و تیکت پشتیبانی از دکمه‌های پایین صفحه یا همین پیام در دسترس است.',
   ].join('\n');
+}
+
+export function helpKeyboard(): TelegramInlineKeyboardMarkup {
+  return columnKeyboard([
+    { text: 'شارژ کیف پول', callback_data: WALLET_TOPUP_CALLBACK },
+    { text: 'تیکت پشتیبانی', callback_data: TICKET_NEW_CALLBACK },
+    backToMenuButton(),
+  ]);
+}
+
+export function discountPromptText(): string {
+  return [
+    '<b>کد تخفیف</b>',
+    'اگر کد تخفیف داری همین‌جا بفرست.',
+    'اگر نداری «بدون کد تخفیف» را بزن.',
+  ].join('\n');
+}
+
+export function invalidDiscountText(): string {
+  return 'این کد تخفیف معتبر نیست. دوباره بفرست یا بدون کد ادامه بده.';
+}
+
+export function walletAmountPromptText(): string {
+  return [
+    '<b>مبلغ شارژ کیف پول</b>',
+    'مبلغ را به تومان و فقط با عدد بفرست.',
+    'برای انصراف «لغو» یا «منوی اصلی» را بزن.',
+  ].join('\n');
+}
+
+export function invalidWalletAmountText(): string {
+  return 'مبلغ نامعتبر است. یک عدد مثبت به تومان بفرست.';
+}
+
+export function walletCreditedText(): string {
+  return 'شارژ کیف پول ثبت شد. اگر همین پیام تکرار شود، مبلغ دوباره کم یا زیاد نمی‌شود.';
+}
+
+export function ticketCreatePromptText(): string {
+  return [
+    '<b>تیکت پشتیبانی</b>',
+    'شرح مشکل را همین‌جا بفرست.',
+    'متن تیکت فقط در ثبت امن ذخیره می‌شود و در تاریخچه جلسه نمی‌ماند.',
+  ].join('\n');
+}
+
+export function ticketFollowUpPromptText(): string {
+  return 'پیام بعدی این تیکت را بفرست.';
+}
+
+export function invalidTicketBodyText(): string {
+  return 'متن تیکت خالی یا خیلی طولانی است. دوباره بفرست.';
+}
+
+export function ticketSubmittedText(): string {
+  return 'تیکت ثبت شد. اگر لازم بود از دکمه «پیام بعدی» ادامه بده.';
+}
+
+export function conversationExpiredText(): string {
+  return 'این مرحله منقضی شد. از منو دوباره شروع کن.';
+}
+
+export function conversationMalformedText(): string {
+  return 'این مرحله قابل ادامه نیست. از منو دوباره شروع کن.';
+}
+
+export function conversationCancelledText(): string {
+  return 'این مرحله لغو شد.';
+}
+
+export function discountSkipButton(): { readonly text: string; readonly callback_data: string } {
+  return { text: 'بدون کد تخفیف', callback_data: FLOW_SKIP_COUPON_CALLBACK };
+}
+
+export function flowCancelButton(): { readonly text: string; readonly callback_data: string } {
+  return { text: 'لغو', callback_data: FLOW_CANCEL_CALLBACK };
 }
 
 export function guideText(): string {
@@ -388,7 +540,7 @@ export function guideInlineKeyboard(): TelegramInlineKeyboardMarkup {
 
 export function orderStatusText(order: SalesOrder | null): string {
   if (order === null) {
-    return ['<b>سفارش باز نداری</b>', 'برای شروع، «خرید سرویس» را از منوی پایین انتخاب کن.'].join(
+    return ['<b>سفارش باز نداری</b>', 'برای شروع، «خرید سریع» را از منوی پایین انتخاب کن.'].join(
       '\n',
     );
   }
@@ -426,10 +578,9 @@ export function orderStatusText(order: SalesOrder | null): string {
     ].join('\n');
   }
   if (order.status === 'cancelled') {
-    return [
-      '<b>سفارش لغو شد</b>',
-      'برای شروع دوباره از منوی پایین «خرید سرویس» را انتخاب کن.',
-    ].join('\n');
+    return ['<b>سفارش لغو شد</b>', 'برای شروع دوباره از منوی پایین «خرید سریع» را انتخاب کن.'].join(
+      '\n',
+    );
   }
   return [
     '<b>سفارش منتظر پرداخت است</b>',
@@ -490,7 +641,7 @@ export function receiptRejectedText(): string {
 function noOpenOrderText(): string {
   return [
     '<b>سفارش باز پیدا نشد</b>',
-    'اول از منوی پایین «خرید سرویس» را بزن، بعد عکس رسید را بفرست.',
+    'اول از منوی پایین «خرید سریع» را بزن، بعد عکس رسید را بفرست.',
   ].join('\n');
 }
 
@@ -630,12 +781,9 @@ export function adminReportsText(input: {
 }
 
 export function adminReportsKeyboard(canPublishSummary: boolean): TelegramInlineKeyboardMarkup {
-  return columnKeyboard([
-    ...(canPublishSummary
-      ? [{ text: 'ارسال خلاصه امروز', callback_data: ADMIN_SUMMARY_CALLBACK }]
-      : []),
-    backToMenuButton(),
-  ]);
+  return adminScreenKeyboard(
+    canPublishSummary ? [{ text: 'ارسال خلاصه امروز', callback_data: ADMIN_SUMMARY_CALLBACK }] : [],
+  );
 }
 
 export function dailySummaryQueuedText(created: boolean): string {
@@ -667,6 +815,9 @@ export function adminHubKeyboard(): TelegramInlineKeyboardMarkup {
     { text: MENU_LABEL.store, callback_data: ADMIN_STORE_CALLBACK },
     { text: MENU_LABEL.failed, callback_data: ADMIN_FAILED_CALLBACK },
     { text: MENU_LABEL.catalog, callback_data: ADMIN_CATALOG_CALLBACK },
+    { text: 'تنظیمات تجاری 🛠', callback_data: ADMIN_OPS_CALLBACK },
+    { text: 'خلاصه فروش 📊', callback_data: ADMIN_SALES_CALLBACK },
+    { text: 'پیام همگانی 📢', callback_data: ADMIN_BROADCAST_CALLBACK },
     backToMenuButton(),
   ]);
 }
@@ -684,7 +835,7 @@ export function adminQueueKeyboard(orders: readonly SalesOrder[]): TelegramInlin
       text: `${formatToman(order.amountIrr)} · ${reviewStatusLabel(order.status)}`,
       callback_data: `admin:order:${order.id}`,
     })),
-    { text: MENU_LABEL.admin, callback_data: ADMIN_HUB_CALLBACK },
+    ...adminScreenNavRows(),
   ]);
 }
 
@@ -719,7 +870,38 @@ export function adminOrderText(order: SalesOrder): string {
 }
 
 export function backToMenuButton(): InlineButton {
-  return { text: 'منوی اصلی 🏠', callback_data: HOME_CALLBACK };
+  return { text: MENU_LABEL.home, callback_data: HOME_CALLBACK };
+}
+
+export function adminBackButton(): InlineButton {
+  return { text: MENU_LABEL.admin, callback_data: ADMIN_HUB_CALLBACK };
+}
+
+export function adminScreenNavRows(): readonly InlineRow[] {
+  return [adminBackButton(), backToMenuButton()];
+}
+
+export function adminScreenKeyboard(
+  buttons: readonly InlineButton[] = [],
+): TelegramInlineKeyboardMarkup {
+  return columnKeyboard([...buttons, adminBackButton(), backToMenuButton()]);
+}
+
+export function storeWizardKeyboard(
+  extras: readonly InlineButton[] = [],
+): TelegramInlineKeyboardMarkup {
+  return columnKeyboard([
+    ...extras,
+    { text: 'لغو', callback_data: 'store:cancel' },
+    backToMenuButton(),
+  ]);
+}
+
+export function adminDeniedText(): string {
+  return [
+    '<b>این بخش فقط برای مدیر فروشگاه است</b>',
+    'از دکمه‌های پایین صفحه خرید، پیگیری سفارش یا راهنما را انتخاب کن.',
+  ].join('\n');
 }
 
 export function formatMoney(amountIrr: bigint): string {
@@ -771,7 +953,232 @@ function formatTrafficLabel(dataLimitBytes: bigint): string {
   return `${String(dataLimitBytes / 1024n ** 3n)} گیگ`;
 }
 
+export function trialHomeButton(): InlineButton {
+  return { text: MENU_LABEL.trial, callback_data: TRIAL_CALLBACK };
+}
+
+export function trialOfferText(input: {
+  readonly durationDays: number;
+  readonly dataLimitBytes: bigint;
+  readonly deviceLimit: number;
+}): string {
+  const devices = input.deviceLimit === 0 ? 'نامحدود' : `${String(input.deviceLimit)} دستگاه`;
+  return [
+    '<b>سرویس تست</b>',
+    'یک‌بار برای هر مشتری، بدون پرداخت کارت‌به‌کارت.',
+    `مدت: <b>${String(input.durationDays)} روز</b> · حجم: <b>${escapeHtml(formatTrafficLabel(input.dataLimitBytes))}</b> · اتصال: <b>${escapeHtml(devices)}</b>`,
+    'اگر قبلاً تست گرفته باشی همین دکمه دوباره سرویس جدید نمی‌سازد.',
+  ].join('\n');
+}
+
+export function trialAlreadyClaimedText(): string {
+  return [
+    '<b>سرویس تست قبلاً استفاده شده</b>',
+    'هر مشتری فقط یک تست دارد. برای ادامه از خرید یا تمدید استفاده کن.',
+  ].join('\n');
+}
+
+export function trialUnavailableText(): string {
+  return [
+    '<b>سرویس تست الان فعال نیست</b>',
+    'اگر لازم داری از خرید سریع پلن مناسب را انتخاب کن.',
+  ].join('\n');
+}
+
+export function shopBlockedText(): string {
+  return [
+    '<b>خرید برای این حساب موقتاً بسته است</b>',
+    'سرویس‌های فعلی و تیکت پشتیبانی همچنان در دسترس است.',
+  ].join('\n');
+}
+
+export function forcedJoinText(reason: 'missing' | 'unavailable'): string {
+  return reason === 'unavailable'
+    ? [
+        '<b>عضویت کانال الان قابل بررسی نیست</b>',
+        'کمی بعد «بررسی مجدد» را بزن. اگر تکرار شد به پشتیبانی پیام بده.',
+      ].join('\n')
+    : [
+        '<b>برای خرید یا تست باید عضو کانال فروشگاه باشی</b>',
+        'اول عضو شو، بعد «بررسی مجدد» را بزن.',
+      ].join('\n');
+}
+
+export function customerServicesText(
+  services: readonly { readonly productName: string; readonly variantName: string }[],
+): string {
+  if (services.length === 0) {
+    return ['<b>سرویس فعالی نداری</b>', 'از خرید سریع یا سرویس تست شروع کن.'].join('\n');
+  }
+  return [
+    '<b>سرویس‌های من</b>',
+    'لینک دسترسی را از همین‌جا دوباره بگیر. لینک را برای دیگران نفرست.',
+    ...services.map(
+      (service, index) =>
+        `${String(index + 1)}. ${escapeWithin(service.productName, 80)} — ${escapeWithin(service.variantName, 80)}`,
+    ),
+  ].join('\n');
+}
+
+export function serviceAccessText(subscriptionUrl: string): string {
+  return [
+    '<b>لینک دسترسی</b>',
+    `<code>${escapeHtml(subscriptionUrl)}</code>`,
+    'این لینک را در کلاینت خودت وارد کن و برای دیگران نفرست.',
+  ].join('\n');
+}
+
+export function platformGuideText(platform: 'ios' | 'android' | 'windows'): string {
+  if (platform === 'ios') {
+    return [
+      '<b>اتصال آیفون</b>',
+      '۱. Streisand یا V2Box را نصب کن.',
+      '۲. لینک اشتراک را کپی و در برنامه وارد کن.',
+      '۳. پروفایل را اضافه کن و اتصال را روشن کن.',
+    ].join('\n');
+  }
+  if (platform === 'android') {
+    return [
+      '<b>اتصال اندروید</b>',
+      '۱. v2rayNG یا Hiddify را نصب کن.',
+      '۲. از منوی + لینک اشتراک را وارد کن.',
+      '۳. پروفایل را انتخاب و دکمه اتصال را بزن.',
+    ].join('\n');
+  }
+  return [
+    '<b>اتصال ویندوز</b>',
+    '۱. v2rayN یا Hiddify را نصب کن.',
+    '۲. لینک اشتراک را از کلیپ‌بورد وارد کن.',
+    '۳. سیستم‌پروکسی را روشن و اتصال را شروع کن.',
+  ].join('\n');
+}
+
+export function commercialSettingsText(input: {
+  readonly trialEnabled: boolean;
+  readonly trialVariantId: string | null;
+  readonly channelCount: number;
+  readonly remindersEnabled: boolean;
+  readonly expiryReminderDays: number;
+  readonly lowTrafficPercent: number;
+  readonly referralEnabled?: boolean;
+  readonly referralReferrerCreditIrr?: bigint;
+  readonly referralInviteeDiscountIrr?: bigint;
+  readonly referralMaxRewardsPerReferrer?: number;
+}): string {
+  return [
+    '<b>تنظیمات تجاری</b>',
+    `تست رایگان: ${input.trialEnabled ? 'روشن' : 'خاموش'}`,
+    `پلن تست: ${input.trialVariantId ?? 'تعیین نشده'}`,
+    `کانال اجباری: ${String(input.channelCount)}`,
+    `یادآوری: ${input.remindersEnabled ? 'روشن' : 'خاموش'} · ${String(input.expiryReminderDays)} روز مانده · حجم ${String(input.lowTrafficPercent)}٪`,
+    `دعوت: ${input.referralEnabled === true ? 'روشن' : 'خاموش'} · پاداش ${formatTomanAmount(input.referralReferrerCreditIrr ?? 0n)} · تخفیف ${formatTomanAmount(input.referralInviteeDiscountIrr ?? 0n)} · سقف ${String(input.referralMaxRewardsPerReferrer ?? 50)}`,
+    'شناسه کانال یا پلن تست را از دکمه‌های زیر بفرست. توکن یا لینک اشتراک اینجا نیست.',
+  ].join('\n');
+}
+
+export function inviteText(input: { readonly token: string; readonly url: string | null }): string {
+  return [
+    '<b>دعوت دوستان</b>',
+    'با لینک شخصی‌ات دوست را بیاور. پاداش بعد از اولین خرید موفق پرداخت‌شده است، نه تست رایگان.',
+    input.url === null
+      ? `کد دعوت: <code>${escapeHtml(input.token)}</code>`
+      : `لینک دعوت: ${escapeHtml(input.url)}`,
+  ].join('\n');
+}
+
+export function adminSalesSnapshotText(input: {
+  readonly timezone: string;
+  readonly today: {
+    readonly ordersByStatus: Readonly<Record<string, number>>;
+    readonly orderCount: number;
+    readonly revenueIrr: bigint;
+    readonly newCustomers: number;
+  };
+  readonly last7d: {
+    readonly ordersByStatus: Readonly<Record<string, number>>;
+    readonly orderCount: number;
+    readonly revenueIrr: bigint;
+    readonly newCustomers: number;
+  };
+  readonly openTickets: number;
+  readonly pendingReceiptReviews: number;
+}): string {
+  return [
+    '<b>خلاصه فروش</b>',
+    `بازه تقویمی: ${escapeHtml(input.timezone)}`,
+    '',
+    formatSalesWindow('امروز', input.today),
+    '',
+    formatSalesWindow('۷ روز', input.last7d),
+    '',
+    `تیکت باز: ${String(input.openTickets)}`,
+    `رسید در انتظار بررسی: ${String(input.pendingReceiptReviews)}`,
+    'مبالغ تقریبی از سفارش‌های انجام‌شده در Postgres است. لینک اشتراک اینجا نیست.',
+  ].join('\n');
+}
+
+function formatSalesWindow(
+  title: string,
+  window: {
+    readonly ordersByStatus: Readonly<Record<string, number>>;
+    readonly orderCount: number;
+    readonly revenueIrr: bigint;
+    readonly newCustomers: number;
+  },
+): string {
+  const statuses = [
+    `در انتظار رسید ${String(window.ordersByStatus['awaiting_receipt'] ?? 0)}`,
+    `بررسی رسید ${String(window.ordersByStatus['receipt_submitted'] ?? 0)}`,
+    `در حال ساخت ${String(window.ordersByStatus['provisioning'] ?? 0)}`,
+    `ساخت ناموفق ${String(window.ordersByStatus['provisioning_failed'] ?? 0)}`,
+    `انجام‌شده ${String(window.ordersByStatus['fulfilled'] ?? 0)}`,
+    `ردشده ${String(window.ordersByStatus['rejected'] ?? 0)}`,
+    `لغو ${String(window.ordersByStatus['cancelled'] ?? 0)}`,
+  ].join(' · ');
+  return [
+    `<b>${title}</b>`,
+    `سفارش: ${String(window.orderCount)}`,
+    statuses,
+    `درآمد تقریبی: ${formatTomanAmount(window.revenueIrr)}`,
+    `مشتری جدید: ${String(window.newCustomers)}`,
+  ].join('\n');
+}
+
+export function broadcastPromptText(): string {
+  return [
+    '<b>پیام همگانی</b>',
+    'متن را در یک پیام بفرست. ارسال صف می‌شود و قابل لغو است.',
+    'متن کامل در گزارش‌های پایدار ذخیره نمی‌شود.',
+  ].join('\n');
+}
+
+export function broadcastQueuedText(jobId: string, recipientCount: number): string {
+  return [
+    '<b>پیام همگانی در صف رفت</b>',
+    `کار: ${escapeHtml(jobId)} · گیرنده: ${String(recipientCount)}`,
+    'برای توقف، لغو همین کار را بزن.',
+  ].join('\n');
+}
+
+export function reminderNoticeText(kind: 'expiry' | 'low_traffic', productName: string): string {
+  return kind === 'expiry'
+    ? [
+        '<b>یادآوری پایان سرویس</b>',
+        `سرویس ${escapeWithin(productName, 80)} به‌زودی تمام می‌شود. از تمدید ادامه بده.`,
+      ].join('\n')
+    : [
+        '<b>حجم سرویس رو به اتمام است</b>',
+        `حجم باقی‌مانده ${escapeWithin(productName, 80)} کم شده. تمدید یا خرید تازه را از منو بزن.`,
+      ].join('\n');
+}
+
 function serializeInlineButton(button: InlineButton): TelegramInlineButton {
+  if (button.url !== undefined) {
+    return { text: buttonLabel(button.text), url: button.url };
+  }
+  if (button.callback_data === undefined) {
+    throw new Error('INVALID_INLINE_BUTTON');
+  }
   return { text: buttonLabel(button.text), callback_data: button.callback_data };
 }
 

@@ -4,8 +4,10 @@
 # bot-api behind profile `app`).
 #
 # This file does not deploy anything by itself. On the production host, prefer:
-#   bash deploy/install.sh
-# or, after host `.env` and static customer assets exist:
+#   bash deploy/neo-install.sh
+#   bash deploy/neo
+# `bash deploy/install.sh` still runs first setup only.
+# After host `.env` and static customer assets exist:
 #   docker compose -f docker-compose.production.yml up -d --build
 #
 # Caddy in this file terminates TLS on 80/443 and reverse-proxies to `bot-api`.

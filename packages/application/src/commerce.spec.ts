@@ -1,4 +1,5 @@
 import type {
+  DurableConversationSession,
   SalesOrder,
   ServiceBinding,
   TelegramCustomer,
@@ -8,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { CommerceRepository } from './commerce-ports.js';
 import { CommerceUseCase } from './commerce.js';
+import { ReferralUseCase } from './referral.js';
 
 const customer: TelegramCustomer = {
   id: '1',
@@ -77,6 +79,63 @@ describe('CommerceUseCase', () => {
       idempotencyKey: `order:${order.id}:provision`,
       serviceUsernameBase: 'buyer',
     });
+  });
+
+  it('grants a referral reward after paid fulfillment and skips a trial', async () => {
+    const fulfilled = { ...order, status: 'fulfilled' as const, serviceId: service.id };
+    const repository = createRepository();
+    const grantReferralRewardForPaidOrder = vi.fn().mockResolvedValue({
+      referredCustomerId: customer.id,
+      referrerCustomerId: '9',
+      orderId: order.id,
+      referrerCreditIrr: 25_000n,
+      replayed: false,
+      createdAt: fulfilled.updatedAt,
+    });
+    const referral = new ReferralUseCase({
+      attributeReferralStart: vi.fn(),
+      getReferralAttribution: vi.fn(),
+      grantReferralRewardForPaidOrder,
+    });
+    vi.mocked(repository.reserveProvisioning).mockResolvedValue(order);
+    vi.mocked(repository.completeOrder).mockResolvedValue(fulfilled);
+    const paid = new CommerceUseCase(
+      repository,
+      { create: vi.fn().mockResolvedValue(service), renew: vi.fn() },
+      null,
+      referral,
+    );
+    await expect(paid.approveOrder(order.id, '70001')).resolves.toEqual(fulfilled);
+    expect(grantReferralRewardForPaidOrder).toHaveBeenCalledWith(fulfilled);
+
+    const trialFulfilled = {
+      ...order,
+      kind: 'trial' as const,
+      amountIrr: 0n,
+      status: 'fulfilled' as const,
+      serviceId: service.id,
+    };
+    grantReferralRewardForPaidOrder.mockClear();
+    const trialRepo = createRepository();
+    vi.mocked(trialRepo.reserveProvisioning).mockResolvedValue({
+      ...order,
+      kind: 'trial' as const,
+      amountIrr: 0n,
+      status: 'provisioning' as const,
+    });
+    vi.mocked(trialRepo.completeOrder).mockResolvedValue(trialFulfilled);
+    const trial = new CommerceUseCase(
+      trialRepo,
+      { create: vi.fn().mockResolvedValue(service), renew: vi.fn() },
+      null,
+      new ReferralUseCase({
+        attributeReferralStart: vi.fn(),
+        getReferralAttribution: vi.fn(),
+        grantReferralRewardForPaidOrder,
+      }),
+    );
+    await trial.approveOrder(order.id, '70001');
+    expect(grantReferralRewardForPaidOrder).not.toHaveBeenCalled();
   });
 
   it('records first contact once through the reporting publisher', async () => {
@@ -647,6 +706,97 @@ describe('CommerceUseCase', () => {
     ).rejects.toThrow('INVALID_SERVICE_USERNAME_BASE');
     expect(repository.createOrder).not.toHaveBeenCalled();
   });
+
+  it('provisions a first trial once and refuses a fulfilled repeat', async () => {
+    const trialOrder = {
+      ...order,
+      kind: 'trial' as const,
+      amountIrr: 0n,
+      status: 'provisioning' as const,
+    };
+    const fulfilled = { ...trialOrder, status: 'fulfilled' as const, serviceId: service.id };
+    const repository = createRepository();
+    vi.mocked(repository.createTrialOrder!).mockResolvedValueOnce(trialOrder);
+    vi.mocked(repository.completeOrder).mockResolvedValue(fulfilled);
+    const provision = vi.fn().mockResolvedValue(service);
+    const useCase = new CommerceUseCase(repository, { create: provision, renew: vi.fn() });
+
+    await expect(
+      useCase.beginTrial({
+        customer: {
+          telegramUserId: '10001',
+          privateChatId: '10001',
+          displayName: 'خریدار',
+        },
+        idempotencyKey: 'trial:customer:1',
+      }),
+    ).resolves.toEqual(fulfilled);
+    expect(repository.createTrialOrder).toHaveBeenCalledWith({
+      customerId: customer.id,
+      idempotencyKey: 'trial:customer:1',
+      serviceUsernameBase: 't10001',
+    });
+    expect(provision).toHaveBeenCalledWith({
+      productVariantId: trialOrder.productVariantId,
+      idempotencyKey: `order:${trialOrder.id}:provision`,
+      serviceUsernameBase: 'buyer',
+    });
+
+    vi.mocked(repository.createTrialOrder!).mockResolvedValueOnce(fulfilled);
+    await expect(
+      useCase.beginTrial({
+        customer: {
+          telegramUserId: '10001',
+          privateChatId: '10001',
+          displayName: 'خریدار',
+        },
+        idempotencyKey: 'trial:customer:1',
+      }),
+    ).rejects.toThrow('TRIAL_ALREADY_CLAIMED');
+    expect(provision).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses checkout when the customer shop is blocked', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.upsertTelegramCustomer).mockResolvedValue({
+      customer: { ...customer, shopBlocked: true },
+      created: false,
+    });
+    const useCase = new CommerceUseCase(repository, { create: vi.fn(), renew: vi.fn() });
+    await expect(
+      useCase.beginCheckout({
+        customer: {
+          telegramUserId: '10001',
+          privateChatId: '10001',
+          displayName: 'خریدار',
+        },
+        productVariantId: '30',
+        idempotencyKey: 'telegram:101:buy',
+        serviceUsernameBase: 'buyer_one',
+      }),
+    ).rejects.toThrow('SHOP_BLOCKED');
+    expect(repository.createOrder).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown checkout discount before creating an order', async () => {
+    const repository = createRepository();
+    const useCase = new CommerceUseCase(repository, { create: vi.fn(), renew: vi.fn() });
+
+    await expect(
+      useCase.beginCheckout({
+        customer: {
+          telegramUserId: '10001',
+          privateChatId: '10001',
+          displayName: 'خریدار',
+        },
+        productVariantId: '30',
+        idempotencyKey: 'telegram:100:buy',
+        serviceUsernameBase: 'buyer_one',
+        discountCode: 'MISSING',
+      }),
+    ).rejects.toThrow('INVALID_DISCOUNT_CODE');
+    expect(repository.createOrder).not.toHaveBeenCalled();
+  });
 });
 
 function createRepository(): CommerceRepository {
@@ -665,6 +815,8 @@ function createRepository(): CommerceRepository {
     upsertTelegramCustomer: vi.fn().mockResolvedValue({ customer, created: false }),
     createOrder: vi.fn().mockResolvedValue(order),
     createRenewalOrder: vi.fn().mockResolvedValue(order),
+    createTrialOrder: vi.fn(),
+    getTrialClaim: vi.fn().mockResolvedValue(null),
     getOrder: vi.fn().mockResolvedValue(order),
     getCustomerForOrder: vi.fn().mockResolvedValue(customer),
     getOpenOrderForCustomer: vi.fn().mockResolvedValue(order),
@@ -698,5 +850,16 @@ function createRepository(): CommerceRepository {
     reserveTelegramUpdate: vi.fn().mockResolvedValue(true),
     completeTelegramUpdate: vi.fn().mockResolvedValue(undefined),
     failTelegramUpdate: vi.fn().mockResolvedValue(undefined),
+    getPendingConversationSession: vi.fn().mockResolvedValue(null),
+    putConversationSession: vi
+      .fn()
+      .mockImplementation(async (session: DurableConversationSession) => {
+        return session;
+      }),
+    finishConversationSession: vi.fn().mockResolvedValue(undefined),
+    findDiscountCode: vi.fn().mockResolvedValue(null),
+    creditWalletTopUp: vi.fn(),
+    createSupportTicket: vi.fn(),
+    followUpSupportTicket: vi.fn(),
   };
 }

@@ -24,6 +24,13 @@ describe('HealthController', () => {
       telegramError: 'none',
       migrations: 0,
       reports: { pending: 0, failed: 0, retrying: 0, due: 0 },
+      provisioning: { mode: 'disabled', pilotEnabled: false },
+      commercial: {
+        remindersPending: 0,
+        broadcastsPending: 0,
+        broadcastsRunning: 0,
+        usageSyncDue: 0,
+      },
     });
     expect(query).toHaveBeenCalledWith('select 1');
   });
@@ -35,12 +42,28 @@ describe('HealthController', () => {
       .mockResolvedValueOnce({
         rows: [{ pending: 3, failed: 1, retrying: 2, due: 1 }],
       })
-      .mockResolvedValueOnce({ rows: [{ n: 6 }] });
+      .mockResolvedValueOnce({ rows: [{ n: 6 }] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            reminders_pending: 2,
+            broadcasts_pending: 4,
+            broadcasts_running: 1,
+            usage_sync_due: 3,
+          },
+        ],
+      });
     const controller = new HealthController({ query } as unknown as Pool);
 
     await expect(controller.getHealth()).resolves.toMatchObject({
       reports: { pending: 3, failed: 1, retrying: 2, due: 1 },
       migrations: 6,
+      commercial: {
+        remindersPending: 2,
+        broadcastsPending: 4,
+        broadcastsRunning: 1,
+        usageSyncDue: 3,
+      },
     });
   });
 
@@ -64,6 +87,13 @@ describe('HealthController', () => {
       telegramError: expect.stringMatching(/^(none|TELEGRAM_[A-Z0-9_]+)$/u),
       migrations: 0,
       reports: { pending: 0, failed: 0, retrying: 0, due: 0 },
+      provisioning: { mode: 'disabled', pilotEnabled: false },
+      commercial: {
+        remindersPending: 0,
+        broadcastsPending: 0,
+        broadcastsRunning: 0,
+        usageSyncDue: 0,
+      },
     });
     await app.close();
   });

@@ -1,8 +1,9 @@
 # Production host runbook
 
 This is the in-repo procedure for the first single-owner host. It is not evidence that production
-is already deployed. Beginners should start with `docs/runbooks/first-host.md` and
-`bash deploy/install.sh`.
+is already deployed. Beginners should start with `docs/runbooks/first-host.md` and the one-line
+installer `bash deploy/neo-install.sh` (or `bash deploy/neo` after the checkout exists).
+`bash deploy/install.sh` still runs first setup only.
 
 ## Before DNS and TLS
 
@@ -18,8 +19,8 @@ is already deployed. Beginners should start with `docs/runbooks/first-host.md` a
 
 ## Bring the process up
 
-Prefer `bash deploy/install.sh` so `.env`, customer static assets, Compose, and Caddy TLS
-are created together. Manual equivalent:
+Prefer `bash deploy/neo-install.sh` so the repo, `.env`, customer static assets, Compose, and
+Caddy TLS are created together and the management menu stays available. Manual equivalent:
 
 ```bash
 docker compose -f docker-compose.production.yml up -d --build
@@ -32,7 +33,17 @@ counts only: `reports.pending`, `reports.failed`, `reports.retrying` (pending de
 retried at least once), and `reports.due` (pending deliveries whose next attempt time has passed).
 No order IDs, file IDs, or secrets appear in the response. Alert when `reports.due` stays above
 zero for several minutes (dispatch lag) or when `reports.retrying` climbs while `reports.failed`
-remains zero (transient Telegram pressure).
+remains zero (transient Telegram pressure). `provisioning.mode` and `provisioning.pilotEnabled`
+are flags only: `disabled` never calls PasarGuard mutating APIs, `isolated` requires
+`PROVISIONING_ISOLATED_GROUP_ID`, and `PILOT_ENABLED=true` is still an owner-only switch for
+the isolated pilot CLI. `commercial.remindersPending`, `commercial.broadcastsPending`, and
+`commercial.usageSyncDue` are queue counts; they never include message bodies or
+subscription URLs. Usage sync is a read-only PasarGuard GET of `used_traffic` and
+never mutates entitlements.
+
+Owner-only live gates before a paid cohort: public HTTPS webhook, TLS on the host, a prepared
+isolated PasarGuard group, off-host backups, and a phone smoke of `/start` → shop or trial →
+receipt → delivery. Do not enable live provision from chat.
 
 ## Customer static assets on the same host
 

@@ -1,9 +1,9 @@
 <!--
 context-schema: 1
-last-updated: 2026-08-28T20:03:30.757Z
-source-fingerprint: e0d4b07b434a9f5a938112f165e4f0f26d7b3e22fcc6977cb65401ddb6d09148
-current-phase: revival-slice-1-mutation-safety
-next-task: activate-local-telegram-intake-and-run-slice-1-smoke
+last-updated: 2026-09-05T10:13:33.331Z
+source-fingerprint: b38f63ede99475543834f472d7c977033246bcee48c38699ca9965446bfdd233
+current-phase: commercial-wave2
+next-task: owner-authorized-isolated-pilot-gates
 -->
 
 # neo_bot Project Context
@@ -92,13 +92,24 @@ Authoritative decisions are recorded in:
 - `docs/adr/0012-telegram-chat-catalog-administration.md`
 - `docs/adr/0013-flexible-chat-storefront-presentation.md`
 - `docs/adr/0014-role-aware-commerce-and-service-operations.md`
+- `docs/adr/0021-durable-interaction-kernel.md`
+- `docs/adr/0022-commercial-wave1.md`
+- `docs/adr/0023-commercial-wave2.md`
 
 Create a new ADR before materially changing one of these decisions.
 
 ## Current verified snapshot
 
-Last evidence refresh: `2026-08-28`, reviewed the isolated local Slice 1 runtime plus the previously
-authorized first-host chat-store-redesign deploy.
+Last evidence refresh: `2026-09-05`, Commercial Wave 2 (read-only PasarGuard used-traffic sync,
+referral/invite, admin sales snapshot) is implemented on `cursor/wave2-commercial-848a` from the
+Wave 1 commercial-pilot baseline. ADR 0023 and migration `0016` record the durable decisions.
+A Mirza-style one-line host installer and interactive menu landed on
+`cursor/vps-installer-menu-59e1` (`deploy/neo-install.sh`, `deploy/neo`, evolved
+`deploy/install.sh`). Local `pnpm check` is green on this branch, including `pnpm test:deploy-cli`
+and shellcheck. This agent did not install on a VPS. Isolated/live evidence is unchanged. Isolated local Slice 1 runtime and first-host evidence
+remain unchanged historical records, not a new live check. Feature `004-telegram-home-concept`
+artifacts are not on this remote; the visual baseline used was ADR 0013 ReplyKeyboard home plus
+the existing `telegram-menu` mixed layout.
 
 - Production-MVP readiness estimate: the customer store and catalog administration are both chat
   paths; live administrator publication, live purchase, and the seven-day pilot remain owner-side.
@@ -182,7 +193,8 @@ authorized first-host chat-store-redesign deploy.
   tests), dead-code, high-severity audit and diff checks pass. Graphify was fully re-extracted and
   updated after the ignore change (`1545` nodes, `3056` edges). This is tooling validation, not
   production evidence.
-- CI `pnpm audit --audit-level=high` is required. One moderate `uuid` advisory remains in
+- CI `pnpm audit --audit-level=high` is required. Transitive `fast-uri` is pinned to patched
+  3.1.6 / 4.1.3 in `pnpm-workspace.yaml`. One moderate `uuid` advisory remains in
   Testcontainers only.
 - Live test forum: eight purpose topics exist. The local outbox delivered first-contact, returning
   activity, one `order.created`, and one `ops.daily_summary` (four deliveries, none failed). One
@@ -235,6 +247,14 @@ off-host backup restoration or public security.
   durable fulfilled-order delivery jobs; not deployed.
 - `0013_customer_delivery_claim_fencing.sql`: additive claim-version upgrade for existing `0012`
   installations so stale delivery workers cannot publish a second secret-bearing anchor; not deployed.
+- `0014_durable_customer_flows.sql`: local candidate for versioned customer conversation sessions,
+  optional discount codes, a non-negative prepaid wallet ledger, and Telegram-update-scoped support
+  tickets; not deployed.
+- `0015_commercial_wave1.sql`: local candidate for shop-block, trial orders/claims, ops settings,
+  reminder deliveries, broadcast outbox, and Wave 1 reporting types; not deployed.
+- `0016_commercial_wave2.sql`: local candidate for usage-sync watermark, referral attribution and
+  reward ledger, wallet `referral` credits, invitee checkout discount, and `referral.rewarded`
+  reporting; not deployed.
 
 ### Runtime boundaries
 
@@ -261,27 +281,35 @@ off-host backup restoration or public security.
 
 ## Capability status
 
-| Capability                           | Status      | Verified boundary or gap                                                                                                                                                                                                                                                                                                                                                           |
-| ------------------------------------ | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Modular pnpm/TypeScript foundation   | Implemented | Strict builds and architecture gate pass locally.                                                                                                                                                                                                                                                                                                                                  |
-| PostgreSQL schema and migrations     | Implemented | Fresh Testcontainers lifecycle passes.                                                                                                                                                                                                                                                                                                                                             |
-| PasarGuard health and group sync     | Implemented | Valid/invalid connectivity and group snapshots covered.                                                                                                                                                                                                                                                                                                                            |
-| Direct service create/read/renew     | Implemented | Numeric IDs, idempotency and read-after-write covered.                                                                                                                                                                                                                                                                                                                             |
-| Durable card-to-card order lifecycle | Implemented | Checkout, proof, approval/rejection, retry provisioning and catalog card source.                                                                                                                                                                                                                                                                                                   |
-| Telegram chat purchase flow          | Partial     | ReplyKeyboard-only home plus category -> product -> three-plan comparison -> detail -> payment -> receipt is deployed. Free copy, typed sale facts, evidence badges and bounded HTML rendering are covered; live phone and receipt-to-delivery validation remain outstanding.                                                                                                      |
-| Customer visual identity             | Partial     | Versioned master, welcome and successful-delivery PNGs use the approved charcoal/ivory/signal-orange `NN / NEO NETWORK / PRIVATE ACCESS` direction. Welcome and delivery assets were uploaded privately to Telegram, their file IDs are configured on first-host, and runtime presence is verified; phone `/start` and real successful-delivery rendering are not both proven yet. |
-| Receipt review                       | Partial     | Admin private-chat review; image documents accepted; receipts topic gets a redacted text summary. Customer copy consistently promises a maximum 60-minute review, but durable SLA tracking and escalation are not implemented yet.                                                                                                                                                 |
-| Admin reporting group and topics     | Partial     | Local outbox delivered first-contact, activity, order.created, and one daily summary; receipt/approval unconfirmed.                                                                                                                                                                                                                                                                |
-| New-user `/start` reporting          | Partial     | First-contact and same-day activity notices were delivered to the new-users topic.                                                                                                                                                                                                                                                                                                 |
-| Renewal customer journey             | Partial     | Renewal now requires a preview and explicit final confirmation; back/menu causes no provider mutation. Failed renewals complete the Telegram update and keep the previous service; live PasarGuard renew remains unconfirmed.                                                                                                                                                      |
-| Data-driven catalog                  | Implemented | Products and supported selector values are database-driven and atomically published. Variants support free display title/copy plus four ordered presentation attributes while volume, duration, device limit, effective price and provider binding remain typed. Migration `0010` is applied on first-host.                                                                        |
-| Telegram chat catalog administration | Partial     | Private allowlisted administration is deployed and hierarchical by category, product and variant, with selective multi-field drafts, bounded diff/customer preview, reviewed reorder, durable resume and an atomic category+product+variant guided changeset. Phone validation remains separate evidence.                                                                          |
-| Customer Mini App catalog UX         | Abandoned   | Not the store. Copy tells the customer to buy in chat.                                                                                                                                                                                                                                                                                                                             |
-| Customer Mini App checkout           | Abandoned   | `POST /customer/orders` and `POST /customer/renew` return gone. Chat menu button is commands.                                                                                                                                                                                                                                                                                      |
-| Telegram WebApp customer identity    | Implemented | Retained customer statics validate Telegram `initData`; catalog administrator authorization is numeric allowlist plus private-chat enforcement inside the bot.                                                                                                                                                                                                                     |
-| Production deployment and operations | Partial     | First-host `bot-api` was rebuilt/recreated after a root-only source/env/database backup. Migration `0010`, public/loopback health, webhook readiness, report queues, schema objects, read model, retired-route 404s and disabled pilot provisioning were verified. Caddy/Postgres were not recreated; no purchase or PasarGuard mutation was performed.                            |
-| Resellers, wallet and debt           | Partial     | Schema, listing, checkout snapshot, customer assignment, and current-price audit exist. Override then base then public. No wallet, debt, or admin price UI. Dedicated `reseller.*` notices are not published yet.                                                                                                                                                                  |
-| Legacy import and cutover            | Not started | Must begin read-only with backup, preflight, rollback and controlled cutover.                                                                                                                                                                                                                                                                                                      |
+| Capability                           | Status      | Verified boundary or gap                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Modular pnpm/TypeScript foundation   | Implemented | Strict builds and architecture gate pass locally.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| PostgreSQL schema and migrations     | Implemented | Fresh Testcontainers lifecycle passes.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| PasarGuard health and group sync     | Implemented | Valid/invalid connectivity and group snapshots covered.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Direct service create/read/renew     | Implemented | Numeric IDs, idempotency and read-after-write covered.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Durable card-to-card order lifecycle | Implemented | Checkout, proof, approval/rejection, retry provisioning and catalog card source.                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Telegram chat purchase flow          | Partial     | ReplyKeyboard home now includes wallet, tickets and a persistent Home key. Category -> product -> three-plan comparison -> detail -> payment -> receipt remains chat-only. Durable purchase/renewal/wallet/ticket sessions release on Home, Cancel, shop-back and other menu navigation so reply-keyboard labels are not consumed as username/coupon/ticket text. Stale `renew:confirm` no longer checkouts after Home. Live phone and receipt-to-delivery validation remain outstanding.       |
+| Customer visual identity             | Partial     | Versioned master, welcome and successful-delivery PNGs use the approved charcoal/ivory/signal-orange `NN / NEO NETWORK / PRIVATE ACCESS` direction. Welcome and delivery assets were uploaded privately to Telegram, their file IDs are configured on first-host, and runtime presence is verified; phone `/start` and real successful-delivery rendering are not both proven yet.                                                                                                              |
+| Receipt review                       | Partial     | Admin private-chat review; image documents accepted; receipts topic gets a redacted text summary. Customer copy consistently promises a maximum 60-minute review, but durable SLA tracking and escalation are not implemented yet.                                                                                                                                                                                                                                                              |
+| Admin reporting group and topics     | Partial     | Local outbox delivered first-contact, activity, order.created, and one daily summary; receipt/approval unconfirmed.                                                                                                                                                                                                                                                                                                                                                                             |
+| New-user `/start` reporting          | Partial     | First-contact and same-day activity notices were delivered to the new-users topic.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Renewal customer journey             | Partial     | Renewal now requires a preview and explicit final confirmation; back/menu causes no provider mutation. Failed renewals complete the Telegram update and keep the previous service; live PasarGuard renew remains unconfirmed.                                                                                                                                                                                                                                                                   |
+| Data-driven catalog                  | Implemented | Products and supported selector values are database-driven and atomically published. Variants support free display title/copy plus four ordered presentation attributes while volume, duration, device limit, effective price and provider binding remain typed. Migration `0010` is applied on first-host.                                                                                                                                                                                     |
+| Telegram chat catalog administration | Partial     | Private allowlisted administration remains hierarchical. Menu labels during an open wizard now navigate instead of writing a field; Home leaves the draft resumable. Store hub/wizard/list/picker screens expose Home, and the picker page indicator no longer cancels the session. Phone validation remains separate evidence.                                                                                                                                                                 |
+| Customer Mini App catalog UX         | Abandoned   | Not the store. Copy tells the customer to buy in chat.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Customer Mini App checkout           | Abandoned   | `POST /customer/orders` and `POST /customer/renew` return gone. Chat menu button is commands.                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Telegram WebApp customer identity    | Implemented | Retained customer statics validate Telegram `initData`; catalog administrator authorization is numeric allowlist plus private-chat enforcement inside the bot.                                                                                                                                                                                                                                                                                                                                  |
+| Production deployment and operations | Partial     | In-repo one-line `deploy/neo-install.sh` plus `deploy/neo` menu (install, git update, settings, compose, backup, health) wrap the existing first-host installer. Validator/shellcheck evidence only; no VPS run from this change. Historical first-host `bot-api` rebuild still stands: migration `0010`, public/loopback health, webhook readiness, report queues, and disabled pilot were verified then. Caddy/Postgres were not recreated; no purchase or PasarGuard mutation was performed. |
+| Resellers, wallet and debt           | Partial     | Schema, listing, checkout snapshot, customer assignment, and current-price audit exist. Override then base then public. A non-negative customer wallet top-up ledger and restart-safe amount/coupon input exist locally; representative debt, admin price UI, and `reseller.*` notices are not published.                                                                                                                                                                                       |
+| Legacy import and cutover            | Not started | Must begin read-only with backup, preflight, rollback and controlled cutover.                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Free trial / test service            | Partial     | One write-once claim plus `order_kind=trial` amount 0. Admin ops settings choose enable + catalog variant (duration/traffic/devices/groups). Home shows the trial key only when eligible. Repeats refuse idempotently. Fulfillment reuses the paid create path and still honors `PROVISIONING_MODE` / `PILOT_ENABLED`. Local unit evidence only; live provision remains gated.                                                                                                                  |
+| Forced channel join                  | Partial     | Owner configures channel IDs/usernames on ops settings. Shop/trial/checkout fail closed on Telegram membership errors with join + refresh copy. Allowlisted admins bypass. Local unit evidence only; live `getChatMember` on a real channel is unproven.                                                                                                                                                                                                                                        |
+| Expiry / low-traffic reminders       | Partial     | Outbox-style `service_reminder_deliveries` with idempotent window keys. Persian copy, no subscription URL. Shop-blocked customers skipped. Low-traffic enqueues only when `used_traffic_bytes` is known. Wave 2 adds a read-only PasarGuard `UsageSyncUseCase` that writes only that column plus `usage_synced_at`; no entitlement mutation; mocked/gated in tests. Dispatcher is in-process like reports. Local unit evidence only; live GET remains unproven.                                 |
+| Referral / invite                    | Partial     | Personal `/start r{telegramUserId}` deep-link, write-once attribution, no self-referral, one reward per referred user, per-referrer cap. Wallet credit and optional first-purchase discount fire on first paid fulfillment only (not trial). Durable `referral_rewards` plus wallet `kind=referral`. Admin ops settings in chat. Local unit evidence only; live invite/pay remains unproven.                                                                                                    |
+| Admin sales snapshot                 | Partial     | Private-chat Postgres snapshot for today and 7d in `Asia/Tehran`: orders by status, approximate fulfilled revenue, new customers, open tickets, pending receipt reviews. No Telegram or PasarGuard I/O. Local unit evidence only.                                                                                                                                                                                                                                                               |
+| My-services deliverability           | Partial     | «سرویس‌های من» lists local fulfilled bindings, resends the access link, offers iOS/Android/Windows guides, and can send an in-memory QR. URLs stay off list screens, jobs, reports and logs. QR needs `sendPhotoBuffer`; otherwise the link is resent. Local unit evidence only.                                                                                                                                                                                                                |
+| Admin broadcast                      | Partial     | Allowlisted admin queues a one-shot durable job with paginated/rate-limited dispatch and cancel. Reports store hash + counts, not the body. Durable `admin.broadcast` session never stores the body. Local unit evidence only; no live Telegram send.                                                                                                                                                                                                                                           |
+| Commercial pilot hardening           | Partial     | Health exposes `provisioning.mode` / `pilotEnabled` and commercial queue counts without bodies or URLs. Missing Wave 1 tables do not fail `/health`. Runbook notes owner-only gates: webhook TLS, isolated PasarGuard group, backups, phone smoke. No deploy, no live PasarGuard mutation, no real Telegram in CI.                                                                                                                                                                              |
 
 ## Confirmed admin reporting requirement
 
@@ -362,7 +390,8 @@ migration counts, graceful pool shutdown, webhook rate-limit exclusion, compose 
 dump/restore plus a disposable restore drill, production compose overlay
 that injects `bot-api` `DATABASE_URL` with host `postgres`, compose-aware dump/restore, webhook
 `getWebhookInfo` intake honesty, Caddy routing for retained customer statics and APIs, first-host
-`deploy/install.sh`, runbook, secret-rotation checklist, redacted stdout and HTTP error codes).
+`deploy/neo-install.sh` / `deploy/neo` menu wrapping `deploy/install.sh`, runbook, secret-rotation
+checklist, redacted stdout and HTTP error codes).
 Production host, TLS certificates, off-host backup storage and a live secret rotation are not done
 until the owner provides VPS access in a terminal.
 
@@ -370,11 +399,13 @@ Gate remaining:
 
 - HTTPS webhook on a reachable host, off-host dump storage, and TLS certificates. High-severity
   dependency audit is required in CI. The authorized Git baseline is done. In-repo secret-rotation
-  steps exist; they are not a completed live rotation. `bash deploy/install.sh` waits for owner SSH.
+  steps exist; they are not a completed live rotation. `bash deploy/neo-install.sh` waits for owner
+  SSH.
 
 ### Phase 5 - Controlled pilot and release
 
-Status: not started.
+Status: in-repo commercial blockers for an Iranian card-to-card shop are locally implemented
+(Wave 1). The live seven-day cohort is not started.
 
 Gate:
 
@@ -401,32 +432,31 @@ Status: approved on 2026-08-25 and active after the local checkpoint.
 
 ## Current priority and next task
 
-Current phase: **Phase 6 / Slice 1 - Mutation safety**. The owner explicitly replaced the prior
-phone-only next task with the four-slice NEO NETWORK revival plan recorded in ADR 0014.
+Current phase: **commercial-wave2**. Wave 1 commercial blockers plus Wave 2 usage sync,
+referral/invite, and admin sales snapshot are in source on `cursor/wave2-commercial-848a`.
+ADR 0022 and ADR 0023. Not deployed.
 
-Next task: use the isolated Mac runtime for Slice 1 testing. The owner removed the old Mini App VPS
-from the current test path; production-host connectivity is no longer a prerequisite for local
-verification, though a reachable backed-up host will still be required for a later production
-release. After the local profile and gates are committed, explicitly switch this test bot to local
-polling as its sole intake, keep provisioning disabled, and run the current customer/admin purchase
-and paid-renewal smoke paths. Isolated or live PasarGuard mutation remains a separate product-risk
-decision.
+Next task: owner-authorized isolated-database apply of migrations `0014`+`0015`+`0016`, then
+owner-only live gates (public HTTPS webhook + TLS, prepared PasarGuard group, off-host backups,
+phone smoke of `/start` → shop or trial → receipt → delivery, plus invite and sales-snapshot
+chat checks). Do not treat local unit evidence as phone or production proof. Isolated or live
+PasarGuard mutation remains a separate product-risk decision. Remaining operator/staff
+memory-only Telegram input can return after those gates.
 
 Expected sequence:
 
-1. Keep the isolated `neo_bot_local_test` database and disabled-mode API healthy; never reuse or
-   delete the preserved default local volume implicitly.
-2. Complete local static, integration, context and Graphify gates; commit and push the reproducible
-   profile under the owner's standing checkpoint authorization.
-3. Enable local polling only as the sole Telegram intake, verify polling health and run bounded
-   customer/admin Slice 1 smoke tests without provider mutation.
-4. Continue with customer services, staff control plane, and representative workspace as separate
-   slices. Android/iPhone evidence remains mandatory before customer-facing visual completion.
-5. Before a future production release, restore host reachability, collect read-only counts, create
-   fresh rollback artifacts and review the fulfilled-order delivery backfill.
+1. Keep customer purchase naming/coupon, renewal coupon, wallet top-up, ticket, broadcast,
+   ops-settings and referral-setting flows on durable sessions; do not reintroduce process-local
+   Maps for those inputs.
+2. Apply migrations `0014`, `0015` and `0016` only with explicit authorization on an isolated
+   database.
+3. Owner configures trial variant, forced-join channels, reminder thresholds, and referral
+   credit/discount/cap in chat.
+4. Continue Slice 1 local polling smoke and later slices as separately authorized work.
+5. Android/iPhone evidence remains mandatory before customer-facing visual completion.
 
 Owner-only remaining gates: public HTTPS webhook URL, live isolated PasarGuard group, TLS host,
-off-host backup storage, seven-day pilot.
+off-host backup storage, phone smoke, seven-day pilot.
 
 Do not request group tokens or secrets in chat.
 
@@ -486,6 +516,77 @@ handoff entry.
 ## Handoff log
 
 Keep entries concise and newest first. This is an operational summary, not a transcript.
+
+### 2026-09-05 - One-line VPS installer and interactive host menu
+
+- Outcome: added `deploy/neo-install.sh` (clone/update then menu), persistent `deploy/neo` /
+  `deploy/menu.sh`, and keep-or-reconfigure first setup in `deploy/install.sh`. README and
+  `docs/runbooks/first-host.md` document the curl|bash command for `main` after merge and the
+  PR-branch pin. No AGPL copy. No live host install, Telegram call, or PasarGuard mutation.
+- Validation: `pnpm check` passed locally and on GitHub Actions (build, typecheck, lint, format,
+  architecture, unit tests, `pnpm test:deploy-cli`). Unit suites: domain `37`, application `88`,
+  PasarGuard `10`, database `2`, bot-api `151`, admin-web `5` (`293` total) plus installer
+  validators/shellcheck. CI then failed the required high-severity audit on transitive `fast-uri`;
+  patched pins 3.1.6 / 4.1.3 are in `pnpm-workspace.yaml` and `pnpm audit --audit-level=high` is
+  now clean except the known moderate Testcontainers `uuid`. No VPS install, Telegram send, or
+  PasarGuard mutation.
+- Next: unchanged owner-authorized isolated apply of `0014`+`0015`+`0016`, then webhook TLS,
+  isolated PasarGuard group, backups, and phone smoke. Owner can run the one-liner on a VPS.
+
+### 2026-09-05 - Commercial Wave 2 usage sync, referral, and sales snapshot
+
+- Outcome: implemented Wave 2 on the Wave 1 commercial-pilot baseline: read-only PasarGuard
+  used-traffic sync, personal start-link referral with paid-fulfillment wallet/discount rewards,
+  and a Postgres admin sales snapshot. ADR 0023 and migration `0016`. Card-to-card + wallet stay
+  the only rails. PasarGuard stays the only panel. No AGPL copy, no live provision, no deploy.
+- Validation: `pnpm check` passed (build, typecheck, lint, format, architecture, tests).
+  Unit suites: domain `37`, application `88`, PasarGuard `10`, database `2`, bot-api `151`,
+  admin-web `5` (`293` total). No production migrate, Telegram send, or PasarGuard
+  mutation. No phone or production proof.
+- Next: owner-authorized isolated apply of `0014`+`0015`+`0016`, then webhook TLS, isolated
+  PasarGuard group, backups, and phone smoke.
+
+### 2026-09-05 - Commercial Wave 1 for an Iranian Telegram shop
+
+- Outcome: implemented the missing commercial blockers on the durable-customer-flows + menu UX
+  baseline: one free trial per customer, forced channel join, expiry/low-traffic reminder
+  outbox, my-services resend/guides/QR, cancelable admin broadcast, and pilot health/runbook
+  notes. ADR 0022 and migration `0015`. Card-to-card + wallet stay the only rails. PasarGuard
+  stays the only panel. No AGPL copy, no live provision, no deploy.
+- Validation: `pnpm check` passed (build, typecheck, lint, format, architecture, tests).
+  Unit suites: domain `32`, application `78`, PasarGuard `10`, database `2`, bot-api `147`,
+  admin-web `5` (`274` total). No production migrate, Telegram send, or PasarGuard
+  mutation. No phone or production proof. Low-traffic reminders stay Partial until
+  `used_traffic_bytes` is populated.
+- Next: owner-authorized isolated apply of `0014`+`0015`, then webhook TLS, isolated
+  PasarGuard group, backups, and phone smoke.
+
+### 2026-09-05 - Telegram customer and admin menu UX navigation pass
+
+- Outcome: investigated customer and admin chat menus against ADR 0013/0021. Home, Cancel,
+  shop-back and other menu actions now release durable customer sessions instead of treating
+  reply-keyboard labels as username/coupon/ticket/amount input. `/start` during a flow returns
+  Home. Stale renewal confirm after Home no longer creates an order. Wallet and tickets sit on
+  the persistent home keyboard. Admin wizard text no longer swallows menu labels; picker page
+  indicators no longer cancel; admin screens consistently offer hub + Home. Feature `004`
+  artifacts were absent on this remote.
+- Validation: `pnpm check` passed. Unit suites: domain `26`, application `69`, PasarGuard
+  `10`, database `2`, bot-api `139`, admin-web `5` (`251` total). No production migrate,
+  Telegram send, or PasarGuard mutation. No phone or production proof.
+- Next: keep remaining operator input off process-local Maps; apply `0014` only with explicit
+  isolated-database authorization. Deeper catalog-admin BotScreenModel consolidation is later.
+
+### 2026-09-05 - Feature 005 Phase 4 customer restart-safe flows
+
+- Outcome: customer purchase naming/coupon, renewal coupon, wallet top-up amount/coupon, and
+  ticket create/follow-up now use a versioned conversation-session kernel. Ticket bodies stay
+  out of session history and are written only with Telegram-update idempotency. ADR 0021 and
+  migration `0014` record the durable decision. This remote had no earlier 005 artifacts.
+- Validation: `pnpm check` gates through architecture plus unit suites: domain `26`,
+  application `69`, PasarGuard `10`, database `2`, bot-api `132`, admin-web `5`
+  (`244` total). No production migrate, Telegram send, or PasarGuard mutation.
+- Next: keep remaining operator input off process-local Maps; apply `0014` only with explicit
+  isolated-database authorization.
 
 ### 2026-08-28 - Isolated local test runtime replaces the Mini App VPS path
 

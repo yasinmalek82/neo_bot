@@ -86,6 +86,9 @@ export const EVENT_PURPOSE: Readonly<Record<ReportingEventType, ReportTopicPurpo
   'reseller.order_created': 'resellers',
   'reseller.assignment_updated': 'resellers',
   'reseller.pricing_updated': 'resellers',
+  'trial.claimed': 'sales',
+  'broadcast.queued': 'daily_summaries',
+  'referral.rewarded': 'sales',
 };
 
 export class ReportingUseCase implements ReportingPublisher {
@@ -362,6 +365,28 @@ export function formatReportText(type: ReportingEventType, payload: ReportingPay
         `محصول: ${payload['productName'] ?? ''} — ${payload['variantName'] ?? ''}`.trim(),
         `مبلغ: ${payload['amountIrr'] ?? 'نامشخص'} ریال`,
         `نوع: ${payload['pricingKind'] ?? 'نامشخص'}`,
+      ].join('\n');
+    case 'trial.claimed':
+      return [
+        'سرویس تست',
+        `سفارش: ${payload['orderId'] ?? 'نامشخص'}`,
+        `محصول: ${payload['productName'] ?? ''} — ${payload['variantName'] ?? ''}`.trim(),
+        `شناسه تلگرام: ${telegramUserId}`,
+      ].join('\n');
+    case 'broadcast.queued':
+      return [
+        'پیام همگانی ثبت شد',
+        `کار: ${payload['jobId'] ?? 'نامشخص'}`,
+        `گیرنده: ${payload['recipientCount'] ?? '0'}`,
+        `اثرانگشت متن: ${payload['bodyHash'] ?? 'نامشخص'}`,
+      ].join('\n');
+    case 'referral.rewarded':
+      return [
+        'پاداش دعوت',
+        `سفارش: ${payload['orderId'] ?? 'نامشخص'}`,
+        `دعوت‌کننده: ${payload['referrerCustomerId'] ?? 'نامشخص'}`,
+        `دعوت‌شده: ${payload['referredCustomerId'] ?? 'نامشخص'}`,
+        `اعتبار: ${payload['creditIrr'] ?? '0'} ریال`,
       ].join('\n');
   }
 }

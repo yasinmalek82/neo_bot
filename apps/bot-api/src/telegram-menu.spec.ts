@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { SellableProductVariant } from '@neo-bot/domain';
 
 import {
+  adminDeniedText,
   adminHubKeyboard,
+  adminReportsKeyboard,
   buttonLabel,
   customerOrderStatusLabel,
   escapeHtml,
@@ -128,6 +130,10 @@ describe('telegram menu copy', () => {
     expect(matchMenuAction('راهنمای انتخاب')).toBe('guide');
     expect(matchMenuAction('/help')).toBe('help');
     expect(matchMenuAction('خرید سرویس')).toBe('shop');
+    expect(matchMenuAction('خرید سریع')).toBe('shop');
+    expect(matchMenuAction(MENU_LABEL.home)).toBe('home');
+    expect(matchMenuAction(MENU_LABEL.wallet)).toBe('wallet');
+    expect(matchMenuAction(MENU_LABEL.ticket)).toBe('ticket');
     expect(matchMenuAction('وضعیت سیستم')).toBe('status');
     expect(receiptConflictText('OPEN_ORDER_UNDER_REVIEW')).toContain('در حال بررسی');
     expect(receiptConflictText('NO_ORDER_AWAITING_PAYMENT')).toContain('سفارش باز پیدا نشد');
@@ -146,20 +152,34 @@ describe('telegram menu copy', () => {
     expect(dailySummaryQueuedText(true)).toContain('خلاصه امروز ثبت شد');
     expect(customerOrderStatusLabel('receipt_submitted')).toBe('رسید در حال بررسی');
     expect(matchMenuAction(MENU_LABEL.shop)).toBe('shop');
+    expect(matchMenuAction(MENU_LABEL.trial)).toBe('trial');
+    expect(matchMenuAction(MENU_LABEL.services)).toBe('services');
     expect(matchMenuAction(MENU_LABEL.store)).toBe('store');
     expect(matchMenuAction('مدیریت فروشگاه')).toBe('store');
     expect(homeReplyKeyboard(true)).toEqual({
       keyboard: [
         [{ text: 'خرید سریع 🛍' }],
+        [{ text: 'سرویس‌های من 📡' }],
         [{ text: 'راهنمای انتخاب 🧭' }],
         [{ text: 'پیگیری سفارش 📦' }, { text: 'تمدید سرویس ♻️' }],
+        [{ text: 'شارژ کیف پول 💳' }, { text: 'تیکت پشتیبانی 🎫' }],
+        [{ text: 'دعوت دوستان 🎁' }],
         [{ text: 'راهنما 📘' }],
+        [{ text: 'منوی اصلی 🏠' }],
         [{ text: 'بخش ادمین 👨‍💻' }],
       ],
       resize_keyboard: true,
       is_persistent: true,
       input_field_placeholder: 'از دکمه‌های پایین انتخاب کن',
     });
+    expect(adminReportsKeyboard(true)).toEqual({
+      inline_keyboard: [
+        [{ text: 'ارسال خلاصه امروز', callback_data: 'admin:summary' }],
+        [{ text: 'بخش ادمین 👨‍💻', callback_data: 'admin:hub' }],
+        [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
+      ],
+    });
+    expect(adminDeniedText()).toContain('فقط برای مدیر فروشگاه');
     expect(adminHubKeyboard()).toEqual({
       inline_keyboard: [
         [{ text: 'وضعیت سیستم ⚙️', callback_data: 'admin:status' }],
@@ -170,6 +190,9 @@ describe('telegram menu copy', () => {
         [{ text: 'مدیریت فروشگاه 🏪', callback_data: 'admin:store' }],
         [{ text: 'ساخت ناموفق ⚠️', callback_data: 'admin:failed' }],
         [{ text: 'سلامت کاتالوگ 🗂️', callback_data: 'admin:catalog' }],
+        [{ text: 'تنظیمات تجاری 🛠', callback_data: 'admin:ops' }],
+        [{ text: 'خلاصه فروش 📊', callback_data: 'admin:sales' }],
+        [{ text: 'پیام همگانی 📢', callback_data: 'admin:broadcast' }],
         [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
       ],
     });
@@ -205,13 +228,13 @@ describe('telegram menu copy', () => {
         hasItems: false,
       }),
     ).toContain('پلن فعالی');
-    expect(shopText()).toContain('خرید سرویس');
+    expect(shopText()).toContain('خرید سریع');
     expect(shopText()).toContain('یک دسته انتخاب کن');
     expect(missingCategoryText()).toContain('دسته در دسترس نیست');
     expect(missingCategoryText()).not.toContain('پلن فعالی');
     expect(emptyShopText(true)).toContain('مدیریت فروشگاه');
     expect(emptyShopText(false)).not.toContain('کنسول کاتالوگ');
-    expect(emptyShopText(false)).toContain('خرید سرویس');
+    expect(emptyShopText(false)).toContain('خرید سریع');
     expect(
       adminCatalogHealthText({
         categoryCount: 2,

@@ -2,6 +2,7 @@ import {
   CommerceUseCase,
   CustomerDeliveryUseCase,
   type CommerceRepository,
+  type CommercialRepository,
   type OpsDailySummaryUseCase,
   type ReportingUseCase,
   type ServiceProvisioner,
@@ -9,6 +10,7 @@ import {
 import {
   DomainConflictError,
   type CatalogAdminSession,
+  type DurableConversationSession,
   type SalesOrder,
   type SellableProductVariant,
   type ServiceBinding,
@@ -365,9 +367,13 @@ describe('TelegramCommerceBot', () => {
       expect.objectContaining({
         keyboard: [
           [{ text: 'خرید سریع 🛍' }],
+          [{ text: 'سرویس‌های من 📡' }],
           [{ text: 'راهنمای انتخاب 🧭' }],
           [{ text: 'پیگیری سفارش 📦' }, { text: 'تمدید سرویس ♻️' }],
+          [{ text: 'شارژ کیف پول 💳' }, { text: 'تیکت پشتیبانی 🎫' }],
+          [{ text: 'دعوت دوستان 🎁' }],
           [{ text: 'راهنما 📘' }],
+          [{ text: 'منوی اصلی 🏠' }],
         ],
         resize_keyboard: true,
         is_persistent: true,
@@ -536,7 +542,7 @@ describe('TelegramCommerceBot', () => {
     expect(messenger.editMessageText).toHaveBeenCalledWith(
       '10001',
       '9',
-      expect.stringContaining('خرید سرویس'),
+      expect.stringContaining('خرید سریع'),
       expect.objectContaining({
         inline_keyboard: [
           [{ text: 'اقتصادی', callback_data: 'cat:10' }],
@@ -601,9 +607,16 @@ describe('TelegramCommerceBot', () => {
       },
     });
     const keyboard = vi.mocked(messenger.editMessageText).mock.calls.at(-1)?.[3]?.inline_keyboard;
-    expect(keyboard?.filter((row) => row[0]?.callback_data?.startsWith('variant:'))).toHaveLength(
-      3,
-    );
+    expect(
+      keyboard?.filter((row) => {
+        const first = row[0];
+        return (
+          first !== undefined &&
+          'callback_data' in first &&
+          first.callback_data.startsWith('variant:')
+        );
+      }),
+    ).toHaveLength(3);
     expect(JSON.stringify(keyboard)).toContain('product:10:40:1');
   });
 
@@ -805,7 +818,7 @@ describe('TelegramCommerceBot', () => {
       expect.stringContaining('دسته در دسترس نیست'),
       expect.objectContaining({
         inline_keyboard: expect.arrayContaining([
-          [{ text: 'خرید سرویس ⬅️', callback_data: 'shop' }],
+          [{ text: 'خرید سریع ⬅️', callback_data: 'shop' }],
           [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
         ]),
       }),
@@ -838,7 +851,8 @@ describe('TelegramCommerceBot', () => {
       {
         inline_keyboard: [
           [{ text: 'ادامه و دریافت شماره کارت 💳', callback_data: 'buy:2' }],
-          [{ text: 'خرید سرویس ⬅️', callback_data: 'shop' }],
+          [{ text: 'خرید سریع ⬅️', callback_data: 'shop' }],
+          [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
         ],
       },
     );
@@ -924,7 +938,7 @@ describe('TelegramCommerceBot', () => {
     expect(text).not.toContain('پلن فعالی');
     const keyboard = JSON.stringify(vi.mocked(messenger.editMessageText).mock.calls[0]?.[3]);
     expect(keyboard).toContain('"callback_data":"shop"');
-    expect(keyboard).toContain('خرید سرویس');
+    expect(keyboard).toContain('خرید سریع');
   });
 
   it('shows the mixed admin menu to an administrator', async () => {
@@ -1024,8 +1038,16 @@ describe('TelegramCommerceBot', () => {
           text: 'مدیریت فروشگاه',
         },
       }),
-    ).rejects.toThrow('ADMIN_ACCESS_DENIED');
-    expect(messenger.sendMessage).not.toHaveBeenCalled();
+    ).resolves.toBeUndefined();
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('فقط برای مدیر فروشگاه'),
+      expect.objectContaining({
+        inline_keyboard: [[{ text: 'منوی اصلی 🏠', callback_data: 'menu' }]],
+      }),
+      { parseMode: 'HTML' },
+    );
+    expect(repository.completeTelegramUpdate).toHaveBeenCalledWith('1322');
   });
 
   it('opens the private chat store-management hub for an authorized admin', async () => {
@@ -1158,6 +1180,15 @@ describe('TelegramCommerceBot', () => {
         data: 'admin:store',
       },
     });
+    expect(messenger.editMessageText).toHaveBeenCalledWith(
+      '10001',
+      '253',
+      expect.stringContaining('فقط برای مدیر فروشگاه'),
+      expect.any(Object),
+    );
+    expect(vi.mocked(messenger.editMessageText).mock.calls[0]?.[2]).not.toContain(
+      'NEO NETWORK — مدیریت فروشگاه',
+    );
     await bot.handleUpdate({
       update_id: 1364,
       callback_query: {
@@ -1167,7 +1198,7 @@ describe('TelegramCommerceBot', () => {
         data: 'admin:store',
       },
     });
-    expect(messenger.editMessageText).not.toHaveBeenCalled();
+    expect(messenger.editMessageText).toHaveBeenCalledTimes(1);
   });
 
   it('masks and removes a card-number input while preserving the settings wizard', async () => {
@@ -1431,6 +1462,7 @@ describe('TelegramCommerceBot', () => {
         inline_keyboard: [
           [expect.objectContaining({ callback_data: 'admin:order:3' })],
           [{ text: 'بخش ادمین 👨‍💻', callback_data: 'admin:hub' }],
+          [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
         ],
       }),
     );
@@ -1467,6 +1499,7 @@ describe('TelegramCommerceBot', () => {
         inline_keyboard: [
           [expect.objectContaining({ callback_data: 'admin:order:3' })],
           [{ text: 'بخش ادمین 👨‍💻', callback_data: 'admin:hub' }],
+          [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
         ],
       }),
     );
@@ -1876,21 +1909,23 @@ describe('TelegramCommerceBot', () => {
     };
     const bot = createBot(repository, messenger, null, provisioner);
 
-    await expect(
+    const renewCallback = (updateId: number, id: string, data: string) =>
       bot.handleUpdate({
-        update_id: 125,
+        update_id: updateId,
         callback_query: {
-          id: 'cb-renew',
+          id,
           from: { id: 10001, first_name: 'خریدار' },
           message: {
             message_id: 14,
             chat: { id: 10001, type: 'private' },
             text: 'منو',
           },
-          data: 'renew',
+          data,
         },
-      }),
-    ).resolves.toBeUndefined();
+      });
+
+    await expect(renewCallback(125, 'cb-renew', 'renew')).resolves.toBeUndefined();
+    await expect(renewCallback(1251, 'cb-renew-skip', 'flow:skip-coupon')).resolves.toBeUndefined();
 
     expect(repository.completeTelegramUpdate).toHaveBeenCalledWith('125');
     expect(repository.failTelegramUpdate).not.toHaveBeenCalled();
@@ -1931,16 +1966,27 @@ describe('TelegramCommerceBot', () => {
     expect(provisioner.renew).not.toHaveBeenCalled();
     expect(repository.createRenewalOrder).not.toHaveBeenCalled();
 
-    await callback(128, 'cb-renew-confirm', 'renew:confirm');
+    await callback(128, 'cb-renew-stale', 'renew:confirm');
+    expect(repository.createRenewalOrder).not.toHaveBeenCalled();
+    expect(messenger.editMessageText).toHaveBeenCalledWith(
+      '10001',
+      '128',
+      expect.stringContaining('این مرحله منقضی شد'),
+      expect.any(Object),
+    );
+
+    await callback(129, 'cb-renew-again', 'renew');
+    await callback(130, 'cb-renew-skip', 'flow:skip-coupon');
+    await callback(131, 'cb-renew-confirm', 'renew:confirm');
     expect(repository.createRenewalOrder).toHaveBeenCalledWith(
       customer.id,
-      'telegram:renew:10001:128',
+      'telegram:131:renew',
       undefined,
     );
     expect(provisioner.renew).not.toHaveBeenCalled();
     expect(messenger.editMessageText).toHaveBeenCalledWith(
       '10001',
-      '128',
+      '131',
       expect.stringContaining('سفارش ثبت شد؛ نوبت پرداخت است'),
       expect.any(Object),
     );
@@ -2349,19 +2395,579 @@ describe('TelegramCommerceBot', () => {
         text: 'rep_user',
       },
     });
+    expect(repository.createOrder).not.toHaveBeenCalled();
+    await bot.handleUpdate({
+      update_id: 1296,
+      callback_query: {
+        id: 'cb-skip-coupon',
+        from: { id: 40005, first_name: 'نماینده' },
+        message: {
+          message_id: 186,
+          chat: { id: 40005, type: 'private' },
+          text: 'کد تخفیف',
+        },
+        data: 'flow:skip-coupon',
+      },
+    });
 
     expect(repository.createOrder).toHaveBeenCalledWith(
       customer.id,
       '2',
-      'telegram:1295:buy:2',
+      'telegram:1296:buy:2',
       '9',
       'rep_user',
     );
   });
+
+  it('resumes purchase naming after bot reconstruction without a duplicate checkout', async () => {
+    const repository = createRepository();
+    repository.createOrder = vi.fn().mockResolvedValue(order);
+    repository.getOrder = vi.fn().mockResolvedValue(order);
+    const first = createBot(repository, createMessenger());
+    await first.handleUpdate({
+      update_id: 1401,
+      callback_query: {
+        id: 'cb-buy-restart',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: {
+          message_id: 201,
+          chat: { id: 10001, type: 'private' },
+          text: 'فروشگاه',
+        },
+        data: 'buy:2',
+      },
+    });
+    const reconstructed = createBot(repository, createMessenger());
+    await reconstructed.handleUpdate({
+      update_id: 1402,
+      message: {
+        message_id: 202,
+        chat: { id: 10001, type: 'private' },
+        from: { id: 10001, first_name: 'خریدار' },
+        text: 'ali_reza',
+      },
+    });
+    expect(repository.createOrder).not.toHaveBeenCalled();
+    await reconstructed.handleUpdate({
+      update_id: 1403,
+      callback_query: {
+        id: 'cb-skip-restart',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: {
+          message_id: 203,
+          chat: { id: 10001, type: 'private' },
+          text: 'کد تخفیف',
+        },
+        data: 'flow:skip-coupon',
+      },
+    });
+    expect(repository.createOrder).toHaveBeenCalledTimes(1);
+    expect(repository.createOrder).toHaveBeenCalledWith(
+      customer.id,
+      '2',
+      'telegram:1403:buy:2',
+      undefined,
+      'ali_reza',
+    );
+    await reconstructed.handleUpdate({
+      update_id: 1404,
+      message: {
+        message_id: 204,
+        chat: { id: 10001, type: 'private' },
+        from: { id: 10001, first_name: 'خریدار' },
+        text: 'unrelated after complete',
+      },
+    });
+    expect(repository.createOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases a purchase naming session when the shop reply-keyboard label is tapped', async () => {
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1501,
+      callback_query: {
+        id: 'cb-buy-nav',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: { message_id: 301, chat: { id: 10001, type: 'private' }, text: 'فروشگاه' },
+        data: 'buy:2',
+      },
+    });
+    await bot.handleUpdate({
+      update_id: 1502,
+      message: {
+        message_id: 302,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: MENU_LABEL.shop,
+      },
+    });
+    expect(repository.createOrder).not.toHaveBeenCalled();
+    expect(await repository.getPendingConversationSession('10001')).toBeNull();
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('فروشگاه خالی است'),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('releases a purchase naming session when shop-back is tapped and does not treat it as a username', async () => {
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1503,
+      callback_query: {
+        id: 'cb-buy-shopback',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: { message_id: 303, chat: { id: 10001, type: 'private' }, text: 'فروشگاه' },
+        data: 'buy:2',
+      },
+    });
+    await bot.handleUpdate({
+      update_id: 1504,
+      callback_query: {
+        id: 'cb-shop-back',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: { message_id: 304, chat: { id: 10001, type: 'private' }, text: 'نام' },
+        data: 'shop',
+      },
+    });
+    expect(repository.createOrder).not.toHaveBeenCalled();
+    expect(await repository.getPendingConversationSession('10001')).toBeNull();
+    expect(messenger.editMessageText).toHaveBeenCalledWith(
+      '10001',
+      '304',
+      expect.stringContaining('فروشگاه خالی است'),
+      expect.any(Object),
+    );
+  });
+
+  it('returns /start during purchase naming to home instead of treating it as a username', async () => {
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1505,
+      callback_query: {
+        id: 'cb-buy-start',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: { message_id: 305, chat: { id: 10001, type: 'private' }, text: 'فروشگاه' },
+        data: 'buy:2',
+      },
+    });
+    await bot.handleUpdate({
+      update_id: 1506,
+      message: {
+        message_id: 306,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: '/start',
+      },
+    });
+    expect(repository.createOrder).not.toHaveBeenCalled();
+    expect(await repository.getPendingConversationSession('10001')).toBeNull();
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('NEO NETWORK'),
+      expect.objectContaining({ keyboard: expect.any(Array) }),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('does not consume administrator menu labels as catalog wizard field text', async () => {
+    const pending: CatalogAdminSession = {
+      id: '2d8e7f38-4dbe-4f09-bc71-68088c005002',
+      adminTelegramUserId: '70001',
+      baseRevision: 4,
+      status: 'pending',
+      expiresAt: new Date('2026-09-06T00:00:00.000Z'),
+      publishedResult: null,
+      state: {
+        kind: 'category',
+        step: 'category-fields',
+        field: 'name',
+        values: { code: 'cat-open' },
+      },
+    };
+    const updateSession = vi.fn();
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(
+      repository,
+      messenger,
+      null,
+      undefined,
+      null,
+      {},
+      {
+        getReadModel: vi.fn().mockResolvedValue({ categories: [], products: [], variants: [] }),
+        getPendingSession: vi.fn().mockResolvedValue(pending),
+        updateSession,
+      },
+    );
+    await bot.handleUpdate({
+      update_id: 1601,
+      message: {
+        message_id: 401,
+        from: { id: 70001, first_name: 'ادمین' },
+        chat: { id: 70001, type: 'private' },
+        text: MENU_LABEL.shop,
+      },
+    });
+    expect(updateSession).not.toHaveBeenCalled();
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '70001',
+      expect.stringContaining('فروشگاه خالی است'),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('keeps the store picker page indicator from canceling the wizard', async () => {
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(
+      repository,
+      messenger,
+      null,
+      undefined,
+      null,
+      {},
+      {
+        getReadModel: vi.fn().mockResolvedValue({
+          categories: [
+            {
+              id: '10',
+              code: 'economic',
+              name: 'اقتصادی',
+              description: '',
+              parentId: null,
+              position: 0,
+              active: true,
+            },
+          ],
+          products: [],
+          variants: [],
+        }),
+        getPendingSession: vi.fn().mockResolvedValue(null),
+      },
+    );
+    await bot.handleUpdate({
+      update_id: 1602,
+      callback_query: {
+        id: 'cb-picker',
+        from: { id: 70001, first_name: 'ادمین' },
+        message: { message_id: 402, chat: { id: 70001, type: 'private' }, text: 'انتخاب' },
+        data: 'store:picker:category:0',
+      },
+    });
+    const keyboard = JSON.stringify(vi.mocked(messenger.editMessageText).mock.calls[0]?.[3]);
+    expect(keyboard).toContain('"callback_data":"store:picker:category:0"');
+    expect(keyboard).toContain('"callback_data":"store:cancel"');
+    expect(keyboard).not.toMatch(/"text":"1\/1","callback_data":"store:cancel"/u);
+  });
+
+  it('refuses a second trial and does not provision again', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.getCommercialSettings).mockResolvedValue({
+      trialEnabled: true,
+      trialVariantId: variant.id,
+      forcedJoinChannels: [],
+      remindersEnabled: true,
+      expiryReminderDays: 3,
+      lowTrafficPercent: 15,
+      referralEnabled: false,
+      referralReferrerCreditIrr: 0n,
+      referralInviteeDiscountIrr: 0n,
+      referralMaxRewardsPerReferrer: 50,
+      updatedAt: new Date('2026-09-05T00:00:00.000Z'),
+    });
+    vi.mocked(repository.getTrialClaim).mockResolvedValue({
+      customerId: customer.id,
+      orderId: order.id,
+      claimedAt: new Date('2026-09-01T00:00:00.000Z'),
+    });
+    const provisioner = { create: vi.fn(), renew: vi.fn() };
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger, null, provisioner);
+    await bot.handleUpdate({
+      update_id: 1701,
+      message: {
+        message_id: 501,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: MENU_LABEL.trial,
+      },
+    });
+    expect(provisioner.create).not.toHaveBeenCalled();
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('قبلاً استفاده شده'),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('fails closed on channel membership errors and never opens shop', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.getCommercialSettings).mockResolvedValue({
+      trialEnabled: false,
+      trialVariantId: null,
+      forcedJoinChannels: [{ chatId: '@NeoShop', username: 'NeoShop' }],
+      remindersEnabled: true,
+      expiryReminderDays: 3,
+      lowTrafficPercent: 15,
+      referralEnabled: false,
+      referralReferrerCreditIrr: 0n,
+      referralInviteeDiscountIrr: 0n,
+      referralMaxRewardsPerReferrer: 50,
+      updatedAt: new Date('2026-09-05T00:00:00.000Z'),
+    });
+    const messenger = createMessenger();
+    messenger.getChatMember = vi.fn().mockRejectedValue(new Error('TELEGRAM_HTTP_403'));
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1702,
+      message: {
+        message_id: 502,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: MENU_LABEL.shop,
+      },
+    });
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('قابل بررسی نیست'),
+      expect.objectContaining({
+        inline_keyboard: expect.arrayContaining([
+          expect.arrayContaining([expect.objectContaining({ url: 'https://t.me/NeoShop' })]),
+        ]),
+      }),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('lets an allowlisted admin bypass the forced join gate', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.getCommercialSettings).mockResolvedValue({
+      trialEnabled: false,
+      trialVariantId: null,
+      forcedJoinChannels: [{ chatId: '@NeoShop', username: 'NeoShop' }],
+      remindersEnabled: true,
+      expiryReminderDays: 3,
+      lowTrafficPercent: 15,
+      referralEnabled: false,
+      referralReferrerCreditIrr: 0n,
+      referralInviteeDiscountIrr: 0n,
+      referralMaxRewardsPerReferrer: 50,
+      updatedAt: new Date('2026-09-05T00:00:00.000Z'),
+    });
+    const messenger = createMessenger();
+    messenger.getChatMember = vi.fn();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1703,
+      message: {
+        message_id: 503,
+        from: { id: 70001, first_name: 'ادمین' },
+        chat: { id: 70001, type: 'private' },
+        text: MENU_LABEL.shop,
+      },
+    });
+    expect(messenger.getChatMember).not.toHaveBeenCalled();
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '70001',
+      expect.stringContaining('فروشگاه خالی است'),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('queues an admin broadcast from a durable session without storing the body on the session', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.createBroadcastJob).mockResolvedValue({
+      id: '44',
+      adminTelegramUserId: '70001',
+      body: 'فروشگاه امشب قطع است',
+      bodySha256: 'b'.repeat(64),
+      status: 'queued',
+      recipientCount: 3,
+      sentCount: 0,
+      failedCount: 0,
+      createdAt: new Date('2026-09-05T00:00:00.000Z'),
+    });
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1704,
+      callback_query: {
+        id: 'cb-broadcast',
+        from: { id: 70001, first_name: 'ادمین' },
+        message: { message_id: 504, chat: { id: 70001, type: 'private' }, text: 'ادمین' },
+        data: 'admin:broadcast',
+      },
+    });
+    await bot.handleUpdate({
+      update_id: 1705,
+      message: {
+        message_id: 505,
+        from: { id: 70001, first_name: 'ادمین' },
+        chat: { id: 70001, type: 'private' },
+        text: 'فروشگاه امشب قطع است',
+      },
+    });
+    expect(repository.createBroadcastJob).toHaveBeenCalledWith({
+      adminTelegramUserId: '70001',
+      body: 'فروشگاه امشب قطع است',
+      bodySha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    const session = await repository.getPendingConversationSession('70001');
+    expect(session).toBeNull();
+  });
+
+  it('lists my services without putting a subscription URL on the list screen', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.listCustomerServices).mockResolvedValue([
+      {
+        id: '4',
+        productName: 'اقتصادی',
+        variantName: 'یک‌ماهه',
+        status: 'active',
+        expiresAt: new Date('2026-09-21T00:00:00.000Z'),
+        dataLimitBytes: 20n * 1024n ** 3n,
+        usedTrafficBytes: null,
+      },
+    ]);
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1706,
+      message: {
+        message_id: 506,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: MENU_LABEL.services,
+      },
+    });
+    const listCall = vi.mocked(messenger.sendMessage).mock.calls.at(-1);
+    expect(listCall?.[1]).toContain('سرویس‌های من');
+    expect(listCall?.[1]).not.toContain('https://');
+    expect(JSON.stringify(listCall?.[2])).toContain('svc:4');
+  });
+
+  it('attributes a personal start payload and never treats it as a username', async () => {
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1801,
+      message: {
+        message_id: 601,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: '/start r70001',
+      },
+    });
+    expect(repository.attributeReferralStart).toHaveBeenCalledWith({
+      customerId: customer.id,
+      inviteeTelegramUserId: '10001',
+      referrerTelegramUserId: '70001',
+    });
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('NEO NETWORK'),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('shows a personal invite start link without a subscription URL', async () => {
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1802,
+      message: {
+        message_id: 602,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: MENU_LABEL.invite,
+      },
+    });
+    const call = vi.mocked(messenger.sendMessage).mock.calls.at(-1);
+    expect(call?.[1]).toContain('https://t.me/NeoShopBot?start=r10001');
+    expect(call?.[1]).toContain('اولین خرید موفق پرداخت‌شده');
+    expect(call?.[1]).not.toContain('https://panel');
+  });
+
+  it('renders an admin sales snapshot from Postgres counts only', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.getAdminSalesSnapshot).mockResolvedValue({
+      timezone: 'Asia/Tehran',
+      today: {
+        ordersByStatus: {
+          awaiting_receipt: 1,
+          receipt_submitted: 2,
+          provisioning: 0,
+          provisioning_failed: 0,
+          fulfilled: 3,
+          rejected: 0,
+          cancelled: 0,
+        },
+        orderCount: 6,
+        revenueIrr: 450_000n,
+        newCustomers: 2,
+      },
+      last7d: {
+        ordersByStatus: {
+          awaiting_receipt: 1,
+          receipt_submitted: 2,
+          provisioning: 0,
+          provisioning_failed: 1,
+          fulfilled: 8,
+          rejected: 1,
+          cancelled: 0,
+        },
+        orderCount: 13,
+        revenueIrr: 1_200_000n,
+        newCustomers: 5,
+      },
+      openTickets: 4,
+      pendingReceiptReviews: 2,
+    });
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1803,
+      callback_query: {
+        id: 'cb-sales',
+        from: { id: 70001, first_name: 'ادمین' },
+        message: { message_id: 603, chat: { id: 70001, type: 'private' }, text: 'ادمین' },
+        data: 'admin:sales',
+      },
+    });
+    const call = vi.mocked(messenger.editMessageText).mock.calls.at(-1);
+    expect(call?.[2]).toContain('خلاصه فروش');
+    expect(call?.[2]).toContain('Asia/Tehran');
+    expect(call?.[2]).toContain('تیکت باز: 4');
+    expect(call?.[2]).toContain('رسید در انتظار بررسی: 2');
+    expect(call?.[2]).not.toMatch(/https?:\/\//u);
+  });
+
+  it('keeps usage sync gated when no PasarGuard reader is injected', async () => {
+    const repository = createRepository();
+    const bot = createBot(repository, createMessenger());
+    await bot.dispatchDueUsageSync();
+    expect(repository.listServicesDueForUsageSync).not.toHaveBeenCalled();
+    expect(repository.persistServiceUsedTraffic).not.toHaveBeenCalled();
+  });
 });
 
 function createBot(
-  repository: CommerceRepository,
+  repository: CommerceRepository & CommercialRepository,
   messenger: TelegramMessenger,
   reporting: ReportingUseCase | null = null,
   provisioner: ServiceProvisioner = {
@@ -2384,6 +2990,10 @@ function createBot(
     reporting: null,
     reportDispatchIntervalMs: 15_000,
     deliveryDispatchIntervalMs: 15_000,
+    reminderDispatchIntervalMs: 15_000,
+    broadcastDispatchIntervalMs: 15_000,
+    usageSyncIntervalMs: 60_000,
+    botUsername: 'NeoShopBot',
     ...configOverrides,
   };
   const commerce = new CommerceUseCase(repository, provisioner, reporting);
@@ -2439,7 +3049,8 @@ function createMessenger(): TelegramMessenger {
   };
 }
 
-function createRepository(): CommerceRepository {
+function createRepository(): CommerceRepository & CommercialRepository {
+  const sessions = new Map<string, DurableConversationSession>();
   const proof: TelegramPaymentProof = {
     id: '20',
     orderId: order.id,
@@ -2494,5 +3105,120 @@ function createRepository(): CommerceRepository {
     reserveTelegramUpdate: vi.fn().mockResolvedValue(true),
     completeTelegramUpdate: vi.fn().mockResolvedValue(undefined),
     failTelegramUpdate: vi.fn().mockResolvedValue(undefined),
+    getPendingConversationSession: vi.fn(async (telegramUserId: string) => {
+      return (
+        [...sessions.values()].find(
+          (session) => session.telegramUserId === telegramUserId && session.status === 'pending',
+        ) ?? null
+      );
+    }),
+    putConversationSession: vi.fn(async (session: DurableConversationSession) => {
+      for (const [id, existing] of sessions) {
+        if (
+          existing.telegramUserId === session.telegramUserId &&
+          existing.status === 'pending' &&
+          existing.id !== session.id
+        ) {
+          sessions.set(id, { ...existing, status: 'canceled' });
+        }
+      }
+      sessions.set(session.id, session);
+      return session;
+    }),
+    finishConversationSession: vi.fn(
+      async (input: {
+        readonly id: string;
+        readonly telegramUserId: string;
+        readonly status: DurableConversationSession['status'];
+        readonly now: Date;
+      }) => {
+        const existing = sessions.get(input.id);
+        if (existing === undefined) {
+          return;
+        }
+        sessions.set(input.id, { ...existing, status: input.status, updatedAt: input.now });
+      },
+    ),
+    findDiscountCode: vi.fn().mockResolvedValue(null),
+    creditWalletTopUp: vi.fn(),
+    createSupportTicket: vi.fn(),
+    followUpSupportTicket: vi.fn(),
+    getCommercialSettings: vi.fn().mockResolvedValue({
+      trialEnabled: false,
+      trialVariantId: null,
+      forcedJoinChannels: [],
+      remindersEnabled: true,
+      expiryReminderDays: 3,
+      lowTrafficPercent: 15,
+      referralEnabled: false,
+      referralReferrerCreditIrr: 0n,
+      referralInviteeDiscountIrr: 0n,
+      referralMaxRewardsPerReferrer: 50,
+      updatedAt: new Date('2026-09-05T00:00:00.000Z'),
+    }),
+    updateCommercialSettings: vi.fn(),
+    createTrialOrder: vi.fn(),
+    getTrialClaim: vi.fn().mockResolvedValue(null),
+    listCustomerServices: vi.fn().mockResolvedValue([]),
+    getServiceAccessTarget: vi.fn().mockResolvedValue(null),
+    enqueueDueServiceReminders: vi.fn().mockResolvedValue(0),
+    claimDueServiceReminders: vi.fn().mockResolvedValue([]),
+    markServiceReminderDelivered: vi.fn(),
+    retryServiceReminder: vi.fn(),
+    failServiceReminder: vi.fn(),
+    createBroadcastJob: vi.fn(),
+    cancelBroadcastJob: vi.fn(),
+    getBroadcastJob: vi.fn(),
+    listRecentBroadcastJobs: vi.fn().mockResolvedValue([]),
+    claimDueBroadcastRecipients: vi.fn().mockResolvedValue([]),
+    markBroadcastRecipientSent: vi.fn(),
+    retryBroadcastRecipient: vi.fn(),
+    failBroadcastRecipient: vi.fn(),
+    setCustomerShopBlocked: vi.fn(),
+    countCommercialQueues: vi.fn().mockResolvedValue({
+      remindersPending: 0,
+      broadcastsPending: 0,
+      broadcastsRunning: 0,
+      usageSyncDue: 0,
+    }),
+    attributeReferralStart: vi.fn().mockResolvedValue(null),
+    getReferralAttribution: vi.fn().mockResolvedValue(null),
+    grantReferralRewardForPaidOrder: vi.fn().mockResolvedValue(null),
+    getAdminSalesSnapshot: vi.fn().mockResolvedValue({
+      timezone: 'Asia/Tehran',
+      today: {
+        ordersByStatus: {
+          awaiting_receipt: 0,
+          receipt_submitted: 0,
+          provisioning: 0,
+          provisioning_failed: 0,
+          fulfilled: 0,
+          rejected: 0,
+          cancelled: 0,
+        },
+        orderCount: 0,
+        revenueIrr: 0n,
+        newCustomers: 0,
+      },
+      last7d: {
+        ordersByStatus: {
+          awaiting_receipt: 0,
+          receipt_submitted: 0,
+          provisioning: 0,
+          provisioning_failed: 0,
+          fulfilled: 0,
+          rejected: 0,
+          cancelled: 0,
+        },
+        orderCount: 0,
+        revenueIrr: 0n,
+        newCustomers: 0,
+      },
+      openTickets: 0,
+      pendingReceiptReviews: 0,
+    }),
+    listServicesDueForUsageSync: vi.fn().mockResolvedValue([]),
+    persistServiceUsedTraffic: vi.fn(),
+    countDueUsageSync: vi.fn().mockResolvedValue(0),
   };
 }

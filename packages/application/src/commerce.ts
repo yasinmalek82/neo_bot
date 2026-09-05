@@ -2,6 +2,7 @@ import {
   DomainConflictError,
   PAYMENT_PROOF_MEDIA_KINDS,
   selectStorefrontEvidenceBadges,
+  validateDiscountCode,
   validatePaymentProofReference,
   validateServiceUsernameBase,
   validateTelegramCustomerInput,
@@ -16,6 +17,7 @@ import {
 } from '@neo-bot/domain';
 
 import type { CommerceRepository, ServiceProvisioner } from './commerce-ports.js';
+import type { ReferralUseCase } from './referral.js';
 import type { ReportingPublisher } from './reporting-ports.js';
 import { utcDateStamp } from './reporting.js';
 
@@ -24,6 +26,7 @@ export class CommerceUseCase {
     private readonly repository: CommerceRepository,
     private readonly serviceProvisioner: ServiceProvisioner,
     private readonly reporting: ReportingPublisher | null = null,
+    private readonly referral: ReferralUseCase | null = null,
   ) {}
 
   public listCategories(parentId: string | null): Promise<readonly CatalogCategory[]> {
@@ -148,16 +151,30 @@ export class CommerceUseCase {
     return { customer, firstContact: created };
   }
 
+  public async previewDiscount(code: string): Promise<string> {
+    const normalized = validateDiscountCode(code);
+    const found = await this.repository.findDiscountCode(normalized);
+    if (found === null) {
+      throw new DomainConflictError('INVALID_DISCOUNT_CODE');
+    }
+    return found.code;
+  }
+
   public async beginCheckout(command: {
     readonly customer: TelegramCustomerInput;
     readonly productVariantId: string;
     readonly idempotencyKey: string;
     readonly serviceUsernameBase: string;
+    readonly discountCode?: string;
   }): Promise<SalesOrder> {
     validateTelegramCustomerInput(command.customer);
     validateServiceUsernameBase(command.serviceUsernameBase);
     requireIdempotencyKey(command.idempotencyKey);
+    if (command.discountCode !== undefined) {
+      await this.previewDiscount(command.discountCode);
+    }
     const { customer, created } = await this.repository.upsertTelegramCustomer(command.customer);
+    rejectIfShopBlocked(customer);
     if (created) {
       await this.publish({
         type: 'customer.first_contact',
@@ -208,10 +225,15 @@ export class CommerceUseCase {
   public async beginRenewal(command: {
     readonly customer: TelegramCustomerInput;
     readonly idempotencyKey: string;
+    readonly discountCode?: string;
   }): Promise<SalesOrder> {
     validateTelegramCustomerInput(command.customer);
     requireIdempotencyKey(command.idempotencyKey);
+    if (command.discountCode !== undefined) {
+      await this.previewDiscount(command.discountCode);
+    }
     const { customer, created } = await this.repository.upsertTelegramCustomer(command.customer);
+    rejectIfShopBlocked(customer);
     if (created) {
       await this.publish({
         type: 'customer.first_contact',
@@ -237,6 +259,49 @@ export class CommerceUseCase {
         amountIrr: order.amountIrr.toString(),
       },
     });
+    return order;
+  }
+
+  public async beginTrial(command: {
+    readonly customer: TelegramCustomerInput;
+    readonly idempotencyKey: string;
+  }): Promise<SalesOrder> {
+    validateTelegramCustomerInput(command.customer);
+    requireIdempotencyKey(command.idempotencyKey);
+    if (this.repository.createTrialOrder === undefined) {
+      throw new DomainConflictError('TRIAL_NOT_CONFIGURED');
+    }
+    const { customer, created } = await this.repository.upsertTelegramCustomer(command.customer);
+    rejectIfShopBlocked(customer);
+    if (created) {
+      await this.publish({
+        type: 'customer.first_contact',
+        occurrenceKey: `customer:${customer.telegramUserId}:first-contact`,
+        payload: { telegramUserId: customer.telegramUserId },
+      });
+    }
+    const usernameBase = trialUsernameBase(customer.telegramUserId);
+    const order = await this.repository.createTrialOrder({
+      customerId: customer.id,
+      idempotencyKey: command.idempotencyKey,
+      serviceUsernameBase: usernameBase,
+    });
+    if (order.status === 'fulfilled') {
+      throw new DomainConflictError('TRIAL_ALREADY_CLAIMED');
+    }
+    await this.publish({
+      type: 'trial.claimed',
+      occurrenceKey: `order:${order.id}:trial-claimed`,
+      payload: {
+        orderId: order.id,
+        telegramUserId: customer.telegramUserId,
+        productName: order.productName,
+        variantName: order.variantName,
+      },
+    });
+    if (order.status === 'provisioning' || order.status === 'provisioning_failed') {
+      return this.fulfillReservedOrder(order);
+    }
     return order;
   }
 
@@ -291,6 +356,7 @@ export class CommerceUseCase {
     });
     if (order.status === 'fulfilled') {
       await this.publishProvisioningSucceeded(order, customer?.telegramUserId ?? 'unknown');
+      await this.grantReferralReward(order);
       return order;
     }
     return this.fulfillReservedOrder(order);
@@ -308,6 +374,7 @@ export class CommerceUseCase {
     if (order.status === 'fulfilled') {
       const customer = await this.repository.getCustomerForOrder(order.id);
       await this.publishProvisioningSucceeded(order, customer?.telegramUserId ?? 'unknown');
+      await this.grantReferralReward(order);
       return order;
     }
     if (order.status !== 'provisioning' && order.status !== 'provisioning_failed') {
@@ -380,7 +447,15 @@ export class CommerceUseCase {
     // Failures after completeOrder must not rewrite the fulfilled order into a
     // provisioning failure; the durable delivery job owns customer notification.
     await this.publishProvisioningSucceeded(fulfilled, customer?.telegramUserId ?? 'unknown');
+    await this.grantReferralReward(fulfilled);
     return fulfilled;
+  }
+
+  private async grantReferralReward(order: SalesOrder): Promise<void> {
+    if (this.referral === null) {
+      return;
+    }
+    await this.referral.grantForFulfilledPaidOrder(order);
   }
 
   private async publishProvisioningSucceeded(
@@ -437,4 +512,14 @@ function requireIdempotencyKey(value: string): void {
   if (value.length < 8 || value.length > 200 || !/^[a-zA-Z0-9:._-]+$/u.test(value)) {
     throw new DomainConflictError('INVALID_IDEMPOTENCY_KEY');
   }
+}
+
+function rejectIfShopBlocked(customer: { readonly shopBlocked?: boolean }): void {
+  if (customer.shopBlocked === true) {
+    throw new DomainConflictError('SHOP_BLOCKED');
+  }
+}
+
+function trialUsernameBase(telegramUserId: string): string {
+  return `t${telegramUserId.slice(-8)}`;
 }

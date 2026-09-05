@@ -1,21 +1,46 @@
 import {
   DomainConflictError,
+  applyInviteeCheckoutDiscount,
+  defaultStorefrontOpsSettings,
+  isPaidFulfillmentEligible,
   isRepresentativePricingSource,
+  mergeStorefrontOpsSettings,
+  parseDurableConversationSession,
+  referralRewardIdempotencyKey,
   resolveRepresentativePrice,
   validateServiceUsernameBase,
+  type AdminSalesSnapshot,
+  type AdminSalesWindowSnapshot,
+  type BroadcastJob,
   type CatalogCategory,
   type ClaimedDeliveryJob,
+  type ConversationSessionStatus,
   type CustomerDeliveryJob,
+  type CustomerServiceSummary,
+  type DurableConversationSession,
+  type ForcedJoinChannel,
   type PaymentProofMediaKind,
+  type ReferralAttribution,
+  type ReferralReward,
   type RepresentativeProfile,
   type RepresentativePricingSource,
   type SalesOrder,
+  type SalesOrderStatus,
   type SellableProductVariant,
+  type ServiceReminderDelivery,
+  type StorefrontOpsSettings,
+  type StorefrontOpsSettingsPatch,
+  type SupportTicket,
+  type SupportTicketWriteResult,
   type TelegramCustomer,
   type TelegramCustomerInput,
   type TelegramPaymentProof,
+  type TrialClaim,
+  type UsageSyncTarget,
+  type UsageSyncWrite,
+  type WalletLedgerEntry,
 } from '@neo-bot/domain';
-import type { CommerceRepository } from '@neo-bot/application';
+import type { CommerceRepository, CommercialRepository } from '@neo-bot/application';
 import type { Pool, PoolClient } from 'pg';
 
 interface CategoryRow {
@@ -58,6 +83,7 @@ interface CustomerRow {
   private_chat_id: string;
   telegram_username: string | null;
   display_name: string;
+  shop_blocked?: boolean;
 }
 
 interface OrderRow {
@@ -115,7 +141,38 @@ interface DeliveryJobClaimRow {
   telegram_message_id: string | null;
 }
 
-export class PostgresCommerceRepository implements CommerceRepository {
+interface ConversationSessionRow {
+  id: string;
+  telegram_user_id: string;
+  flow_id: string;
+  step: string;
+  schema_version: number;
+  payload: unknown;
+  status: string;
+  created_at: Date;
+  updated_at: Date;
+  expires_at: Date;
+}
+
+interface WalletLedgerRow {
+  id: string;
+  customer_id: string;
+  amount_irr: string;
+  kind: WalletLedgerEntry['kind'];
+  idempotency_key: string;
+  discount_code: string | null;
+  created_at: Date;
+}
+
+interface SupportTicketRow {
+  id: string;
+  customer_id: string;
+  status: SupportTicket['status'];
+  created_at: Date;
+  updated_at: Date;
+}
+
+export class PostgresCommerceRepository implements CommerceRepository, CommercialRepository {
   public constructor(private readonly pool: Pool) {}
 
   public async listCategories(parentId: string | null): Promise<readonly CatalogCategory[]> {
@@ -407,7 +464,7 @@ export class PostgresCommerceRepository implements CommerceRepository {
          last_seen_at = now(),
          updated_at = now()
        returning id::text, telegram_user_id::text, private_chat_id::text,
-                 telegram_username, display_name, (xmax = 0) as inserted`,
+                 telegram_username, display_name, shop_blocked, (xmax = 0) as inserted`,
       [input.telegramUserId, input.privateChatId, input.username ?? null, input.displayName.trim()],
     );
     const row = requiredRow(result.rows);
@@ -514,7 +571,7 @@ export class PostgresCommerceRepository implements CommerceRepository {
     const result = await this.pool.query<CustomerRow>(
       `select customer.id::text, customer.telegram_user_id::text,
               customer.private_chat_id::text, customer.telegram_username,
-              customer.display_name
+              customer.display_name, customer.shop_blocked
        from sales_orders orders
        join customers customer on customer.id = orders.customer_id
        where orders.id = $1`,
@@ -983,6 +1040,205 @@ export class PostgresCommerceRepository implements CommerceRepository {
     );
   }
 
+  public async getPendingConversationSession(
+    telegramUserId: string,
+  ): Promise<DurableConversationSession | null> {
+    const result = await this.pool.query<ConversationSessionRow>(
+      conversationSessionQuery('telegram_user_id = $1::bigint and status = $2'),
+      [telegramUserId, 'pending'],
+    );
+    const row = result.rows[0];
+    return row === undefined ? null : mapConversationSession(row);
+  }
+
+  public putConversationSession(
+    session: DurableConversationSession,
+  ): Promise<DurableConversationSession> {
+    const parsed = parseDurableConversationSession(session);
+    return this.withTransaction(async (client) => {
+      await client.query(
+        `update conversation_sessions
+         set status = 'canceled', updated_at = $2, consumed_at = $2
+         where telegram_user_id = $1::bigint and status = 'pending' and id <> $3`,
+        [parsed.telegramUserId, parsed.updatedAt, parsed.id],
+      );
+      await client.query(
+        `insert into conversation_sessions(
+           id, telegram_user_id, flow_id, step, schema_version, payload, status,
+           created_at, updated_at, expires_at
+         ) values ($1, $2::bigint, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
+         on conflict (id) do update set
+           flow_id = excluded.flow_id,
+           step = excluded.step,
+           schema_version = excluded.schema_version,
+           payload = excluded.payload,
+           status = excluded.status,
+           updated_at = excluded.updated_at,
+           expires_at = excluded.expires_at,
+           consumed_at = null`,
+        [
+          parsed.id,
+          parsed.telegramUserId,
+          parsed.flowId,
+          parsed.step,
+          parsed.schemaVersion,
+          JSON.stringify(parsed.payload),
+          parsed.status,
+          parsed.createdAt,
+          parsed.updatedAt,
+          parsed.expiresAt,
+        ],
+      );
+      return parsed;
+    });
+  }
+
+  public async finishConversationSession(input: {
+    readonly id: string;
+    readonly telegramUserId: string;
+    readonly status: Exclude<ConversationSessionStatus, 'pending'>;
+    readonly now: Date;
+  }): Promise<void> {
+    await this.pool.query(
+      `update conversation_sessions
+       set status = $3, updated_at = $4, consumed_at = $4
+       where id = $1 and telegram_user_id = $2::bigint and status = 'pending'`,
+      [input.id, input.telegramUserId, input.status, input.now],
+    );
+  }
+
+  public async findDiscountCode(code: string): Promise<{ readonly code: string } | null> {
+    const result = await this.pool.query<{ code: string }>(
+      `select code from discount_codes where code = $1 and active = true`,
+      [code],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  public creditWalletTopUp(input: {
+    readonly customerId: string;
+    readonly amountIrr: bigint;
+    readonly idempotencyKey: string;
+    readonly discountCode?: string;
+  }): Promise<WalletLedgerEntry> {
+    return this.withTransaction(async (client) => {
+      const existing = await client.query<WalletLedgerRow>(
+        `select id::text, customer_id::text, amount_irr::text, kind, idempotency_key,
+                discount_code, created_at
+         from customer_wallet_ledger
+         where idempotency_key = $1`,
+        [input.idempotencyKey],
+      );
+      const replay = existing.rows[0];
+      if (replay !== undefined) {
+        if (
+          replay.customer_id !== input.customerId ||
+          BigInt(replay.amount_irr) !== input.amountIrr ||
+          (replay.discount_code ?? undefined) !== input.discountCode
+        ) {
+          throw new DomainConflictError('IDEMPOTENCY_KEY_REUSED');
+        }
+        return mapWalletLedger(replay, true);
+      }
+      await client.query('select id from customers where id = $1::bigint for update', [
+        input.customerId,
+      ]);
+      const inserted = await client.query<WalletLedgerRow>(
+        `insert into customer_wallet_ledger(
+           customer_id, amount_irr, kind, idempotency_key, discount_code
+         ) values ($1::bigint, $2, 'topup', $3, $4)
+         returning id::text, customer_id::text, amount_irr::text, kind, idempotency_key,
+                   discount_code, created_at`,
+        [
+          input.customerId,
+          input.amountIrr.toString(),
+          input.idempotencyKey,
+          input.discountCode ?? null,
+        ],
+      );
+      await client.query(
+        `insert into customer_wallets(customer_id, balance_irr)
+         values ($1::bigint, $2)
+         on conflict (customer_id) do update
+         set balance_irr = customer_wallets.balance_irr + excluded.balance_irr,
+             updated_at = now()`,
+        [input.customerId, input.amountIrr.toString()],
+      );
+      const wallet = await client.query<{ balance_irr: string }>(
+        'select balance_irr::text from customer_wallets where customer_id = $1::bigint',
+        [input.customerId],
+      );
+      if (BigInt(requiredRow(wallet.rows).balance_irr) < 0n) {
+        throw new DomainConflictError('NEGATIVE_WALLET_BALANCE');
+      }
+      return mapWalletLedger(requiredRow(inserted.rows), false);
+    });
+  }
+
+  public createSupportTicket(input: {
+    readonly customerId: string;
+    readonly body: string;
+    readonly idempotencyKey: string;
+  }): Promise<SupportTicketWriteResult> {
+    return this.withTransaction(async (client) => {
+      const existing = await client.query<{ ticket_id: string }>(
+        `select ticket_id::text from support_ticket_messages where idempotency_key = $1`,
+        [input.idempotencyKey],
+      );
+      if (existing.rows[0] !== undefined) {
+        return {
+          ticket: await requiredTicket(client, existing.rows[0].ticket_id, input.customerId),
+          replayed: true,
+        };
+      }
+      const ticket = await client.query<SupportTicketRow>(
+        `insert into support_tickets(customer_id) values ($1::bigint)
+         returning id::text, customer_id::text, status, created_at, updated_at`,
+        [input.customerId],
+      );
+      const created = mapSupportTicket(requiredRow(ticket.rows));
+      await client.query(
+        `insert into support_ticket_messages(ticket_id, customer_id, body, idempotency_key)
+         values ($1::bigint, $2::bigint, $3, $4)`,
+        [created.id, input.customerId, input.body, input.idempotencyKey],
+      );
+      return { ticket: created, replayed: false };
+    });
+  }
+
+  public followUpSupportTicket(input: {
+    readonly customerId: string;
+    readonly ticketId: string;
+    readonly body: string;
+    readonly idempotencyKey: string;
+  }): Promise<SupportTicketWriteResult> {
+    return this.withTransaction(async (client) => {
+      const existing = await client.query<{ ticket_id: string }>(
+        `select ticket_id::text from support_ticket_messages where idempotency_key = $1`,
+        [input.idempotencyKey],
+      );
+      if (existing.rows[0] !== undefined) {
+        if (existing.rows[0].ticket_id !== input.ticketId) {
+          throw new DomainConflictError('IDEMPOTENCY_KEY_REUSED');
+        }
+        return {
+          ticket: await requiredTicket(client, input.ticketId, input.customerId),
+          replayed: true,
+        };
+      }
+      const ticket = await requiredTicket(client, input.ticketId, input.customerId);
+      await client.query(
+        `insert into support_ticket_messages(ticket_id, customer_id, body, idempotency_key)
+         values ($1::bigint, $2::bigint, $3, $4)`,
+        [input.ticketId, input.customerId, input.body, input.idempotencyKey],
+      );
+      await client.query(`update support_tickets set updated_at = now() where id = $1::bigint`, [
+        input.ticketId,
+      ]);
+      return { ticket, replayed: false };
+    });
+  }
+
   public async upsertCategory(input: {
     readonly code: string;
     readonly name: string;
@@ -1047,6 +1303,856 @@ export class PostgresCommerceRepository implements CommerceRepository {
     return row.id;
   }
 
+  public async getCommercialSettings(): Promise<StorefrontOpsSettings> {
+    const result = await this.pool.query<OpsSettingsRow>(
+      `select trial_enabled, trial_variant_id::text, forced_join_channels,
+              reminders_enabled, expiry_reminder_days, low_traffic_percent,
+              referral_enabled, referral_referrer_credit_irr::text,
+              referral_invitee_discount_irr::text, referral_max_rewards_per_referrer,
+              updated_at
+       from storefront_ops_settings where id = 1`,
+    );
+    const row = result.rows[0];
+    return row === undefined ? defaultStorefrontOpsSettings() : mapOpsSettings(row);
+  }
+
+  public updateCommercialSettings(
+    patch: StorefrontOpsSettingsPatch,
+  ): Promise<StorefrontOpsSettings> {
+    return this.withTransaction(async (client) => {
+      const current = await client.query<OpsSettingsRow>(
+        `select trial_enabled, trial_variant_id::text, forced_join_channels,
+                reminders_enabled, expiry_reminder_days, low_traffic_percent,
+                referral_enabled, referral_referrer_credit_irr::text,
+                referral_invitee_discount_irr::text, referral_max_rewards_per_referrer,
+                updated_at
+         from storefront_ops_settings where id = 1 for update`,
+      );
+      const merged = mergeStorefrontOpsSettings(
+        current.rows[0] === undefined
+          ? defaultStorefrontOpsSettings()
+          : mapOpsSettings(current.rows[0]),
+        patch,
+      );
+      const updated = await client.query<OpsSettingsRow>(
+        `update storefront_ops_settings set
+           trial_enabled = $1,
+           trial_variant_id = $2,
+           forced_join_channels = $3::jsonb,
+           reminders_enabled = $4,
+           expiry_reminder_days = $5,
+           low_traffic_percent = $6,
+           referral_enabled = $7,
+           referral_referrer_credit_irr = $8,
+           referral_invitee_discount_irr = $9,
+           referral_max_rewards_per_referrer = $10,
+           updated_at = now()
+         where id = 1
+         returning trial_enabled, trial_variant_id::text, forced_join_channels,
+                   reminders_enabled, expiry_reminder_days, low_traffic_percent,
+                   referral_enabled, referral_referrer_credit_irr::text,
+                   referral_invitee_discount_irr::text, referral_max_rewards_per_referrer,
+                   updated_at`,
+        [
+          merged.trialEnabled,
+          merged.trialVariantId,
+          JSON.stringify(merged.forcedJoinChannels),
+          merged.remindersEnabled,
+          merged.expiryReminderDays,
+          merged.lowTrafficPercent,
+          merged.referralEnabled,
+          merged.referralReferrerCreditIrr.toString(),
+          merged.referralInviteeDiscountIrr.toString(),
+          merged.referralMaxRewardsPerReferrer,
+        ],
+      );
+      return mapOpsSettings(requiredRow(updated.rows));
+    });
+  }
+
+  public createTrialOrder(input: {
+    readonly customerId: string;
+    readonly idempotencyKey: string;
+    readonly serviceUsernameBase: string;
+  }): Promise<SalesOrder> {
+    validateServiceUsernameBase(input.serviceUsernameBase);
+    return this.withTransaction(async (client) => {
+      const customer = await client.query<{ id: string; shop_blocked: boolean }>(
+        'select id::text, shop_blocked from customers where id = $1 for update',
+        [input.customerId],
+      );
+      const locked = requiredRow(customer.rows);
+      if (locked.shop_blocked) {
+        throw new DomainConflictError('SHOP_BLOCKED');
+      }
+      const existing = await this.findOrderByIdempotencyKey(client, input.idempotencyKey);
+      if (existing !== null) {
+        if (existing.customerId !== input.customerId || existing.kind !== 'trial') {
+          throw new DomainConflictError('IDEMPOTENCY_KEY_REUSED');
+        }
+        return existing;
+      }
+      const claim = await client.query<{ order_id: string }>(
+        'select order_id::text from customer_trial_claims where customer_id = $1',
+        [input.customerId],
+      );
+      if (claim.rows[0] !== undefined) {
+        return this.requiredOrderWithClient(client, claim.rows[0].order_id);
+      }
+      const settings = await client.query<{
+        trial_enabled: boolean;
+        trial_variant_id: string | null;
+      }>('select trial_enabled, trial_variant_id::text from storefront_ops_settings where id = 1');
+      const ops = requiredRow(settings.rows);
+      if (!ops.trial_enabled || ops.trial_variant_id === null) {
+        throw new DomainConflictError('TRIAL_NOT_CONFIGURED');
+      }
+      const variant = await client.query<{ id: string }>(
+        `select id::text from product_variants
+         where id = $1 and active = true`,
+        [ops.trial_variant_id],
+      );
+      if (variant.rows[0] === undefined) {
+        throw new DomainConflictError('TRIAL_NOT_CONFIGURED');
+      }
+      const blocking = await client.query<{ exists: boolean }>(
+        `select exists(
+           select 1 from sales_orders
+           where customer_id = $1 and status in (
+             'receipt_submitted', 'provisioning', 'provisioning_failed'
+           )
+         ) as exists`,
+        [input.customerId],
+      );
+      if (requiredRow(blocking.rows).exists) {
+        throw new DomainConflictError('OPEN_ORDER_UNDER_REVIEW');
+      }
+      await client.query(
+        `update sales_orders set status = 'cancelled', updated_at = now()
+         where customer_id = $1 and status in ('awaiting_receipt', 'rejected')`,
+        [input.customerId],
+      );
+      const inserted = await client.query<{ id: string }>(
+        `insert into sales_orders(
+           customer_id, product_variant_id, idempotency_key, amount_irr,
+           representative_id, pricing_source, service_username_base,
+           order_kind, status
+         ) values ($1, $2, $3, 0, null, 'public', $4, 'trial', 'provisioning')
+         returning id::text`,
+        [input.customerId, ops.trial_variant_id, input.idempotencyKey, input.serviceUsernameBase],
+      );
+      const orderId = requiredRow(inserted.rows).id;
+      await client.query(
+        `insert into customer_trial_claims(customer_id, order_id) values ($1, $2)`,
+        [input.customerId, orderId],
+      );
+      return this.requiredOrderWithClient(client, orderId);
+    });
+  }
+
+  public async getTrialClaim(customerId: string): Promise<TrialClaim | null> {
+    const result = await this.pool.query<{
+      customer_id: string;
+      order_id: string;
+      claimed_at: Date;
+    }>(
+      `select customer_id::text, order_id::text, claimed_at
+       from customer_trial_claims where customer_id = $1`,
+      [customerId],
+    );
+    const row = result.rows[0];
+    return row === undefined
+      ? null
+      : { customerId: row.customer_id, orderId: row.order_id, claimedAt: row.claimed_at };
+  }
+
+  public async listCustomerServices(
+    customerId: string,
+  ): Promise<readonly CustomerServiceSummary[]> {
+    const result = await this.pool.query<{
+      id: string;
+      product_name: string;
+      variant_name: string;
+      status: string;
+      expires_at: Date | null;
+      data_limit_bytes: string;
+      used_traffic_bytes: string | null;
+    }>(
+      `select service.id::text, product.name as product_name, variant.name as variant_name,
+              service.status, service.expires_at, variant.data_limit_bytes::text,
+              service.used_traffic_bytes::text
+       from sales_orders orders
+       join services service on service.id = orders.service_id
+       join product_variants variant on variant.id = service.product_variant_id
+       join products product on product.id = variant.product_id
+       where orders.customer_id = $1 and orders.status = 'fulfilled'
+       order by service.expires_at desc nulls last, service.id desc`,
+      [customerId],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      productName: row.product_name,
+      variantName: row.variant_name,
+      status: row.status,
+      expiresAt: row.expires_at,
+      dataLimitBytes: BigInt(row.data_limit_bytes),
+      usedTrafficBytes: row.used_traffic_bytes === null ? null : BigInt(row.used_traffic_bytes),
+    }));
+  }
+
+  public async getServiceAccessTarget(
+    serviceId: string,
+    customerId: string,
+  ): Promise<{ readonly chatId: string; readonly subscriptionUrl: string } | null> {
+    const result = await this.pool.query<{ chat_id: string; subscription_url: string }>(
+      `select customer.private_chat_id::text as chat_id, service.subscription_url
+       from services service
+       join sales_orders orders
+         on orders.service_id = service.id and orders.status = 'fulfilled'
+       join customers customer on customer.id = orders.customer_id
+       where service.id = $1 and customer.id = $2
+       limit 1`,
+      [serviceId, customerId],
+    );
+    return result.rows[0] === undefined
+      ? null
+      : { chatId: result.rows[0].chat_id, subscriptionUrl: result.rows[0].subscription_url };
+  }
+
+  public async enqueueDueServiceReminders(now: Date): Promise<number> {
+    const expiry = await this.pool.query(
+      `insert into service_reminder_deliveries (service_id, customer_id, kind, window_key)
+       select service.id, customer.id, 'expiry',
+              to_char(service.expires_at at time zone 'utc', 'YYYY-MM-DD')
+       from services service
+       join sales_orders orders on orders.service_id = service.id and orders.status = 'fulfilled'
+       join customers customer on customer.id = orders.customer_id
+       join storefront_ops_settings settings on settings.id = 1
+       where settings.reminders_enabled = true
+         and customer.shop_blocked = false
+         and service.expires_at is not null
+         and service.expires_at > $1
+         and service.expires_at <= $1 + (settings.expiry_reminder_days * interval '1 day')
+       on conflict (service_id, kind, window_key) do nothing`,
+      [now],
+    );
+    const traffic = await this.pool.query(
+      `insert into service_reminder_deliveries (service_id, customer_id, kind, window_key)
+       select service.id, customer.id, 'low_traffic',
+              to_char($1 at time zone 'utc', 'YYYY-MM-DD')
+       from services service
+       join sales_orders orders on orders.service_id = service.id and orders.status = 'fulfilled'
+       join customers customer on customer.id = orders.customer_id
+       join product_variants variant on variant.id = service.product_variant_id
+       join storefront_ops_settings settings on settings.id = 1
+       where settings.reminders_enabled = true
+         and customer.shop_blocked = false
+         and service.used_traffic_bytes is not null
+         and variant.data_limit_bytes > 0
+         and ((variant.data_limit_bytes - service.used_traffic_bytes) * 100)
+             / variant.data_limit_bytes <= settings.low_traffic_percent
+       on conflict (service_id, kind, window_key) do nothing`,
+      [now],
+    );
+    return (expiry.rowCount ?? 0) + (traffic.rowCount ?? 0);
+  }
+
+  public async claimDueServiceReminders(
+    limit: number,
+    now: Date,
+  ): Promise<readonly ServiceReminderDelivery[]> {
+    const claimed = await this.pool.query<{ id: string }>(
+      `with due as (
+         select reminder.id
+         from service_reminder_deliveries reminder
+         where reminder.status = 'pending' and reminder.next_attempt_at <= $2
+         order by reminder.id
+         limit $1
+         for update skip locked
+       )
+       update service_reminder_deliveries reminder
+       set attempt_count = reminder.attempt_count + 1, updated_at = now()
+       from due
+       where reminder.id = due.id
+       returning reminder.id::text`,
+      [limit, now],
+    );
+    if (claimed.rows.length === 0) {
+      return [];
+    }
+    const details = await this.pool.query<{
+      id: string;
+      service_id: string;
+      customer_id: string;
+      chat_id: string;
+      kind: ServiceReminderDelivery['kind'];
+      window_key: string;
+      product_name: string;
+      variant_name: string;
+      expires_at: Date | null;
+    }>(
+      `select reminder.id::text, reminder.service_id::text, reminder.customer_id::text,
+              customer.private_chat_id::text as chat_id, reminder.kind, reminder.window_key,
+              product.name as product_name, variant.name as variant_name, service.expires_at
+       from service_reminder_deliveries reminder
+       join customers customer on customer.id = reminder.customer_id
+       join services service on service.id = reminder.service_id
+       join product_variants variant on variant.id = service.product_variant_id
+       join products product on product.id = variant.product_id
+       where reminder.id = any($1::bigint[])`,
+      [claimed.rows.map((row) => row.id)],
+    );
+    return details.rows.map((row) => ({
+      id: row.id,
+      serviceId: row.service_id,
+      customerId: row.customer_id,
+      chatId: row.chat_id,
+      kind: row.kind,
+      windowKey: row.window_key,
+      productName: row.product_name,
+      variantName: row.variant_name,
+      expiresAt: row.expires_at,
+    }));
+  }
+
+  public async markServiceReminderDelivered(id: string, now: Date): Promise<boolean> {
+    const result = await this.pool.query(
+      `update service_reminder_deliveries
+       set status = 'delivered', updated_at = $2
+       where id = $1 and status = 'pending'`,
+      [id, now],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public async retryServiceReminder(
+    id: string,
+    errorCode: string,
+    nextAttemptAt: Date,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `update service_reminder_deliveries
+       set last_error_code = $2, next_attempt_at = $3, updated_at = now()
+       where id = $1 and status = 'pending'`,
+      [id, errorCode, nextAttemptAt],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public async failServiceReminder(id: string, errorCode: string, now: Date): Promise<boolean> {
+    const result = await this.pool.query(
+      `update service_reminder_deliveries
+       set status = 'failed', last_error_code = $2, updated_at = $3
+       where id = $1 and status = 'pending'`,
+      [id, errorCode, now],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public createBroadcastJob(input: {
+    readonly adminTelegramUserId: string;
+    readonly body: string;
+    readonly bodySha256: string;
+  }): Promise<BroadcastJob> {
+    return this.withTransaction(async (client) => {
+      const job = await client.query<{
+        id: string;
+        created_at: Date;
+      }>(
+        `insert into broadcast_jobs(admin_telegram_user_id, body, body_sha256, status)
+         values ($1, $2, $3, 'queued')
+         returning id::text, created_at`,
+        [input.adminTelegramUserId, input.body, input.bodySha256],
+      );
+      const created = requiredRow(job.rows);
+      const recipients = await client.query(
+        `insert into broadcast_recipients(job_id, customer_id, chat_id)
+         select $1, id, private_chat_id
+         from customers
+         where shop_blocked = false`,
+        [created.id],
+      );
+      const recipientCount = recipients.rowCount ?? 0;
+      const status = recipientCount === 0 ? 'completed' : 'queued';
+      await client.query(
+        `update broadcast_jobs set status = $2, completed_at = case when $2 = 'completed' then now() else null end,
+                updated_at = now()
+         where id = $1`,
+        [created.id, status],
+      );
+      return {
+        id: created.id,
+        adminTelegramUserId: input.adminTelegramUserId,
+        body: input.body,
+        bodySha256: input.bodySha256,
+        status,
+        recipientCount,
+        sentCount: 0,
+        failedCount: 0,
+        createdAt: created.created_at,
+      };
+    });
+  }
+
+  public async cancelBroadcastJob(
+    jobId: string,
+    adminTelegramUserId: string,
+  ): Promise<BroadcastJob> {
+    const result = await this.pool.query(
+      `update broadcast_jobs
+       set status = 'canceled', canceled_at = now(), updated_at = now()
+       where id = $1 and admin_telegram_user_id = $2
+         and status in ('queued', 'running')`,
+      [jobId, adminTelegramUserId],
+    );
+    if ((result.rowCount ?? 0) === 0) {
+      throw new DomainConflictError('BROADCAST_NOT_CANCELABLE');
+    }
+    await this.pool.query(
+      `update broadcast_recipients set status = 'skipped', updated_at = now()
+       where job_id = $1 and status = 'pending'`,
+      [jobId],
+    );
+    const job = await this.getBroadcastJob(jobId);
+    if (job === null) {
+      throw new DomainConflictError('BROADCAST_NOT_FOUND');
+    }
+    return job;
+  }
+
+  public async getBroadcastJob(jobId: string): Promise<BroadcastJob | null> {
+    const result = await this.pool.query<BroadcastJobRow>(broadcastJobQuery('job.id = $1'), [
+      jobId,
+    ]);
+    return result.rows[0] === undefined ? null : mapBroadcastJob(result.rows[0]);
+  }
+
+  public async listRecentBroadcastJobs(limit: number): Promise<readonly BroadcastJob[]> {
+    const result = await this.pool.query<BroadcastJobRow>(
+      `${broadcastJobQuery('true')} order by job.id desc limit $1`,
+      [limit],
+    );
+    return result.rows.map(mapBroadcastJob);
+  }
+
+  public async claimDueBroadcastRecipients(
+    limit: number,
+    now: Date,
+  ): Promise<
+    readonly {
+      readonly id: string;
+      readonly jobId: string;
+      readonly chatId: string;
+      readonly body: string;
+    }[]
+  > {
+    const result = await this.pool.query<{
+      id: string;
+      job_id: string;
+      chat_id: string;
+      body: string;
+    }>(
+      `with due as (
+         select recipient.id
+         from broadcast_recipients recipient
+         join broadcast_jobs job on job.id = recipient.job_id
+         where recipient.status = 'pending'
+           and recipient.next_attempt_at <= $2
+           and job.status in ('queued', 'running')
+         order by recipient.id
+         limit $1
+         for update of recipient skip locked
+       )
+       update broadcast_recipients recipient
+       set attempt_count = recipient.attempt_count + 1
+       from due, broadcast_jobs job
+       where recipient.id = due.id and job.id = recipient.job_id
+       returning recipient.id::text, recipient.job_id::text, recipient.chat_id::text, job.body`,
+      [limit, now],
+    );
+    if (result.rows.length > 0) {
+      await this.pool.query(
+        `update broadcast_jobs set status = 'running', updated_at = now()
+         where id = any($1::bigint[]) and status = 'queued'`,
+        [...new Set(result.rows.map((row) => row.job_id))],
+      );
+    }
+    return result.rows.map((row) => ({
+      id: row.id,
+      jobId: row.job_id,
+      chatId: row.chat_id,
+      body: row.body,
+    }));
+  }
+
+  public async markBroadcastRecipientSent(id: string, now: Date): Promise<boolean> {
+    const result = await this.pool.query<{ job_id: string }>(
+      `update broadcast_recipients
+       set status = 'sent', sent_at = $2
+       where id = $1 and status = 'pending'
+       returning job_id::text`,
+      [id, now],
+    );
+    const jobId = result.rows[0]?.job_id;
+    if (jobId !== undefined) {
+      await this.completeBroadcastIfIdle(jobId);
+    }
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public async retryBroadcastRecipient(
+    id: string,
+    errorCode: string,
+    nextAttemptAt: Date,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `update broadcast_recipients
+       set last_error_code = $2, next_attempt_at = $3
+       where id = $1 and status = 'pending'`,
+      [id, errorCode, nextAttemptAt],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public async failBroadcastRecipient(id: string, errorCode: string, now: Date): Promise<boolean> {
+    const result = await this.pool.query<{ job_id: string }>(
+      `update broadcast_recipients
+       set status = 'failed', last_error_code = $2, sent_at = $3
+       where id = $1 and status = 'pending'
+       returning job_id::text`,
+      [id, errorCode, now],
+    );
+    const jobId = result.rows[0]?.job_id;
+    if (jobId !== undefined) {
+      await this.completeBroadcastIfIdle(jobId);
+    }
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public async setCustomerShopBlocked(
+    telegramUserId: string,
+    blocked: boolean,
+  ): Promise<TelegramCustomer> {
+    const result = await this.pool.query<CustomerRow>(
+      `update customers
+       set shop_blocked = $2, updated_at = now()
+       where telegram_user_id = $1
+       returning id::text, telegram_user_id::text, private_chat_id::text,
+                 telegram_username, display_name, shop_blocked`,
+      [telegramUserId, blocked],
+    );
+    const row = result.rows[0];
+    if (row === undefined) {
+      throw new DomainConflictError('CUSTOMER_NOT_FOUND');
+    }
+    return mapCustomer(row);
+  }
+
+  public async countCommercialQueues(): Promise<{
+    readonly remindersPending: number;
+    readonly broadcastsPending: number;
+    readonly broadcastsRunning: number;
+    readonly usageSyncDue: number;
+  }> {
+    const result = await this.pool.query<{
+      reminders_pending: number;
+      broadcasts_pending: number;
+      broadcasts_running: number;
+      usage_sync_due: number;
+    }>(
+      `select
+         (select count(*)::int from service_reminder_deliveries where status = 'pending') as reminders_pending,
+         (select count(*)::int from broadcast_recipients where status = 'pending') as broadcasts_pending,
+         (select count(*)::int from broadcast_jobs where status in ('queued', 'running')) as broadcasts_running,
+         (select count(*)::int from services
+           where status = 'active'
+             and (usage_synced_at is null or usage_synced_at <= now() - interval '10 minutes')
+         ) as usage_sync_due`,
+    );
+    const row = result.rows[0];
+    return {
+      remindersPending: row?.reminders_pending ?? 0,
+      broadcastsPending: row?.broadcasts_pending ?? 0,
+      broadcastsRunning: row?.broadcasts_running ?? 0,
+      usageSyncDue: row?.usage_sync_due ?? 0,
+    };
+  }
+
+  public attributeReferralStart(input: {
+    readonly customerId: string;
+    readonly inviteeTelegramUserId: string;
+    readonly referrerTelegramUserId: string;
+  }): Promise<ReferralAttribution | null> {
+    return this.withTransaction(async (client) => {
+      const referrer = await client.query<{ id: string; telegram_user_id: string }>(
+        `select id::text, telegram_user_id::text from customers
+         where telegram_user_id = $1`,
+        [input.referrerTelegramUserId],
+      );
+      const found = referrer.rows[0];
+      if (found === undefined || found.id === input.customerId) {
+        return null;
+      }
+      const existing = await client.query<ReferralAttributionRow>(
+        `select customer_id::text, referrer_customer_id::text,
+                referrer_telegram_user_id::text, invitee_discount_order_id::text, created_at
+         from referral_attributions where customer_id = $1`,
+        [input.customerId],
+      );
+      if (existing.rows[0] !== undefined) {
+        return mapReferralAttribution(existing.rows[0]);
+      }
+      const inserted = await client.query<ReferralAttributionRow>(
+        `insert into referral_attributions (
+           customer_id, referrer_customer_id, referrer_telegram_user_id
+         ) values ($1, $2, $3)
+         on conflict (customer_id) do nothing
+         returning customer_id::text, referrer_customer_id::text,
+                   referrer_telegram_user_id::text, invitee_discount_order_id::text, created_at`,
+        [input.customerId, found.id, found.telegram_user_id],
+      );
+      if (inserted.rows[0] !== undefined) {
+        return mapReferralAttribution(inserted.rows[0]);
+      }
+      const replay = await client.query<ReferralAttributionRow>(
+        `select customer_id::text, referrer_customer_id::text,
+                referrer_telegram_user_id::text, invitee_discount_order_id::text, created_at
+         from referral_attributions where customer_id = $1`,
+        [input.customerId],
+      );
+      return replay.rows[0] === undefined ? null : mapReferralAttribution(replay.rows[0]);
+    });
+  }
+
+  public async getReferralAttribution(customerId: string): Promise<ReferralAttribution | null> {
+    const result = await this.pool.query<ReferralAttributionRow>(
+      `select customer_id::text, referrer_customer_id::text,
+              referrer_telegram_user_id::text, invitee_discount_order_id::text, created_at
+       from referral_attributions where customer_id = $1`,
+      [customerId],
+    );
+    return result.rows[0] === undefined ? null : mapReferralAttribution(result.rows[0]);
+  }
+
+  public grantReferralRewardForPaidOrder(order: SalesOrder): Promise<ReferralReward | null> {
+    if (!isPaidFulfillmentEligible(order)) {
+      return Promise.resolve(null);
+    }
+    return this.withTransaction(async (client) => {
+      const existing = await client.query<ReferralRewardRow>(
+        `select referred_customer_id::text, referrer_customer_id::text, order_id::text,
+                referrer_credit_irr::text, created_at
+         from referral_rewards where referred_customer_id = $1`,
+        [order.customerId],
+      );
+      if (existing.rows[0] !== undefined) {
+        return mapReferralReward(existing.rows[0], true);
+      }
+      const settings = await client.query<OpsSettingsRow>(
+        `select trial_enabled, trial_variant_id::text, forced_join_channels,
+                reminders_enabled, expiry_reminder_days, low_traffic_percent,
+                referral_enabled, referral_referrer_credit_irr::text,
+                referral_invitee_discount_irr::text, referral_max_rewards_per_referrer,
+                updated_at
+         from storefront_ops_settings where id = 1`,
+      );
+      const ops =
+        settings.rows[0] === undefined
+          ? defaultStorefrontOpsSettings()
+          : mapOpsSettings(settings.rows[0]);
+      if (!ops.referralEnabled) {
+        return null;
+      }
+      const attribution = await client.query<ReferralAttributionRow>(
+        `select customer_id::text, referrer_customer_id::text,
+                referrer_telegram_user_id::text, invitee_discount_order_id::text, created_at
+         from referral_attributions where customer_id = $1 for update`,
+        [order.customerId],
+      );
+      const link = attribution.rows[0];
+      if (link === undefined) {
+        return null;
+      }
+      const referrer = await client.query<{ shop_blocked: boolean }>(
+        'select shop_blocked from customers where id = $1 for update',
+        [link.referrer_customer_id],
+      );
+      const rewardCount = await client.query<{ n: number }>(
+        'select count(*)::int as n from referral_rewards where referrer_customer_id = $1',
+        [link.referrer_customer_id],
+      );
+      const underCap = (rewardCount.rows[0]?.n ?? 0) < ops.referralMaxRewardsPerReferrer;
+      const blocked = referrer.rows[0]?.shop_blocked === true;
+      const credit =
+        !blocked && underCap && ops.referralReferrerCreditIrr > 0n
+          ? ops.referralReferrerCreditIrr
+          : 0n;
+      const inserted = await client.query<ReferralRewardRow>(
+        `insert into referral_rewards (
+           referred_customer_id, referrer_customer_id, order_id, referrer_credit_irr
+         ) values ($1, $2, $3, $4)
+         on conflict (referred_customer_id) do nothing
+         returning referred_customer_id::text, referrer_customer_id::text, order_id::text,
+                   referrer_credit_irr::text, created_at`,
+        [order.customerId, link.referrer_customer_id, order.id, credit.toString()],
+      );
+      const row = inserted.rows[0];
+      if (row === undefined) {
+        const replay = requiredRow(
+          (
+            await client.query<ReferralRewardRow>(
+              `select referred_customer_id::text, referrer_customer_id::text, order_id::text,
+                      referrer_credit_irr::text, created_at
+               from referral_rewards where referred_customer_id = $1`,
+              [order.customerId],
+            )
+          ).rows,
+        );
+        return mapReferralReward(replay, true);
+      }
+      if (credit > 0n) {
+        await creditReferralWallet(client, {
+          customerId: link.referrer_customer_id,
+          amountIrr: credit,
+          idempotencyKey: referralRewardIdempotencyKey(order.customerId),
+        });
+      }
+      return mapReferralReward(row, false);
+    });
+  }
+
+  public async getAdminSalesSnapshot(now: Date): Promise<AdminSalesSnapshot> {
+    const result = await this.pool.query<SalesSnapshotRow>(
+      `with bounds as (
+         select
+           ((($1 at time zone 'Asia/Tehran')::date)::timestamp at time zone 'Asia/Tehran') as today_start,
+           (((($1 at time zone 'Asia/Tehran')::date - 6)::timestamp) at time zone 'Asia/Tehran') as week_start,
+           (((($1 at time zone 'Asia/Tehran')::date + 1)::timestamp) at time zone 'Asia/Tehran') as tomorrow
+       )
+       select
+         count(*) filter (where orders.created_at >= bounds.today_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'awaiting_receipt')::int as today_awaiting_receipt,
+         count(*) filter (where orders.created_at >= bounds.today_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'receipt_submitted')::int as today_receipt_submitted,
+         count(*) filter (where orders.created_at >= bounds.today_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'provisioning')::int as today_provisioning,
+         count(*) filter (where orders.created_at >= bounds.today_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'provisioning_failed')::int as today_provisioning_failed,
+         count(*) filter (where orders.created_at >= bounds.today_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'fulfilled')::int as today_fulfilled,
+         count(*) filter (where orders.created_at >= bounds.today_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'rejected')::int as today_rejected,
+         count(*) filter (where orders.created_at >= bounds.today_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'cancelled')::int as today_cancelled,
+         coalesce(sum(orders.amount_irr) filter (
+           where orders.created_at >= bounds.today_start and orders.created_at < bounds.tomorrow
+             and orders.status = 'fulfilled'
+         ), 0)::text as today_revenue,
+         (select count(*)::int from customers customer, bounds
+           where customer.created_at >= bounds.today_start and customer.created_at < bounds.tomorrow
+         ) as today_new_customers,
+         count(*) filter (where orders.created_at >= bounds.week_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'awaiting_receipt')::int as week_awaiting_receipt,
+         count(*) filter (where orders.created_at >= bounds.week_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'receipt_submitted')::int as week_receipt_submitted,
+         count(*) filter (where orders.created_at >= bounds.week_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'provisioning')::int as week_provisioning,
+         count(*) filter (where orders.created_at >= bounds.week_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'provisioning_failed')::int as week_provisioning_failed,
+         count(*) filter (where orders.created_at >= bounds.week_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'fulfilled')::int as week_fulfilled,
+         count(*) filter (where orders.created_at >= bounds.week_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'rejected')::int as week_rejected,
+         count(*) filter (where orders.created_at >= bounds.week_start and orders.created_at < bounds.tomorrow
+           and orders.status = 'cancelled')::int as week_cancelled,
+         coalesce(sum(orders.amount_irr) filter (
+           where orders.created_at >= bounds.week_start and orders.created_at < bounds.tomorrow
+             and orders.status = 'fulfilled'
+         ), 0)::text as week_revenue,
+         (select count(*)::int from customers customer, bounds
+           where customer.created_at >= bounds.week_start and customer.created_at < bounds.tomorrow
+         ) as week_new_customers,
+         (select count(*)::int from support_tickets where status = 'open') as open_tickets,
+         (select count(*)::int from sales_orders where status = 'receipt_submitted') as pending_receipts
+       from bounds
+       left join sales_orders orders on true`,
+      [now],
+    );
+    const row = result.rows[0];
+    return {
+      timezone: 'Asia/Tehran',
+      today: mapSalesWindow(row, 'today'),
+      last7d: mapSalesWindow(row, 'week'),
+      openTickets: row?.open_tickets ?? 0,
+      pendingReceiptReviews: row?.pending_receipts ?? 0,
+    };
+  }
+
+  public async listServicesDueForUsageSync(
+    limit: number,
+    staleBefore: Date,
+  ): Promise<readonly UsageSyncTarget[]> {
+    const result = await this.pool.query<{
+      id: string;
+      target_user_id: string;
+      used_traffic_bytes: string | null;
+    }>(
+      `select id::text, target_user_id::text, used_traffic_bytes::text
+       from services
+       where status = 'active'
+         and (usage_synced_at is null or usage_synced_at <= $2)
+       order by usage_synced_at nulls first, id
+       limit $1`,
+      [limit, staleBefore],
+    );
+    return result.rows.map((row) => ({
+      serviceId: row.id,
+      targetUserId: Number(row.target_user_id),
+      usedTrafficBytes: row.used_traffic_bytes === null ? null : BigInt(row.used_traffic_bytes),
+    }));
+  }
+
+  public async persistServiceUsedTraffic(input: UsageSyncWrite): Promise<boolean> {
+    const result = input.remoteFound
+      ? await this.pool.query(
+          `update services
+           set used_traffic_bytes = $2, usage_synced_at = now(), updated_at = now()
+           where id = $1 and target_user_id = $3`,
+          [input.serviceId, input.usedTrafficBytes?.toString() ?? '0', input.targetUserId],
+        )
+      : await this.pool.query(
+          `update services
+           set usage_synced_at = now(), updated_at = now()
+           where id = $1 and target_user_id = $2`,
+          [input.serviceId, input.targetUserId],
+        );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  public async countDueUsageSync(staleBefore: Date): Promise<number> {
+    const result = await this.pool.query<{ n: number }>(
+      `select count(*)::int as n from services
+       where status = 'active'
+         and (usage_synced_at is null or usage_synced_at <= $1)`,
+      [staleBefore],
+    );
+    return result.rows[0]?.n ?? 0;
+  }
+
+  private async completeBroadcastIfIdle(jobId: string): Promise<void> {
+    await this.pool.query(
+      `update broadcast_jobs
+       set status = 'completed', completed_at = now(), updated_at = now()
+       where id = $1
+         and status in ('queued', 'running')
+         and not exists (
+           select 1 from broadcast_recipients
+           where job_id = $1 and status = 'pending'
+         )`,
+      [jobId],
+    );
+  }
+
   private async findOrderByIdempotencyKey(
     client: PoolClient,
     idempotencyKey: string,
@@ -1075,6 +2181,10 @@ export class PostgresCommerceRepository implements CommerceRepository {
       input.productVariantId,
       input.representativeId,
     );
+    const priced =
+      input.kind === 'purchase'
+        ? await applyReferralInviteeDiscount(client, input.customerId, selected.priceIrr)
+        : { amountIrr: selected.priceIrr, discountApplied: false };
     const blocking = await client.query<{ exists: boolean }>(
       `select exists(
          select 1 from sales_orders
@@ -1103,7 +2213,7 @@ export class PostgresCommerceRepository implements CommerceRepository {
         input.customerId,
         input.productVariantId,
         input.idempotencyKey,
-        selected.priceIrr.toString(),
+        priced.amountIrr.toString(),
         input.representativeId ?? null,
         selected.pricingSource,
         input.serviceUsernameBase ?? null,
@@ -1111,7 +2221,16 @@ export class PostgresCommerceRepository implements CommerceRepository {
         input.targetServiceId,
       ],
     );
-    return this.requiredOrderWithClient(client, requiredRow(inserted.rows).id);
+    const order = await this.requiredOrderWithClient(client, requiredRow(inserted.rows).id);
+    if (priced.discountApplied) {
+      await client.query(
+        `update referral_attributions
+         set invitee_discount_order_id = $2
+         where customer_id = $1 and invitee_discount_order_id is null`,
+        [input.customerId, order.id],
+      );
+    }
+    return order;
   }
 
   private async requiredOrder(id: string): Promise<SalesOrder> {
@@ -1409,6 +2528,247 @@ function mapCustomer(row: CustomerRow): TelegramCustomer {
     privateChatId: row.private_chat_id,
     username: row.telegram_username,
     displayName: row.display_name,
+    shopBlocked: row.shop_blocked === true,
+  };
+}
+
+interface OpsSettingsRow {
+  trial_enabled: boolean;
+  trial_variant_id: string | null;
+  forced_join_channels: unknown;
+  reminders_enabled: boolean;
+  expiry_reminder_days: number;
+  low_traffic_percent: number;
+  referral_enabled: boolean;
+  referral_referrer_credit_irr: string;
+  referral_invitee_discount_irr: string;
+  referral_max_rewards_per_referrer: number;
+  updated_at: Date;
+}
+
+interface ReferralAttributionRow {
+  customer_id: string;
+  referrer_customer_id: string;
+  referrer_telegram_user_id: string;
+  invitee_discount_order_id: string | null;
+  created_at: Date;
+}
+
+interface ReferralRewardRow {
+  referred_customer_id: string;
+  referrer_customer_id: string;
+  order_id: string;
+  referrer_credit_irr: string;
+  created_at: Date;
+}
+
+interface SalesSnapshotRow {
+  today_awaiting_receipt: number;
+  today_receipt_submitted: number;
+  today_provisioning: number;
+  today_provisioning_failed: number;
+  today_fulfilled: number;
+  today_rejected: number;
+  today_cancelled: number;
+  today_revenue: string;
+  today_new_customers: number;
+  week_awaiting_receipt: number;
+  week_receipt_submitted: number;
+  week_provisioning: number;
+  week_provisioning_failed: number;
+  week_fulfilled: number;
+  week_rejected: number;
+  week_cancelled: number;
+  week_revenue: string;
+  week_new_customers: number;
+  open_tickets: number;
+  pending_receipts: number;
+}
+
+function mapOpsSettings(row: OpsSettingsRow): StorefrontOpsSettings {
+  return {
+    trialEnabled: row.trial_enabled,
+    trialVariantId: row.trial_variant_id,
+    forcedJoinChannels: parseForcedJoinChannels(row.forced_join_channels),
+    remindersEnabled: row.reminders_enabled,
+    expiryReminderDays: row.expiry_reminder_days,
+    lowTrafficPercent: row.low_traffic_percent,
+    referralEnabled: row.referral_enabled,
+    referralReferrerCreditIrr: BigInt(row.referral_referrer_credit_irr),
+    referralInviteeDiscountIrr: BigInt(row.referral_invitee_discount_irr),
+    referralMaxRewardsPerReferrer: row.referral_max_rewards_per_referrer,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapReferralAttribution(row: ReferralAttributionRow): ReferralAttribution {
+  return {
+    customerId: row.customer_id,
+    referrerCustomerId: row.referrer_customer_id,
+    referrerTelegramUserId: row.referrer_telegram_user_id,
+    inviteeDiscountOrderId: row.invitee_discount_order_id,
+    createdAt: row.created_at,
+  };
+}
+
+function mapReferralReward(row: ReferralRewardRow, replayed: boolean): ReferralReward {
+  return {
+    referredCustomerId: row.referred_customer_id,
+    referrerCustomerId: row.referrer_customer_id,
+    orderId: row.order_id,
+    referrerCreditIrr: BigInt(row.referrer_credit_irr),
+    replayed,
+    createdAt: row.created_at,
+  };
+}
+
+function mapSalesWindow(
+  row: SalesSnapshotRow | undefined,
+  prefix: 'today' | 'week',
+): AdminSalesWindowSnapshot {
+  const ordersByStatus: Record<SalesOrderStatus, number> = {
+    awaiting_receipt: row?.[`${prefix}_awaiting_receipt`] ?? 0,
+    receipt_submitted: row?.[`${prefix}_receipt_submitted`] ?? 0,
+    provisioning: row?.[`${prefix}_provisioning`] ?? 0,
+    provisioning_failed: row?.[`${prefix}_provisioning_failed`] ?? 0,
+    fulfilled: row?.[`${prefix}_fulfilled`] ?? 0,
+    rejected: row?.[`${prefix}_rejected`] ?? 0,
+    cancelled: row?.[`${prefix}_cancelled`] ?? 0,
+  };
+  return {
+    ordersByStatus,
+    orderCount: Object.values(ordersByStatus).reduce((sum, count) => sum + count, 0),
+    revenueIrr: BigInt(row?.[`${prefix}_revenue`] ?? '0'),
+    newCustomers: row?.[`${prefix}_new_customers`] ?? 0,
+  };
+}
+
+async function applyReferralInviteeDiscount(
+  client: PoolClient,
+  customerId: string,
+  priceIrr: bigint,
+): Promise<{ readonly amountIrr: bigint; readonly discountApplied: boolean }> {
+  const settings = await client.query<{
+    referral_enabled: boolean;
+    referral_invitee_discount_irr: string;
+  }>(
+    `select referral_enabled, referral_invitee_discount_irr::text
+     from storefront_ops_settings where id = 1`,
+  );
+  const ops = settings.rows[0];
+  if (!ops?.referral_enabled) {
+    return { amountIrr: priceIrr, discountApplied: false };
+  }
+  const discountIrr = BigInt(ops.referral_invitee_discount_irr);
+  if (discountIrr <= 0n) {
+    return { amountIrr: priceIrr, discountApplied: false };
+  }
+  const attribution = await client.query<{ invitee_discount_order_id: string | null }>(
+    `select invitee_discount_order_id::text
+     from referral_attributions where customer_id = $1 for update`,
+    [customerId],
+  );
+  if (attribution.rows[0]?.invitee_discount_order_id !== null) {
+    return { amountIrr: priceIrr, discountApplied: false };
+  }
+  const priced = applyInviteeCheckoutDiscount(priceIrr, discountIrr);
+  return { amountIrr: priced.amountIrr, discountApplied: priced.discountAppliedIrr > 0n };
+}
+
+async function creditReferralWallet(
+  client: PoolClient,
+  input: {
+    readonly customerId: string;
+    readonly amountIrr: bigint;
+    readonly idempotencyKey: string;
+  },
+): Promise<void> {
+  const existing = await client.query<{ customer_id: string; amount_irr: string }>(
+    `select customer_id::text, amount_irr::text
+     from customer_wallet_ledger where idempotency_key = $1`,
+    [input.idempotencyKey],
+  );
+  if (existing.rows[0] !== undefined) {
+    if (
+      existing.rows[0].customer_id !== input.customerId ||
+      BigInt(existing.rows[0].amount_irr) !== input.amountIrr
+    ) {
+      throw new DomainConflictError('IDEMPOTENCY_KEY_REUSED');
+    }
+    return;
+  }
+  await client.query(
+    `insert into customer_wallet_ledger(
+       customer_id, amount_irr, kind, idempotency_key, discount_code
+     ) values ($1::bigint, $2, 'referral', $3, null)`,
+    [input.customerId, input.amountIrr.toString(), input.idempotencyKey],
+  );
+  await client.query(
+    `insert into customer_wallets(customer_id, balance_irr)
+     values ($1::bigint, $2)
+     on conflict (customer_id) do update
+     set balance_irr = customer_wallets.balance_irr + excluded.balance_irr,
+         updated_at = now()`,
+    [input.customerId, input.amountIrr.toString()],
+  );
+}
+
+function parseForcedJoinChannels(value: unknown): readonly ForcedJoinChannel[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const channels: ForcedJoinChannel[] = [];
+  for (const item of value) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    if (typeof record['chatId'] !== 'string') {
+      continue;
+    }
+    channels.push({
+      chatId: record['chatId'],
+      username: typeof record['username'] === 'string' ? record['username'] : null,
+    });
+  }
+  return channels;
+}
+
+interface BroadcastJobRow {
+  id: string;
+  admin_telegram_user_id: string;
+  body: string;
+  body_sha256: string;
+  status: BroadcastJob['status'];
+  recipient_count: number;
+  sent_count: number;
+  failed_count: number;
+  created_at: Date;
+}
+
+function broadcastJobQuery(where: string): string {
+  return `select job.id::text, job.admin_telegram_user_id::text, job.body, job.body_sha256,
+                 job.status, job.created_at,
+                 count(recipient.id)::int as recipient_count,
+                 count(recipient.id) filter (where recipient.status = 'sent')::int as sent_count,
+                 count(recipient.id) filter (where recipient.status = 'failed')::int as failed_count
+          from broadcast_jobs job
+          left join broadcast_recipients recipient on recipient.job_id = job.id
+          where ${where}
+          group by job.id`;
+}
+
+function mapBroadcastJob(row: BroadcastJobRow): BroadcastJob {
+  return {
+    id: row.id,
+    adminTelegramUserId: row.admin_telegram_user_id,
+    body: row.body,
+    bodySha256: row.body_sha256,
+    status: row.status,
+    recipientCount: row.recipient_count,
+    sentCount: row.sent_count,
+    failedCount: row.failed_count,
+    createdAt: row.created_at,
   };
 }
 
@@ -1450,4 +2810,67 @@ function mapProof(row: ProofRow): TelegramPaymentProof {
     mediaKind: row.media_kind,
     submittedAt: row.submitted_at,
   };
+}
+
+function conversationSessionQuery(where: string): string {
+  return `select id::text, telegram_user_id::text, flow_id, step, schema_version, payload,
+                 status, created_at, updated_at, expires_at
+          from conversation_sessions
+          where ${where}`;
+}
+
+function mapConversationSession(row: ConversationSessionRow): DurableConversationSession {
+  return parseDurableConversationSession({
+    id: row.id,
+    telegramUserId: row.telegram_user_id,
+    flowId: row.flow_id,
+    step: row.step,
+    schemaVersion: row.schema_version,
+    payload: row.payload,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    expiresAt: row.expires_at,
+  });
+}
+
+function mapWalletLedger(row: WalletLedgerRow, replayed: boolean): WalletLedgerEntry {
+  return {
+    id: row.id,
+    customerId: row.customer_id,
+    amountIrr: BigInt(row.amount_irr),
+    kind: row.kind,
+    idempotencyKey: row.idempotency_key,
+    discountCode: row.discount_code,
+    createdAt: row.created_at,
+    replayed,
+  };
+}
+
+function mapSupportTicket(row: SupportTicketRow): SupportTicket {
+  return {
+    id: row.id,
+    customerId: row.customer_id,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function requiredTicket(
+  client: PoolClient,
+  ticketId: string,
+  customerId: string,
+): Promise<SupportTicket> {
+  const result = await client.query<SupportTicketRow>(
+    `select id::text, customer_id::text, status, created_at, updated_at
+     from support_tickets
+     where id = $1::bigint and customer_id = $2::bigint`,
+    [ticketId, customerId],
+  );
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new DomainConflictError('TICKET_NOT_FOUND');
+  }
+  return mapSupportTicket(row);
 }
