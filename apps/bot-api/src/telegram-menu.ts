@@ -29,10 +29,13 @@ export const TICKET_NEW_CALLBACK = 'ticket:new';
 export const TICKET_FOLLOW_PREFIX = 'ticket:follow:';
 
 export const MENU_LABEL = {
+  home: 'منوی اصلی 🏠',
   shop: 'خرید سریع 🛍',
   guide: 'راهنمای انتخاب 🧭',
   order: 'پیگیری سفارش 📦',
   renew: 'تمدید سرویس ♻️',
+  wallet: 'شارژ کیف پول 💳',
+  ticket: 'تیکت پشتیبانی 🎫',
   help: 'راهنما 📘',
   status: 'وضعیت سیستم ⚙️',
   reports: 'گزارش‌ها 📣',
@@ -49,6 +52,8 @@ export type MenuAction =
   | 'guide'
   | 'order'
   | 'renew'
+  | 'wallet'
+  | 'ticket'
   | 'help'
   | 'status'
   | 'reports'
@@ -91,15 +96,26 @@ export function pairedKeyboard(buttons: readonly InlineButton[]): TelegramInline
   return inlineMenu(pairButtons(buttons));
 }
 
+export function isHomeMenuText(text: string): boolean {
+  const normalized = text.trim();
+  return (
+    normalized === '/start' ||
+    normalized.startsWith('/start@') ||
+    normalized === 'منوی اصلی' ||
+    normalized === MENU_LABEL.home
+  );
+}
+
 export function matchMenuAction(text: string): MenuAction | null {
   const normalized = text.trim();
-  if (normalized === '/start' || normalized.startsWith('/start@') || normalized === 'منوی اصلی') {
+  if (isHomeMenuText(normalized)) {
     return 'home';
   }
   if (
     normalized === '/buy' ||
     normalized === MENU_LABEL.shop ||
     normalized === 'خرید سرویس' ||
+    normalized === 'خرید سریع' ||
     normalized === 'خرید'
   ) {
     return 'shop';
@@ -124,6 +140,12 @@ export function matchMenuAction(text: string): MenuAction | null {
     normalized === 'تمدید'
   ) {
     return 'renew';
+  }
+  if (normalized === MENU_LABEL.wallet || normalized === 'شارژ کیف پول') {
+    return 'wallet';
+  }
+  if (normalized === MENU_LABEL.ticket || normalized === 'تیکت پشتیبانی') {
+    return 'ticket';
   }
   if (
     normalized === '/help' ||
@@ -157,6 +179,7 @@ export function homeText(isAdmin: boolean): string {
     '<i>PRIVATE ACCESS</i>',
     '',
     'خرید سریع، پرداخت و ارسال رسید همه در همین گفتگو است.',
+    'شارژ کیف پول و تیکت پشتیبانی هم از دکمه‌های پایین در دسترس است.',
     '',
     'دکمه‌های پایین صفحه را لمس کن؛ لازم نیست دستوری تایپ کنی.',
   ];
@@ -171,7 +194,9 @@ export function homeReplyKeyboard(isAdmin: boolean): TelegramPersistentKeyboardM
     [{ text: buttonLabel(MENU_LABEL.shop) }],
     [{ text: buttonLabel(MENU_LABEL.guide) }],
     [{ text: buttonLabel(MENU_LABEL.order) }, { text: buttonLabel(MENU_LABEL.renew) }],
+    [{ text: buttonLabel(MENU_LABEL.wallet) }, { text: buttonLabel(MENU_LABEL.ticket) }],
     [{ text: buttonLabel(MENU_LABEL.help) }],
+    [{ text: buttonLabel(MENU_LABEL.home) }],
   ];
   if (isAdmin) {
     rows.push([{ text: buttonLabel(MENU_LABEL.admin) }]);
@@ -185,7 +210,7 @@ export function homeReplyKeyboard(isAdmin: boolean): TelegramPersistentKeyboardM
 }
 
 export function shopText(): string {
-  return ['<b>خرید سرویس</b>', 'یک دسته انتخاب کن تا پلن‌ها و قیمت هر پلن را ببینی.'].join('\n');
+  return ['<b>خرید سریع</b>', 'یک دسته انتخاب کن تا پلن‌ها و قیمت هر پلن را ببینی.'].join('\n');
 }
 
 export function homeReturnText(): string {
@@ -249,7 +274,7 @@ export function emptyShopText(isAdmin: boolean): string {
   }
   return [
     '<b>فروشگاه خالی است</b>',
-    'فعلاً پلن فعالی برای فروش منتشر نشده. کمی بعد دوباره «خرید سرویس» را بزن.',
+    'فعلاً پلن فعالی برای فروش منتشر نشده. کمی بعد دوباره «خرید سریع» را بزن.',
   ].join('\n');
 }
 
@@ -271,7 +296,7 @@ export function categoryText(input: {
   lines.push(
     input.hasItems
       ? 'یک محصول انتخاب کن تا پلن‌ها و قیمت‌ها را مقایسه کنی.'
-      : 'در این دسته پلن فعالی نیست. با دکمهٔ دستهٔ قبلی یا «خرید سرویس ⬅️» برگرد.',
+      : 'در این دسته پلن فعالی نیست. با دکمهٔ دستهٔ قبلی یا «خرید سریع ⬅️» برگرد.',
   );
   return lines.join('\n');
 }
@@ -285,7 +310,7 @@ export function missingCategoryText(): string {
 }
 
 export function shopBackButton(): InlineButton {
-  return { text: 'خرید سرویس ⬅️', callback_data: SHOP_CALLBACK };
+  return { text: 'خرید سریع ⬅️', callback_data: SHOP_CALLBACK };
 }
 
 export function categoryBackButton(
@@ -371,7 +396,7 @@ export function helpText(): string {
     'مبلغ نمایش‌داده‌شده را کارت‌به‌کارت کن و عکس رسید را در همین چت خصوصی بفرست.',
     'PDF و ویدیو پذیرفته نمی‌شود. بررسی رسید و اعلام نتیجه حداکثر ۶۰ دقیقه زمان می‌برد.',
     'پس از تأیید، لینک سرویس در همین گفتگوی خصوصی ارسال می‌شود.',
-    'برای شارژ کیف پول یا ثبت تیکت پشتیبانی از دکمه‌های همین پیام استفاده کن.',
+    'شارژ کیف پول و تیکت پشتیبانی از دکمه‌های پایین صفحه یا همین پیام در دسترس است.',
   ].join('\n');
 }
 
@@ -399,7 +424,7 @@ export function walletAmountPromptText(): string {
   return [
     '<b>مبلغ شارژ کیف پول</b>',
     'مبلغ را به تومان و فقط با عدد بفرست.',
-    'برای انصراف «منوی اصلی» را بزن.',
+    'برای انصراف «لغو» یا «منوی اصلی» را بزن.',
   ].join('\n');
 }
 
@@ -470,7 +495,7 @@ export function guideInlineKeyboard(): TelegramInlineKeyboardMarkup {
 
 export function orderStatusText(order: SalesOrder | null): string {
   if (order === null) {
-    return ['<b>سفارش باز نداری</b>', 'برای شروع، «خرید سرویس» را از منوی پایین انتخاب کن.'].join(
+    return ['<b>سفارش باز نداری</b>', 'برای شروع، «خرید سریع» را از منوی پایین انتخاب کن.'].join(
       '\n',
     );
   }
@@ -508,10 +533,9 @@ export function orderStatusText(order: SalesOrder | null): string {
     ].join('\n');
   }
   if (order.status === 'cancelled') {
-    return [
-      '<b>سفارش لغو شد</b>',
-      'برای شروع دوباره از منوی پایین «خرید سرویس» را انتخاب کن.',
-    ].join('\n');
+    return ['<b>سفارش لغو شد</b>', 'برای شروع دوباره از منوی پایین «خرید سریع» را انتخاب کن.'].join(
+      '\n',
+    );
   }
   return [
     '<b>سفارش منتظر پرداخت است</b>',
@@ -572,7 +596,7 @@ export function receiptRejectedText(): string {
 function noOpenOrderText(): string {
   return [
     '<b>سفارش باز پیدا نشد</b>',
-    'اول از منوی پایین «خرید سرویس» را بزن، بعد عکس رسید را بفرست.',
+    'اول از منوی پایین «خرید سریع» را بزن، بعد عکس رسید را بفرست.',
   ].join('\n');
 }
 
@@ -712,12 +736,9 @@ export function adminReportsText(input: {
 }
 
 export function adminReportsKeyboard(canPublishSummary: boolean): TelegramInlineKeyboardMarkup {
-  return columnKeyboard([
-    ...(canPublishSummary
-      ? [{ text: 'ارسال خلاصه امروز', callback_data: ADMIN_SUMMARY_CALLBACK }]
-      : []),
-    backToMenuButton(),
-  ]);
+  return adminScreenKeyboard(
+    canPublishSummary ? [{ text: 'ارسال خلاصه امروز', callback_data: ADMIN_SUMMARY_CALLBACK }] : [],
+  );
 }
 
 export function dailySummaryQueuedText(created: boolean): string {
@@ -766,7 +787,7 @@ export function adminQueueKeyboard(orders: readonly SalesOrder[]): TelegramInlin
       text: `${formatToman(order.amountIrr)} · ${reviewStatusLabel(order.status)}`,
       callback_data: `admin:order:${order.id}`,
     })),
-    { text: MENU_LABEL.admin, callback_data: ADMIN_HUB_CALLBACK },
+    ...adminScreenNavRows(),
   ]);
 }
 
@@ -801,7 +822,38 @@ export function adminOrderText(order: SalesOrder): string {
 }
 
 export function backToMenuButton(): InlineButton {
-  return { text: 'منوی اصلی 🏠', callback_data: HOME_CALLBACK };
+  return { text: MENU_LABEL.home, callback_data: HOME_CALLBACK };
+}
+
+export function adminBackButton(): InlineButton {
+  return { text: MENU_LABEL.admin, callback_data: ADMIN_HUB_CALLBACK };
+}
+
+export function adminScreenNavRows(): readonly InlineRow[] {
+  return [adminBackButton(), backToMenuButton()];
+}
+
+export function adminScreenKeyboard(
+  buttons: readonly InlineButton[] = [],
+): TelegramInlineKeyboardMarkup {
+  return columnKeyboard([...buttons, adminBackButton(), backToMenuButton()]);
+}
+
+export function storeWizardKeyboard(
+  extras: readonly InlineButton[] = [],
+): TelegramInlineKeyboardMarkup {
+  return columnKeyboard([
+    ...extras,
+    { text: 'لغو', callback_data: 'store:cancel' },
+    backToMenuButton(),
+  ]);
+}
+
+export function adminDeniedText(): string {
+  return [
+    '<b>این بخش فقط برای مدیر فروشگاه است</b>',
+    'از دکمه‌های پایین صفحه خرید، پیگیری سفارش یا راهنما را انتخاب کن.',
+  ].join('\n');
 }
 
 export function formatMoney(amountIrr: bigint): string {

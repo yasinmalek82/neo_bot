@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { SellableProductVariant } from '@neo-bot/domain';
 
 import {
+  adminDeniedText,
   adminHubKeyboard,
+  adminReportsKeyboard,
   buttonLabel,
   customerOrderStatusLabel,
   escapeHtml,
@@ -128,6 +130,10 @@ describe('telegram menu copy', () => {
     expect(matchMenuAction('راهنمای انتخاب')).toBe('guide');
     expect(matchMenuAction('/help')).toBe('help');
     expect(matchMenuAction('خرید سرویس')).toBe('shop');
+    expect(matchMenuAction('خرید سریع')).toBe('shop');
+    expect(matchMenuAction(MENU_LABEL.home)).toBe('home');
+    expect(matchMenuAction(MENU_LABEL.wallet)).toBe('wallet');
+    expect(matchMenuAction(MENU_LABEL.ticket)).toBe('ticket');
     expect(matchMenuAction('وضعیت سیستم')).toBe('status');
     expect(receiptConflictText('OPEN_ORDER_UNDER_REVIEW')).toContain('در حال بررسی');
     expect(receiptConflictText('NO_ORDER_AWAITING_PAYMENT')).toContain('سفارش باز پیدا نشد');
@@ -153,13 +159,23 @@ describe('telegram menu copy', () => {
         [{ text: 'خرید سریع 🛍' }],
         [{ text: 'راهنمای انتخاب 🧭' }],
         [{ text: 'پیگیری سفارش 📦' }, { text: 'تمدید سرویس ♻️' }],
+        [{ text: 'شارژ کیف پول 💳' }, { text: 'تیکت پشتیبانی 🎫' }],
         [{ text: 'راهنما 📘' }],
+        [{ text: 'منوی اصلی 🏠' }],
         [{ text: 'بخش ادمین 👨‍💻' }],
       ],
       resize_keyboard: true,
       is_persistent: true,
       input_field_placeholder: 'از دکمه‌های پایین انتخاب کن',
     });
+    expect(adminReportsKeyboard(true)).toEqual({
+      inline_keyboard: [
+        [{ text: 'ارسال خلاصه امروز', callback_data: 'admin:summary' }],
+        [{ text: 'بخش ادمین 👨‍💻', callback_data: 'admin:hub' }],
+        [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
+      ],
+    });
+    expect(adminDeniedText()).toContain('فقط برای مدیر فروشگاه');
     expect(adminHubKeyboard()).toEqual({
       inline_keyboard: [
         [{ text: 'وضعیت سیستم ⚙️', callback_data: 'admin:status' }],
@@ -205,13 +221,13 @@ describe('telegram menu copy', () => {
         hasItems: false,
       }),
     ).toContain('پلن فعالی');
-    expect(shopText()).toContain('خرید سرویس');
+    expect(shopText()).toContain('خرید سریع');
     expect(shopText()).toContain('یک دسته انتخاب کن');
     expect(missingCategoryText()).toContain('دسته در دسترس نیست');
     expect(missingCategoryText()).not.toContain('پلن فعالی');
     expect(emptyShopText(true)).toContain('مدیریت فروشگاه');
     expect(emptyShopText(false)).not.toContain('کنسول کاتالوگ');
-    expect(emptyShopText(false)).toContain('خرید سرویس');
+    expect(emptyShopText(false)).toContain('خرید سریع');
     expect(
       adminCatalogHealthText({
         categoryCount: 2,

@@ -7,8 +7,29 @@ import {
 } from '@neo-bot/domain';
 import type { ConversationSessionStore } from '@neo-bot/application';
 
+import { isHomeMenuText, matchMenuAction } from '../telegram-menu.js';
+
 export const FLOW_CANCEL_CALLBACK = 'flow:cancel';
 export const FLOW_SKIP_COUPON_CALLBACK = 'flow:skip-coupon';
+
+const CUSTOMER_NAVIGATION_CALLBACKS = new Set([
+  'menu',
+  'shop',
+  'guide',
+  'help',
+  'order',
+  'renew',
+  'wallet:topup',
+  'ticket:new',
+  'admin:hub',
+  'admin:status',
+  'admin:reports',
+  'admin:queue',
+  'admin:store',
+  'admin:failed',
+  'admin:catalog',
+  'admin:summary',
+]);
 
 export type ConversationInputKind = 'text' | 'callback';
 
@@ -123,12 +144,38 @@ export function recoverConversationSession(
   return { kind: 'resume' };
 }
 
+export function isHomeInput(input: ConversationInput): boolean {
+  if (input.kind === 'callback') {
+    return input.callbackData === 'menu';
+  }
+  return isHomeMenuText(input.text ?? '');
+}
+
 export function isGlobalCancelInput(input: ConversationInput): boolean {
   if (input.kind === 'callback') {
     return input.callbackData === 'menu' || input.callbackData === FLOW_CANCEL_CALLBACK;
   }
-  const text = input.text?.trim() ?? '';
-  return text === '/start' || text.startsWith('/start@') || text === 'منوی اصلی';
+  return isHomeMenuText(input.text ?? '');
+}
+
+export function isCustomerNavigationInput(input: ConversationInput): boolean {
+  if (isGlobalCancelInput(input)) {
+    return true;
+  }
+  if (input.kind === 'callback') {
+    const data = input.callbackData ?? '';
+    return (
+      CUSTOMER_NAVIGATION_CALLBACKS.has(data) ||
+      data.startsWith('ticket:follow:') ||
+      data.startsWith('cat:') ||
+      data.startsWith('product:') ||
+      data.startsWith('variant:') ||
+      data.startsWith('buy:') ||
+      data.startsWith('admin:') ||
+      data.startsWith('store:')
+    );
+  }
+  return matchMenuAction(input.text ?? '') !== null;
 }
 
 export async function applyFlowTransition(

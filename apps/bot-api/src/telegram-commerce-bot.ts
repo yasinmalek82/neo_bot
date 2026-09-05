@@ -41,6 +41,7 @@ import {
   ADMIN_STORE_CALLBACK,
   ADMIN_SUMMARY_CALLBACK,
   adminCatalogHealthText,
+  adminDeniedText,
   adminFailedProvisioningText,
   adminHubKeyboard,
   adminHubText,
@@ -49,8 +50,10 @@ import {
   adminQueueText,
   adminReportsKeyboard,
   adminReportsText,
+  adminScreenKeyboard,
   adminStatusText,
   backToMenuButton,
+  storeWizardKeyboard,
   buttonLabel,
   catalogKeyboard,
   categoryBackButton,
@@ -109,7 +112,6 @@ import {
   receiptRejectedText,
   RENEW_CALLBACK,
   RENEW_CONFIRM_CALLBACK,
-  renewalFailedText,
   renewalPreviewText,
   SHOP_CALLBACK,
   shopBackButton,
@@ -122,7 +124,9 @@ import { CommerceFlowHandler } from './interaction/commerce-flow.js';
 import {
   applyFlowTransition,
   ConversationFlowRegistry,
+  isCustomerNavigationInput,
   isGlobalCancelInput,
+  isHomeInput,
   recoverConversationSession,
   type BotScreenModel,
   type ConversationInput,
@@ -256,6 +260,16 @@ export class TelegramCommerceBot {
     if (this.isAdmin(customer.telegramUserId) && (message.text ?? '').trim().length > 0) {
       const pendingStore = await this.catalogChat.getPendingSession(customer.telegramUserId);
       if (pendingStore !== null) {
+        const storeMenuAction = matchMenuAction(message.text ?? '');
+        if (storeMenuAction !== null) {
+          await this.routeAction(
+            storeMenuAction,
+            target,
+            customer,
+            isFreshStartCommand(message.text),
+          );
+          return;
+        }
         try {
           await this.handleStoreText(
             target,
@@ -269,7 +283,7 @@ export class TelegramCommerceBot {
           await this.present(
             target,
             `ورودی معتبر نیست.\n${this.storePrompt(pendingStore.state)}`,
-            columnKeyboard([{ text: 'لغو', callback_data: 'store:cancel' }]),
+            storeWizardKeyboard(),
           );
         }
         return;
@@ -332,8 +346,8 @@ export class TelegramCommerceBot {
         status: 'canceled',
         now,
       });
-      if (input.kind === 'callback' && input.callbackData === HOME_CALLBACK) {
-        await this.routeAction('home', target, customer, false);
+      if (isHomeInput(input)) {
+        await this.routeAction('home', target, customer, isFreshStartCommand(input.text));
       } else {
         await this.present(
           target,
@@ -342,6 +356,15 @@ export class TelegramCommerceBot {
         );
       }
       return true;
+    }
+    if (isCustomerNavigationInput(input)) {
+      await this.sessions.finish({
+        id: session.id,
+        telegramUserId: session.telegramUserId,
+        status: 'canceled',
+        now,
+      });
+      return false;
     }
     const handler = this.customerFlowRegistry(customer).get(session.flowId);
     if (handler === null) {
@@ -645,7 +668,14 @@ export class TelegramCommerceBot {
       } else if (data === RENEW_CALLBACK) {
         await this.routeAction('renew', target, customer, false);
       } else if (data === RENEW_CONFIRM_CALLBACK) {
-        await this.completeCustomerRenewal(target, customer);
+        await this.present(
+          target,
+          conversationExpiredText(),
+          columnKeyboard([
+            { text: MENU_LABEL.renew, callback_data: RENEW_CALLBACK },
+            backToMenuButton(),
+          ]),
+        );
       } else if (data === ADMIN_STATUS_CALLBACK) {
         await this.routeAction('status', target, customer, false);
       } else if (data === ADMIN_REPORTS_CALLBACK) {
@@ -720,6 +750,9 @@ export class TelegramCommerceBot {
             columnKeyboard([backToMenuButton()]),
           );
         }
+        if (error.code === 'ADMIN_ACCESS_DENIED') {
+          await this.present(target, adminDeniedText(), columnKeyboard([backToMenuButton()]));
+        }
         return;
       }
       throw error;
@@ -779,15 +812,27 @@ export class TelegramCommerceBot {
       case 'renew':
         await this.startRenewalCoupon(target, customer);
         return;
+      case 'wallet':
+        await this.startWalletTopUp(target, customer);
+        return;
+      case 'ticket':
+        await this.startTicketCreate(target, customer);
+        return;
       case 'status':
       case 'reports':
       case 'queue':
       case 'admin':
-        this.requireAdmin(customer.telegramUserId);
+        if (!this.isAdmin(customer.telegramUserId)) {
+          await this.present(target, adminDeniedText(), columnKeyboard([backToMenuButton()]));
+          return;
+        }
         await this.showAdmin(action, target);
         return;
       case 'store':
-        this.requireAdmin(customer.telegramUserId);
+        if (!this.isAdmin(customer.telegramUserId)) {
+          await this.present(target, adminDeniedText(), columnKeyboard([backToMenuButton()]));
+          return;
+        }
         this.requirePrivateTarget(target, customer);
         await this.showStoreHub(target, customer.telegramUserId);
         return;
@@ -993,6 +1038,7 @@ export class TelegramCommerceBot {
           : []),
         { text: 'بازگشت به دسته ⬅️', callback_data: `cat:${categoryId}` },
         shopBackButton(),
+        backToMenuButton(),
       ]),
     );
   }
@@ -1009,6 +1055,7 @@ export class TelegramCommerceBot {
       columnKeyboard([
         { text: 'ادامه و دریافت شماره کارت 💳', callback_data: `buy:${variant.id}` },
         shopBackButton(),
+        backToMenuButton(),
       ]),
     );
   }
@@ -1041,7 +1088,7 @@ export class TelegramCommerceBot {
           reportsPending: reports.pending,
           reportsFailed: reports.failed,
         }),
-        columnKeyboard([backToMenuButton()]),
+        adminScreenKeyboard(),
       );
       return;
     }
@@ -1089,6 +1136,7 @@ export class TelegramCommerceBot {
         { text: 'نمای فروشگاه', callback_data: 'store:preview' },
         ...(pending === null ? [] : [{ text: 'ادامه فرم باز', callback_data: 'store:resume' }]),
         { text: MENU_LABEL.admin, callback_data: ADMIN_HUB_CALLBACK },
+        backToMenuButton(),
       ]),
     );
   }
@@ -1125,6 +1173,7 @@ export class TelegramCommerceBot {
           { text: 'محصول', callback_data: 'store:new:product' },
           { text: 'پلن', callback_data: 'store:new:variant' },
           { text: 'مدیریت فروشگاه', callback_data: ADMIN_STORE_CALLBACK },
+          backToMenuButton(),
         ]),
       );
       return;
@@ -1437,11 +1486,8 @@ export class TelegramCommerceBot {
         ? await this.storeReviewText(state)
         : `${this.storePrompt(state)}${resumed ? '\n\nفرم ذخیره‌شده ادامه دارد.' : ''}`,
       state.kind === 'review'
-        ? columnKeyboard([
-            { text: 'انتشار نهایی', callback_data: 'store:publish' },
-            { text: 'لغو', callback_data: 'store:cancel' },
-          ])
-        : columnKeyboard([{ text: 'لغو', callback_data: 'store:cancel' }]),
+        ? storeWizardKeyboard([{ text: 'انتشار نهایی', callback_data: 'store:publish' }])
+        : storeWizardKeyboard(),
     );
   }
 
@@ -2090,7 +2136,7 @@ export class TelegramCommerceBot {
       { text: '◀', callback_data: `store:list:${kind}:${String(Math.max(0, safePage - 1))}` },
       {
         text: `${String(safePage + 1)}/${String(Math.max(1, Math.ceil(rows.length / 8)))}`,
-        callback_data: 'store:preview',
+        callback_data: `store:list:${kind}:${String(safePage)}`,
       },
       {
         text: '▶',
@@ -2104,6 +2150,7 @@ export class TelegramCommerceBot {
         ...buttons,
         ...nav,
         { text: 'مدیریت فروشگاه', callback_data: ADMIN_STORE_CALLBACK },
+        backToMenuButton(),
       ]),
     );
   }
@@ -2478,12 +2525,16 @@ export class TelegramCommerceBot {
           callback_data: `store:pick:${kind}:${row.id}:${String(safe)}`,
         })),
         { text: '◀', callback_data: `store:picker:${kind}:${String(Math.max(0, safe - 1))}` },
-        { text: `${String(safe + 1)}/${String(pages)}`, callback_data: 'store:cancel' },
+        {
+          text: `${String(safe + 1)}/${String(pages)}`,
+          callback_data: `store:picker:${kind}:${String(safe)}`,
+        },
         {
           text: '▶',
           callback_data: `store:picker:${kind}:${String(Math.min(pages - 1, safe + 1))}`,
         },
         { text: 'لغو', callback_data: 'store:cancel' },
+        backToMenuButton(),
       ]),
     );
   }
@@ -2528,7 +2579,7 @@ export class TelegramCommerceBot {
         categoryCount: categories.length,
         cardPublished,
       }),
-      columnKeyboard([{ text: MENU_LABEL.admin, callback_data: ADMIN_HUB_CALLBACK }]),
+      adminScreenKeyboard(),
     );
   }
 
@@ -2568,11 +2619,7 @@ export class TelegramCommerceBot {
   private async publishAdminDailySummary(target: MenuTarget): Promise<void> {
     const created = await this.publishDailySummary();
     await this.dispatchDueReports();
-    await this.present(
-      target,
-      dailySummaryQueuedText(created),
-      columnKeyboard([backToMenuButton()]),
-    );
+    await this.present(target, dailySummaryQueuedText(created), adminScreenKeyboard());
   }
 
   private async deliveryCounts(): Promise<{
@@ -2741,54 +2788,6 @@ export class TelegramCommerceBot {
       { chatId: customer.privateChatId },
       provisioningDelayedText(),
       columnKeyboard([backToMenuButton()]),
-    );
-  }
-
-  private async completeCustomerRenewal(
-    target: MenuTarget,
-    customer: TelegramCustomerInput,
-  ): Promise<void> {
-    try {
-      if (target.messageId === undefined) {
-        throw new DomainConflictError('RENEWAL_CONFIRMATION_INVALID');
-      }
-      const card = await this.readCheckoutCard();
-      const order = await this.commerce.beginRenewal({
-        customer,
-        idempotencyKey: `telegram:renew:${customer.telegramUserId}:${target.messageId}`,
-      });
-      await this.present(
-        target,
-        checkoutText(order, card.cardNumber, card.cardHolder),
-        columnKeyboard([
-          { text: MENU_LABEL.order, callback_data: ORDER_CALLBACK },
-          backToMenuButton(),
-        ]),
-      );
-    } catch (error: unknown) {
-      if (error instanceof DomainConflictError && error.code === 'NO_ACTIVE_SERVICE') {
-        await this.present(target, noActiveServiceText(), columnKeyboard([backToMenuButton()]));
-        return;
-      }
-      await this.present(target, renewalFailedText(), columnKeyboard([backToMenuButton()]));
-    }
-  }
-
-  private async showRenewalPreview(
-    target: MenuTarget,
-    customer: TelegramCustomerInput,
-  ): Promise<void> {
-    if (!(await this.commerce.hasActiveService(customer))) {
-      await this.present(target, noActiveServiceText(), columnKeyboard([backToMenuButton()]));
-      return;
-    }
-    await this.present(
-      target,
-      renewalPreviewText(),
-      columnKeyboard([
-        { text: 'تأیید تمدید سرویس', callback_data: RENEW_CONFIRM_CALLBACK },
-        backToMenuButton(),
-      ]),
     );
   }
 

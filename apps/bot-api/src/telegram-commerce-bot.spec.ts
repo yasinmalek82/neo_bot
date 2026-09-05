@@ -368,7 +368,9 @@ describe('TelegramCommerceBot', () => {
           [{ text: 'خرید سریع 🛍' }],
           [{ text: 'راهنمای انتخاب 🧭' }],
           [{ text: 'پیگیری سفارش 📦' }, { text: 'تمدید سرویس ♻️' }],
+          [{ text: 'شارژ کیف پول 💳' }, { text: 'تیکت پشتیبانی 🎫' }],
           [{ text: 'راهنما 📘' }],
+          [{ text: 'منوی اصلی 🏠' }],
         ],
         resize_keyboard: true,
         is_persistent: true,
@@ -537,7 +539,7 @@ describe('TelegramCommerceBot', () => {
     expect(messenger.editMessageText).toHaveBeenCalledWith(
       '10001',
       '9',
-      expect.stringContaining('خرید سرویس'),
+      expect.stringContaining('خرید سریع'),
       expect.objectContaining({
         inline_keyboard: [
           [{ text: 'اقتصادی', callback_data: 'cat:10' }],
@@ -806,7 +808,7 @@ describe('TelegramCommerceBot', () => {
       expect.stringContaining('دسته در دسترس نیست'),
       expect.objectContaining({
         inline_keyboard: expect.arrayContaining([
-          [{ text: 'خرید سرویس ⬅️', callback_data: 'shop' }],
+          [{ text: 'خرید سریع ⬅️', callback_data: 'shop' }],
           [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
         ]),
       }),
@@ -839,7 +841,8 @@ describe('TelegramCommerceBot', () => {
       {
         inline_keyboard: [
           [{ text: 'ادامه و دریافت شماره کارت 💳', callback_data: 'buy:2' }],
-          [{ text: 'خرید سرویس ⬅️', callback_data: 'shop' }],
+          [{ text: 'خرید سریع ⬅️', callback_data: 'shop' }],
+          [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
         ],
       },
     );
@@ -925,7 +928,7 @@ describe('TelegramCommerceBot', () => {
     expect(text).not.toContain('پلن فعالی');
     const keyboard = JSON.stringify(vi.mocked(messenger.editMessageText).mock.calls[0]?.[3]);
     expect(keyboard).toContain('"callback_data":"shop"');
-    expect(keyboard).toContain('خرید سرویس');
+    expect(keyboard).toContain('خرید سریع');
   });
 
   it('shows the mixed admin menu to an administrator', async () => {
@@ -1025,8 +1028,16 @@ describe('TelegramCommerceBot', () => {
           text: 'مدیریت فروشگاه',
         },
       }),
-    ).rejects.toThrow('ADMIN_ACCESS_DENIED');
-    expect(messenger.sendMessage).not.toHaveBeenCalled();
+    ).resolves.toBeUndefined();
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('فقط برای مدیر فروشگاه'),
+      expect.objectContaining({
+        inline_keyboard: [[{ text: 'منوی اصلی 🏠', callback_data: 'menu' }]],
+      }),
+      { parseMode: 'HTML' },
+    );
+    expect(repository.completeTelegramUpdate).toHaveBeenCalledWith('1322');
   });
 
   it('opens the private chat store-management hub for an authorized admin', async () => {
@@ -1159,6 +1170,15 @@ describe('TelegramCommerceBot', () => {
         data: 'admin:store',
       },
     });
+    expect(messenger.editMessageText).toHaveBeenCalledWith(
+      '10001',
+      '253',
+      expect.stringContaining('فقط برای مدیر فروشگاه'),
+      expect.any(Object),
+    );
+    expect(vi.mocked(messenger.editMessageText).mock.calls[0]?.[2]).not.toContain(
+      'NEO NETWORK — مدیریت فروشگاه',
+    );
     await bot.handleUpdate({
       update_id: 1364,
       callback_query: {
@@ -1168,7 +1188,7 @@ describe('TelegramCommerceBot', () => {
         data: 'admin:store',
       },
     });
-    expect(messenger.editMessageText).not.toHaveBeenCalled();
+    expect(messenger.editMessageText).toHaveBeenCalledTimes(1);
   });
 
   it('masks and removes a card-number input while preserving the settings wizard', async () => {
@@ -1432,6 +1452,7 @@ describe('TelegramCommerceBot', () => {
         inline_keyboard: [
           [expect.objectContaining({ callback_data: 'admin:order:3' })],
           [{ text: 'بخش ادمین 👨‍💻', callback_data: 'admin:hub' }],
+          [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
         ],
       }),
     );
@@ -1468,6 +1489,7 @@ describe('TelegramCommerceBot', () => {
         inline_keyboard: [
           [expect.objectContaining({ callback_data: 'admin:order:3' })],
           [{ text: 'بخش ادمین 👨‍💻', callback_data: 'admin:hub' }],
+          [{ text: 'منوی اصلی 🏠', callback_data: 'menu' }],
         ],
       }),
     );
@@ -1934,16 +1956,27 @@ describe('TelegramCommerceBot', () => {
     expect(provisioner.renew).not.toHaveBeenCalled();
     expect(repository.createRenewalOrder).not.toHaveBeenCalled();
 
-    await callback(128, 'cb-renew-confirm', 'renew:confirm');
+    await callback(128, 'cb-renew-stale', 'renew:confirm');
+    expect(repository.createRenewalOrder).not.toHaveBeenCalled();
+    expect(messenger.editMessageText).toHaveBeenCalledWith(
+      '10001',
+      '128',
+      expect.stringContaining('این مرحله منقضی شد'),
+      expect.any(Object),
+    );
+
+    await callback(129, 'cb-renew-again', 'renew');
+    await callback(130, 'cb-renew-skip', 'flow:skip-coupon');
+    await callback(131, 'cb-renew-confirm', 'renew:confirm');
     expect(repository.createRenewalOrder).toHaveBeenCalledWith(
       customer.id,
-      'telegram:renew:10001:128',
+      'telegram:131:renew',
       undefined,
     );
     expect(provisioner.renew).not.toHaveBeenCalled();
     expect(messenger.editMessageText).toHaveBeenCalledWith(
       '10001',
-      '128',
+      '131',
       expect.stringContaining('سفارش ثبت شد؛ نوبت پرداخت است'),
       expect.any(Object),
     );
@@ -2436,6 +2469,195 @@ describe('TelegramCommerceBot', () => {
       },
     });
     expect(repository.createOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases a purchase naming session when the shop reply-keyboard label is tapped', async () => {
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1501,
+      callback_query: {
+        id: 'cb-buy-nav',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: { message_id: 301, chat: { id: 10001, type: 'private' }, text: 'فروشگاه' },
+        data: 'buy:2',
+      },
+    });
+    await bot.handleUpdate({
+      update_id: 1502,
+      message: {
+        message_id: 302,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: MENU_LABEL.shop,
+      },
+    });
+    expect(repository.createOrder).not.toHaveBeenCalled();
+    expect(await repository.getPendingConversationSession('10001')).toBeNull();
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('فروشگاه خالی است'),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('releases a purchase naming session when shop-back is tapped and does not treat it as a username', async () => {
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1503,
+      callback_query: {
+        id: 'cb-buy-shopback',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: { message_id: 303, chat: { id: 10001, type: 'private' }, text: 'فروشگاه' },
+        data: 'buy:2',
+      },
+    });
+    await bot.handleUpdate({
+      update_id: 1504,
+      callback_query: {
+        id: 'cb-shop-back',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: { message_id: 304, chat: { id: 10001, type: 'private' }, text: 'نام' },
+        data: 'shop',
+      },
+    });
+    expect(repository.createOrder).not.toHaveBeenCalled();
+    expect(await repository.getPendingConversationSession('10001')).toBeNull();
+    expect(messenger.editMessageText).toHaveBeenCalledWith(
+      '10001',
+      '304',
+      expect.stringContaining('فروشگاه خالی است'),
+      expect.any(Object),
+    );
+  });
+
+  it('returns /start during purchase naming to home instead of treating it as a username', async () => {
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(repository, messenger);
+    await bot.handleUpdate({
+      update_id: 1505,
+      callback_query: {
+        id: 'cb-buy-start',
+        from: { id: 10001, first_name: 'خریدار' },
+        message: { message_id: 305, chat: { id: 10001, type: 'private' }, text: 'فروشگاه' },
+        data: 'buy:2',
+      },
+    });
+    await bot.handleUpdate({
+      update_id: 1506,
+      message: {
+        message_id: 306,
+        from: { id: 10001, first_name: 'خریدار' },
+        chat: { id: 10001, type: 'private' },
+        text: '/start',
+      },
+    });
+    expect(repository.createOrder).not.toHaveBeenCalled();
+    expect(await repository.getPendingConversationSession('10001')).toBeNull();
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '10001',
+      expect.stringContaining('NEO NETWORK'),
+      expect.objectContaining({ keyboard: expect.any(Array) }),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('does not consume administrator menu labels as catalog wizard field text', async () => {
+    const pending: CatalogAdminSession = {
+      id: '2d8e7f38-4dbe-4f09-bc71-68088c005002',
+      adminTelegramUserId: '70001',
+      baseRevision: 4,
+      status: 'pending',
+      expiresAt: new Date('2026-09-06T00:00:00.000Z'),
+      publishedResult: null,
+      state: {
+        kind: 'category',
+        step: 'category-fields',
+        field: 'name',
+        values: { code: 'cat-open' },
+      },
+    };
+    const updateSession = vi.fn();
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(
+      repository,
+      messenger,
+      null,
+      undefined,
+      null,
+      {},
+      {
+        getReadModel: vi.fn().mockResolvedValue({ categories: [], products: [], variants: [] }),
+        getPendingSession: vi.fn().mockResolvedValue(pending),
+        updateSession,
+      },
+    );
+    await bot.handleUpdate({
+      update_id: 1601,
+      message: {
+        message_id: 401,
+        from: { id: 70001, first_name: 'ادمین' },
+        chat: { id: 70001, type: 'private' },
+        text: MENU_LABEL.shop,
+      },
+    });
+    expect(updateSession).not.toHaveBeenCalled();
+    expect(messenger.sendMessage).toHaveBeenCalledWith(
+      '70001',
+      expect.stringContaining('فروشگاه خالی است'),
+      expect.any(Object),
+      { parseMode: 'HTML' },
+    );
+  });
+
+  it('keeps the store picker page indicator from canceling the wizard', async () => {
+    const repository = createRepository();
+    const messenger = createMessenger();
+    const bot = createBot(
+      repository,
+      messenger,
+      null,
+      undefined,
+      null,
+      {},
+      {
+        getReadModel: vi.fn().mockResolvedValue({
+          categories: [
+            {
+              id: '10',
+              code: 'economic',
+              name: 'اقتصادی',
+              description: '',
+              parentId: null,
+              position: 0,
+              active: true,
+            },
+          ],
+          products: [],
+          variants: [],
+        }),
+        getPendingSession: vi.fn().mockResolvedValue(null),
+      },
+    );
+    await bot.handleUpdate({
+      update_id: 1602,
+      callback_query: {
+        id: 'cb-picker',
+        from: { id: 70001, first_name: 'ادمین' },
+        message: { message_id: 402, chat: { id: 70001, type: 'private' }, text: 'انتخاب' },
+        data: 'store:picker:category:0',
+      },
+    });
+    const keyboard = JSON.stringify(vi.mocked(messenger.editMessageText).mock.calls[0]?.[3]);
+    expect(keyboard).toContain('"callback_data":"store:picker:category:0"');
+    expect(keyboard).toContain('"callback_data":"store:cancel"');
+    expect(keyboard).not.toMatch(/"text":"1\/1","callback_data":"store:cancel"/u);
   });
 });
 
