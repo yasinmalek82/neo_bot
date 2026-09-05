@@ -3523,8 +3523,6 @@ export class TelegramCommerceBot {
       payload: {
         representativeId: entry.representativeId,
         ledgerId: entry.id,
-        amountIrr: command.amountIrr.toString(),
-        replayed: String(entry.replayed),
       },
     });
     return entry;
